@@ -69,7 +69,7 @@ async function save(key, value){
 }
 
 /* capNew off by default: the feed is continuous, so nothing needs throttling */
-const DEFAULT_SETTINGS = { interleave: true, newPerDay: 12, capNew: false };
+const DEFAULT_SETTINGS = { interleave: true, newPerDay: 12, capNew: false, saveUsage: false };
 const DEFAULT_STATS = { streak: 0, lastDay: '', newByDate: {}, reviewsByDate: {}, bySubject: {} };
 
 /* ---- SM-2 scheduler ------------------------------------------------------ */
@@ -267,23 +267,36 @@ MATERIAL:
 ${source}`;
 }
 
-async function callModel(prompt, maxTokens = 1000){
+/* Two tiers. Haiku is ~3x cheaper per token and plenty for short recall cards;
+   Sonnet does the work where quality actually shows — extended-response
+   ladders and marking a written answer. Routing is per WHOLE call: splitting
+   one batch across both models sends the same notes twice, and the duplicated
+   input cancels most of the saving. */
+const MODEL_SMART = 'claude-sonnet-4-6';
+const MODEL_CHEAP = 'claude-haiku-4-5';
+
+function pickModel(mode, settings){
+  if (settings && settings.saveUsage) return MODEL_CHEAP;   // user opted for cheap everywhere
+  return mode === 'flip' ? MODEL_CHEAP : MODEL_SMART;       // flip-only is all short cards
+}
+
+async function callModel(prompt, maxTokens = 1000, model = MODEL_SMART){
   const res = await fetch('https://api.anthropic.com/v1/messages', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', 'anthropic-version': '2023-06-01' },
-    body: JSON.stringify({ model: 'claude-sonnet-4-6', max_tokens: maxTokens, messages: [{ role: 'user', content: prompt }] }),
+    body: JSON.stringify({ model, max_tokens: maxTokens, messages: [{ role: 'user', content: prompt }] }),
   });
   if (!res.ok) throw new Error('api ' + res.status);
   const data = await res.json();
   return (data.content || []).filter(b => b.type === 'text').map(b => b.text).join('');
 }
-async function callModelMulti(prompt, images, maxTokens = 1000){
+async function callModelMulti(prompt, images, maxTokens = 1000, model = MODEL_SMART){
   const content = images.map(im => ({ type: 'image', source: { type: 'base64', media_type: im.media_type, data: im.data } }));
   content.push({ type: 'text', text: prompt });
   const res = await fetch('https://api.anthropic.com/v1/messages', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', 'anthropic-version': '2023-06-01' },
-    body: JSON.stringify({ model: 'claude-sonnet-4-6', max_tokens: maxTokens, messages: [{ role: 'user', content }] }),
+    body: JSON.stringify({ model, max_tokens: maxTokens, messages: [{ role: 'user', content }] }),
   });
   if (!res.ok) throw new Error('api ' + res.status);
   const data = await res.json();
@@ -311,18 +324,18 @@ function parseReply(mode, reply){
   return cardsFromJson(parseJsonArray(reply));
 }
 
-async function genText(source, mode, level, onProgress){
+async function genText(source, mode, level, onProgress, model){
   const batches = batchText(source);
   let cards = [];
   for (let i = 0; i < batches.length; i++){
     onProgress && onProgress(i + 1, batches.length, 'text');
     let reply = '';
-    try { reply = await callModel(promptFor(mode, batches[i], level), 2000); } catch { continue; }
+    try { reply = await callModel(promptFor(mode, batches[i], level), 2000, model); } catch { continue; }
     cards = cards.concat(parseReply(mode, reply));
   }
   return cards;
 }
-async function genImages(images, mode, level, onProgress){
+async function genImages(images, mode, level, onProgress, model){
   const groups = [];
   for (let i = 0; i < images.length; i += 6) groups.push(images.slice(i, i + 6));
   const note = 'Base the cards ONLY on the attached image(s). Read all text, labels, diagrams, formulae and handwriting in them.';
@@ -330,7 +343,7 @@ async function genImages(images, mode, level, onProgress){
   for (let g = 0; g < groups.length; g++){
     onProgress && onProgress(g + 1, groups.length, 'images');
     let reply = '';
-    try { reply = await callModelMulti(promptFor(mode, note, level), groups[g], 2000); } catch { continue; }
+    try { reply = await callModelMulti(promptFor(mode, note, level), groups[g], 2000, model); } catch { continue; }
     cards = cards.concat(parseReply(mode, reply));
   }
   return cards;
@@ -357,7 +370,8 @@ Return ONLY JSON:
 Be specific to THIS answer. Reward construction (mechanism, links, context) over word count.`;
 }
 async function markAnswer(card, answer, level){
-  const reply = await callModel(markPrompt(card, answer, level), 1000);
+  // always the smarter model — grading against A/M/E is the bit worth paying for
+  const reply = await callModel(markPrompt(card, answer, level), 1000, MODEL_SMART);
   const objs = rescueObjects(reply);
   return objs[0] || null;
 }
@@ -897,7 +911,7 @@ function Feed({ decks, progress, settings, stats, onGrade, reduceMotion }){
 /* ==========================================================================
    CREATE
    ========================================================================== */
-function Create({ onSave }){
+function Create({ onSave, settings }){
   const [mode, setMode] = useState('generate');   // generate | manual
   const [cardType, setCardType] = useState('mix'); // mix | extended | flip
   const [source, setSource] = useState('');
@@ -944,13 +958,14 @@ function Create({ onSave }){
 
     setBusy(true); setErr(''); setProg(null);
     try {
+      const model = pickModel(cardType, settings);
       let cards = [];
-      if (source.trim()) cards = cards.concat(await genText(source, cardType, level, (i, n, phase) => setProg({ i, n, phase })));
+      if (source.trim()) cards = cards.concat(await genText(source, cardType, level, (i, n, phase) => setProg({ i, n, phase }), model));
       if (images.length){
         setProg({ i: 0, n: 0, phase: 'prep' });
         const shrunk = [];
         for (const b of images.slice(0, 12)){ try { shrunk.push(await resizeImage(b)); } catch {} }
-        if (shrunk.length) cards = cards.concat(await genImages(shrunk, cardType, level, (i, n, phase) => setProg({ i, n, phase })));
+        if (shrunk.length) cards = cards.concat(await genImages(shrunk, cardType, level, (i, n, phase) => setProg({ i, n, phase }), model));
         else if (!cards.length){ setErr('Could not read those images. Try a clearer photo.'); setBusy(false); setProg(null); return; }
       }
       cards = dedupeCards(cards);
@@ -1345,6 +1360,19 @@ function Settings({ settings, onChange }){
             borderRadius: 10, background: settings.interleave ? T.ink : T.faint, transition: 'left 150ms' }} />
         </button>
       </div>
+      <div className="flex items-center justify-between" style={{ marginBottom: 16, padding: 14, background: T.paper, border: `1px solid ${T.rule}`, borderRadius: 12 }}>
+        <div style={{ paddingRight: 12 }}>
+          <div style={{ fontFamily: SANS, fontSize: 15, color: T.bone }}>Save usage</div>
+          <Label style={{ color: T.faint }}>Faster, cheaper model for everything. Long answers get weaker.</Label>
+        </div>
+        <button className="sf-tap" onClick={() => onChange({ ...settings, saveUsage: !settings.saveUsage })}
+          style={{ width: 48, height: 28, borderRadius: 14, border: `1px solid ${T.rule}`,
+            background: settings.saveUsage ? T.bone : T.raised, position: 'relative', cursor: 'pointer', flexShrink: 0 }}>
+          <span style={{ position: 'absolute', top: 3, left: settings.saveUsage ? 23 : 3, width: 20, height: 20,
+            borderRadius: 10, background: settings.saveUsage ? T.ink : T.faint, transition: 'left 150ms' }} />
+        </button>
+      </div>
+
       <div style={{ padding: 14, background: T.paper, border: `1px solid ${T.rule}`, borderRadius: 12 }}>
         <div className="flex items-center justify-between">
           <div>
@@ -1473,7 +1501,7 @@ export default function App(){
       <div style={{ minHeight: 440 }}>
         {tab === 'feed' && <Feed key={'feed-' + cardCount} decks={library.decks} progress={progress} settings={settings}
           stats={stats} onGrade={gradeCard} reduceMotion={reduceMotion.current} />}
-        {tab === 'create' && <Create onSave={saveDeck} />}
+        {tab === 'create' && <Create onSave={saveDeck} settings={settings} />}
         {tab === 'decks' && <Decks decks={library.decks} progress={progress} onEditCard={editCard} onDeleteCard={deleteCard} onDeleteDeck={deleteDeck} />}
         {tab === 'stats' && <Stats decks={library.decks} progress={progress} stats={stats} />}
         {tab === 'settings' && <Settings settings={settings} onChange={persistSettings} />}
