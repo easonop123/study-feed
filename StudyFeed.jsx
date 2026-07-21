@@ -68,7 +68,8 @@ async function save(key, value){
   catch (e){ console.error('storage.set failed', key, e); return false; }
 }
 
-const DEFAULT_SETTINGS = { interleave: true, newPerDay: 12 };
+/* capNew off by default: the feed is continuous, so nothing needs throttling */
+const DEFAULT_SETTINGS = { interleave: true, newPerDay: 12, capNew: false };
 const DEFAULT_STATS = { streak: 0, lastDay: '', newByDate: {}, reviewsByDate: {}, bySubject: {} };
 
 /* ---- SM-2 scheduler ------------------------------------------------------ */
@@ -199,7 +200,8 @@ function dedupeCards(cards){
   return out;
 }
 
-function batchText(text, size = 6000){
+/* bigger batches = fewer API calls = less of your usage burned per generate */
+function batchText(text, size = 12000){
   const paras = text.split(/\n\s*\n/);
   const batches = [];
   let cur = '';
@@ -251,7 +253,15 @@ Return ONLY a JSON array. Each card is one of:
 { "type":"mcq", "front": question, "options": [four options], "answer": index (0-based) of the correct option, "why": one line on why it is right and what the tempting wrong option gets wrong }
 { "type":"extended", "verb": one of ${COMMAND_VERBS.map(v => '"' + v + '"').join(', ')}, "prompt": full exam question, "marks": int, "achieved": the WHAT, "merit": the WHY/HOW with cause and effect, "excellence": links >=2 ideas + applies to the scenario + evaluates/justifies, "skeleton": the mark-earning sentence pattern, "pitfall": the specific error to avoid here }
 
-Balance for a chunk of notes: roughly half quick cards (flip/cloze/short), a few mcq whose wrong options are REAL misconceptions (not filler), and 1-2 extended for exam practice. Ground everything in the material. Do NOT invent NZQA codes. No JSON outside the array.
+ORDER MATTERS. Emit the array in this order:
+  1. the "extended" cards FIRST,
+  2. then the "mcq" cards,
+  3. then the quick ones (flip/cloze/short).
+Your reply may be cut off at the end, so the long cards must come first or they are lost.
+
+REQUIRED COUNTS per reply: at least 2 "extended" cards (3 if the material supports it), then 2-3 "mcq" whose wrong options are REAL misconceptions a student actually holds (never filler), then 5-8 quick cards. Never return zero extended cards.
+
+Ground everything in the material. Do NOT invent NZQA codes. No JSON outside the array.
 
 MATERIAL:
 ${source}`;
@@ -372,11 +382,19 @@ function parseManual(text){
 /* ==========================================================================
    FILE EXTRACTION  —  photos, .docx / .pptx / .txt, read in the browser
    ========================================================================== */
+const MIN_EMBEDDED_IMAGE_BYTES = 15000;   // below this it's a logo/bullet/icon
+const MAX_EMBEDDED_IMAGES = 6;
+
 let _jszip = null;
+const isZipLib = (m) => !!m && typeof m.loadAsync === 'function';
 async function loadJSZip(){
   if (_jszip) return _jszip;
-  try { const m = await import('jszip'); _jszip = m.default || m; return _jszip; } catch {}
-  if (window.JSZip){ _jszip = window.JSZip; return _jszip; }
+  try {
+    const m = await import('jszip');
+    const cand = (m && m.default) ? m.default : m;
+    if (isZipLib(cand)){ _jszip = cand; return _jszip; }   // don't cache a dud
+  } catch {}
+  if (isZipLib(window.JSZip)){ _jszip = window.JSZip; return _jszip; }
   await new Promise((res, rej) => {
     const s = document.createElement('script');
     s.src = 'https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js';
@@ -384,7 +402,7 @@ async function loadJSZip(){
     s.onerror = () => rej(new Error('Could not load the unzip helper — check your connection.'));
     document.head.appendChild(s);
   });
-  if (!window.JSZip) throw new Error('Unzip helper unavailable.');
+  if (!isZipLib(window.JSZip)) throw new Error('Unzip helper unavailable.');
   _jszip = window.JSZip;
   return _jszip;
 }
@@ -417,9 +435,17 @@ async function extractFile(file){
 
   const JSZip = await loadJSZip();
   const zip = await JSZip.loadAsync(file);
+  // Only real content images: skip logos/bullets/icons, and cap the count.
+  // Every image sent costs usage, and a deck's decorative art teaches nothing.
   const images = [];
   const media = Object.keys(zip.files).filter(n => /\/media\/[^/]+\.(png|jpe?g|gif|bmp|webp)$/i.test(n));
-  for (const n of media){ try { images.push(await zip.file(n).async('blob')); } catch {} }
+  for (const n of media){
+    if (images.length >= MAX_EMBEDDED_IMAGES) break;
+    try {
+      const b = await zip.file(n).async('blob');
+      if (b && b.size >= MIN_EMBEDDED_IMAGE_BYTES) images.push(b);
+    } catch {}
+  }
 
   if (name.endsWith('.docx')){
     const doc = zip.file('word/document.xml');
@@ -742,13 +768,16 @@ function MarkResult({ r }){
 }
 
 /* ==========================================================================
-   FEED  —  serves what's due; ends deliberately; endless is opt-in
+   FEED  —  scheduled cards first, then rolls straight on. Never stops.
    ========================================================================== */
+function newBudgetFor(settings, stats){
+  if (!settings.capNew) return Infinity;
+  const used = (stats.newByDate && stats.newByDate[TODAY()]) || 0;
+  return Math.max(0, ((settings.newPerDay == null ? 12 : settings.newPerDay)) - used);
+}
+
 function buildQueue(decks, progress, settings, stats){
   const today = TODAY();
-  const newUsed = (stats.newByDate && stats.newByDate[today]) || 0;
-  const newBudget = Math.max(0, ((settings.newPerDay == null ? 12 : settings.newPerDay)) - newUsed);
-
   const due = [], fresh = [];
   for (const d of decks){
     for (const c of d.cards){
@@ -757,40 +786,30 @@ function buildQueue(decks, progress, settings, stats){
       else if (p.due <= today) due.push({ card: c, deck: d });
     }
   }
-  let items = [...due, ...fresh.slice(0, newBudget)];
+  const budget = newBudgetFor(settings, stats);
+  let items = due.concat(budget === Infinity ? fresh : fresh.slice(0, budget));
 
-  if (settings.interleave){
+  if (settings.interleave && items.length > 1){
     const bySub = {};
-    for (const it of items){ if (!bySub[it.deck.subject]) bySub[it.deck.subject] = []; bySub[it.deck.subject].push(it); }
-    const lanes = Object.values(bySub);
-    const out = [];
-    let n = 0;
-    while (out.length < items.length){
-      const lane = lanes[n % lanes.length];
-      if (lane.length) out.push(lane.shift());
-      n++;
-      if (n > items.length * lanes.length + 5) break;
+    for (const it of items){
+      const k = it.deck.subject || '';
+      if (!bySub[k]) bySub[k] = [];
+      bySub[k].push(it);
     }
-    items = out;
+    const lanes = Object.values(bySub);
+    if (lanes.length > 1){
+      const out = [];
+      const cap = items.length * lanes.length + lanes.length;   // explicit bound; no n % 0
+      let n = 0;
+      while (out.length < items.length && n < cap){
+        const lane = lanes[n % lanes.length];
+        if (lane.length) out.push(lane.shift());
+        n++;
+      }
+      if (out.length === items.length) items = out;
+    }
   }
   return items;
-}
-
-function StopScreen({ reviewed, onKeep, canKeep }){
-  return (
-    <div className="flex flex-col items-center justify-center" style={{ minHeight: 420, textAlign: 'center', padding: 24 }}>
-      <Label style={{ color: T.faint }}>Queue clear</Label>
-      <div style={{ fontFamily: SERIF, fontSize: 24, color: T.bone, margin: '14px 0', lineHeight: 1.4 }}>
-        There is nothing below this.<br />Put the phone down.
-      </div>
-      {reviewed > 0 && <Label style={{ color: T.faint }}>{reviewed} reviewed today</Label>}
-      {canKeep && (
-        <div style={{ marginTop: 24 }}>
-          <Btn kind="ghost" onClick={onKeep}>Keep practising anyway</Btn>
-        </div>
-      )}
-    </div>
-  );
 }
 
 function Feed({ decks, progress, settings, stats, onGrade, reduceMotion }){
@@ -800,66 +819,77 @@ function Feed({ decks, progress, settings, stats, onGrade, reduceMotion }){
     return out;
   }, [decks]);
 
-  const [mode, setMode] = useState('session');   // session | endless
   const [queue, setQueue] = useState(() => buildQueue(decks, progress, settings, stats));
   const [reviewed, setReviewed] = useState(0);
-  const [endless, setEndless] = useState([]);
-  const [eIdx, setEIdx] = useState(0);
+  const [pool, setPool] = useState([]);     // shuffled practice pool, refilled forever
+  const [pIdx, setPIdx] = useState(0);
 
-  const gradeSession = (q, sure) => {
-    const [head, ...rest] = queue;
+  const scheduledLeft = queue.length;
+  const inPractice = scheduledLeft === 0;
+
+  // once the scheduled cards run out, roll straight on — no wall, no prompt
+  useEffect(() => {
+    if (inPractice && pool.length === 0 && allItems.length > 0){
+      setPool(shuffle(allItems));
+      setPIdx(0);
+    }
+  }, [inPractice, pool.length, allItems]);
+
+  const gradeScheduled = (q, sure) => {
+    const head = queue[0];
     if (!head) return;
-    const { reinsert } = onGrade(head.card, head.deck, q, sure);
+    const rest = queue.slice(1);
+    const { reinsert } = onGrade(head.card, head.deck, q, sure, false);
     setReviewed(r => r + 1);
     if (reinsert){
-      const pos = Math.min(rest.length, 5);
-      const nq = [...rest];
-      nq.splice(pos, 0, head);
+      const nq = rest.slice();
+      nq.splice(Math.min(rest.length, 5), 0, head);   // ~5 later, same session
       setQueue(nq);
     } else setQueue(rest);
   };
 
-  const startEndless = () => { setEndless(shuffle(allItems)); setEIdx(0); setMode('endless'); };
-
-  const gradeEndless = (q, sure) => {
-    const it = endless[eIdx];
+  // extra practice does NOT write the scheduler — it must not push real intervals out
+  const gradePractice = (q, sure) => {
+    const it = pool[pIdx];
     if (!it) return;
-    onGrade(it.card, it.deck, q, sure);
+    onGrade(it.card, it.deck, q, sure, true);
     setReviewed(r => r + 1);
-    setEIdx(i => {
-      const n = i + 1;
-      if (n >= endless.length){ setEndless(shuffle(allItems)); return 0; }
-      return n;
-    });
+    const next = pIdx + 1;                 // computed before any setter runs
+    if (next >= pool.length){ setPool(shuffle(allItems)); setPIdx(0); }
+    else setPIdx(next);
   };
 
-  if (mode === 'endless'){
-    const it = endless[eIdx];
-    if (!it) return <StopScreen reviewed={reviewed} onKeep={startEndless} canKeep={allItems.length > 0} />;
+  if (allItems.length === 0){
     return (
-      <div>
-        <div className="flex items-center justify-between" style={{ marginBottom: 14 }}>
-          <Label style={{ color: T.faint }}>Extra practice</Label>
-          <button className="sf-tap" onClick={() => setMode('session')} style={{ background: 'none', border: 'none', cursor: 'pointer', padding: 4 }}>
-            <Label style={{ color: T.muted }}>Stop</Label>
-          </button>
-        </div>
-        <StudyCard key={it.card.id + ':' + eIdx} card={it.card} deck={it.deck} onGrade={gradeEndless} reduceMotion={reduceMotion} />
+      <div className="flex flex-col items-center justify-center" style={{ minHeight: 420, textAlign: 'center', padding: 24 }}>
+        <div style={{ fontFamily: SERIF, fontSize: 20, color: T.bone }}>No cards yet.</div>
+        <Label style={{ color: T.faint, display: 'block', marginTop: 8 }}>Make some on the New tab.</Label>
       </div>
     );
   }
 
-  const head = queue[0];
-  if (!head) return <StopScreen reviewed={reviewed} onKeep={startEndless} canKeep={allItems.length > 0} />;
+  if (inPractice){
+    const it = pool[pIdx];
+    if (!it) return <div style={{ minHeight: 420 }} />;
+    return (
+      <div>
+        <div className="flex items-center justify-between" style={{ marginBottom: 14 }}>
+          <Label style={{ color: T.faint }}>Extra practice · not scheduled</Label>
+          {reviewed > 0 && <Label style={{ color: T.faint }}>{reviewed} today</Label>}
+        </div>
+        <StudyCard key={it.card.id + ':' + pIdx} card={it.card} deck={it.deck} onGrade={gradePractice} reduceMotion={reduceMotion} />
+      </div>
+    );
+  }
 
-  const done = reviewed, left = queue.length;
+  const done = reviewed;
   return (
     <div>
       <div style={{ height: 3, background: T.rule, borderRadius: 3, marginBottom: 14, overflow: 'hidden' }}>
-        <div style={{ height: '100%', width: `${done + left ? (done / (done + left)) * 100 : 0}%`,
+        <div style={{ height: '100%', width: `${done + scheduledLeft ? (done / (done + scheduledLeft)) * 100 : 0}%`,
           background: T.bone, transition: reduceMotion ? 'none' : 'width 250ms ease' }} />
       </div>
-      <StudyCard key={head.card.id} card={head.card} deck={head.deck} onGrade={gradeSession} reduceMotion={reduceMotion} />
+      <StudyCard key={queue[0].card.id} card={queue[0].card} deck={queue[0].deck} onGrade={gradeScheduled} reduceMotion={reduceMotion} />
     </div>
   );
 }
@@ -1176,15 +1206,20 @@ function DeckEditor({ deck, progress, onBack, onEditCard, onDeleteCard, onDelete
   );
 }
 
+/* only substitute for null/undefined — `|| ''` would blank a legitimate 0 */
+const val = (v) => (v === null || v === undefined) ? '' : v;
+
 function CardEditRow({ card, onSave, onCancel }){
-  const [f, setF] = useState(() => card.type === 'mcq' ? { ...card, _opts: (card.options || []).join('\n') } : { ...card });
+  const [f, setF] = useState(() => card.type === 'mcq'
+    ? { ...card, _opts: (card.options || []).join('\n'), answer: String(card.answer == null ? 0 : card.answer) }
+    : { ...card });
   const inp = { width: '100%', marginTop: 4, background: T.ink, color: T.bone, border: `1px solid ${T.rule}`,
     borderRadius: 8, padding: '8px 10px', fontFamily: SANS, fontSize: 14, outline: 'none', resize: 'vertical' };
   const field = (k, label, area) => (
     <div style={{ marginBottom: 8 }}>
       <Label style={{ color: T.faint }}>{label}</Label>
-      {area ? <textarea value={f[k] || ''} onChange={e => setF({ ...f, [k]: e.target.value })} rows={2} style={inp} />
-            : <input value={f[k] || ''} onChange={e => setF({ ...f, [k]: e.target.value })} style={inp} />}
+      {area ? <textarea value={val(f[k])} onChange={e => setF({ ...f, [k]: e.target.value })} rows={2} style={inp} />
+            : <input value={val(f[k])} onChange={e => setF({ ...f, [k]: e.target.value })} style={inp} />}
     </div>
   );
 
@@ -1311,13 +1346,25 @@ function Settings({ settings, onChange }){
         </button>
       </div>
       <div style={{ padding: 14, background: T.paper, border: `1px solid ${T.rule}`, borderRadius: 12 }}>
-        <div style={{ fontFamily: SANS, fontSize: 15, color: T.bone }}>New cards per day</div>
-        <Label style={{ color: T.faint }}>Caps how much fresh material enters the queue</Label>
-        <div className="flex items-center gap-3" style={{ marginTop: 10 }}>
-          <Btn kind="ghost" onClick={() => onChange({ ...settings, newPerDay: Math.max(0, ((settings.newPerDay == null ? 12 : settings.newPerDay)) - 2) })}>−</Btn>
-          <div style={{ fontFamily: SERIF, fontSize: 24, color: T.bone, minWidth: 40, textAlign: 'center' }}>{(settings.newPerDay == null ? 12 : settings.newPerDay)}</div>
-          <Btn kind="ghost" onClick={() => onChange({ ...settings, newPerDay: ((settings.newPerDay == null ? 12 : settings.newPerDay)) + 2 })}>+</Btn>
+        <div className="flex items-center justify-between">
+          <div>
+            <div style={{ fontFamily: SANS, fontSize: 15, color: T.bone }}>Limit new cards per day</div>
+            <Label style={{ color: T.faint }}>Off means every new card is available straight away</Label>
+          </div>
+          <button className="sf-tap" onClick={() => onChange({ ...settings, capNew: !settings.capNew })}
+            style={{ width: 48, height: 28, borderRadius: 14, border: `1px solid ${T.rule}`,
+              background: settings.capNew ? T.bone : T.raised, position: 'relative', cursor: 'pointer', flexShrink: 0 }}>
+            <span style={{ position: 'absolute', top: 3, left: settings.capNew ? 23 : 3, width: 20, height: 20,
+              borderRadius: 10, background: settings.capNew ? T.ink : T.faint, transition: 'left 150ms' }} />
+          </button>
         </div>
+        {settings.capNew && (
+          <div className="flex items-center gap-3" style={{ marginTop: 12 }}>
+            <Btn kind="ghost" onClick={() => onChange({ ...settings, newPerDay: Math.max(0, ((settings.newPerDay == null ? 12 : settings.newPerDay)) - 2) })}>−</Btn>
+            <div style={{ fontFamily: SERIF, fontSize: 24, color: T.bone, minWidth: 40, textAlign: 'center' }}>{(settings.newPerDay == null ? 12 : settings.newPerDay)}</div>
+            <Btn kind="ghost" onClick={() => onChange({ ...settings, newPerDay: ((settings.newPerDay == null ? 12 : settings.newPerDay)) + 2 })}>+</Btn>
+          </div>
+        )}
       </div>
     </div>
   );
@@ -1369,13 +1416,21 @@ export default function App(){
     setTab('feed');
   };
 
-  const gradeCard = (card, deck, q, confidentSure) => {
-    const prev = progress[card.id];
-    const wasNew = !prev || !prev.seen;
-    const { next, reinsert } = schedule(prev, q, confidentSure);
-    persistProgress({ ...progress, [card.id]: next });
-
+  /* practice=true means extra practice: count the review, but do NOT touch the
+     scheduler, or answering a card again today would push its interval out. */
+  const gradeCard = (card, deck, q, confidentSure, practice) => {
     const today = TODAY();
+    let reinsert = false;
+    let wasNew = false;
+
+    if (!practice){
+      const prev = progress[card.id];
+      wasNew = !prev || !prev.seen;
+      const r = schedule(prev, q, confidentSure);
+      reinsert = r.reinsert;
+      persistProgress({ ...progress, [card.id]: r.next });
+    }
+
     const s = { ...stats, newByDate: { ...stats.newByDate }, reviewsByDate: { ...stats.reviewsByDate }, bySubject: { ...stats.bySubject } };
     s.reviewsByDate[today] = (s.reviewsByDate[today] || 0) + 1;
     if (wasNew) s.newByDate[today] = (s.newByDate[today] || 0) + 1;
@@ -1402,7 +1457,7 @@ export default function App(){
     if (!ready) return 0;
     const today = TODAY();
     let n = 0;
-    let freshLeft = Math.max(0, ((settings.newPerDay == null ? 12 : settings.newPerDay)) - ((stats.newByDate && stats.newByDate[today]) || 0));
+    let freshLeft = newBudgetFor(settings, stats);
     for (const d of library.decks) for (const c of d.cards){
       const p = progress[c.id];
       if (!p || !p.seen){ if (freshLeft > 0){ n++; freshLeft--; } }
