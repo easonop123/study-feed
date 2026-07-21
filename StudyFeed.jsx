@@ -2,37 +2,35 @@ import React, { useState, useEffect, useRef, useMemo, useCallback } from 'react'
 
 /* ============================================================================
    STUDY FEED  —  single-file build
-   Focus of this file: Phase 2 EXTENDED-RESPONSE cards, end to end
-   (generate -> draft review -> store -> study in feed -> mark my answer ->
-   deck editor), sitting inside the full study loop with flip cards, SM-2,
-   generation, stats and settings.
+   - Phase 2 extended-response cards (verb, A/M/E ladder, skeleton, pitfall,
+     mark-my-answer) plus a MIX of lighter types: flip, cloze, short answer,
+     multiple choice.
+   - Feed still ends deliberately; an opt-in "keep practising" mode goes endless.
 
    Constraints honoured:
    - single file, default export, no required props
-   - no localStorage/sessionStorage. Uses window.storage.* wrapped in try/catch.
-     A missing key THROWS, so every read falls back.
-   - four storage keys only (library:main, progress:all, stats:main, settings:main)
-   - Tailwind core utilities for layout only; colour comes from the token object
-   - generation via window.claude.complete (text). Model target: claude-sonnet-4-6.
-   - ships empty. No sample decks.
+   - no localStorage/sessionStorage. window.storage.* wrapped in try/catch;
+     a missing key throws, so every read falls back.
+   - four storage keys (library:main, progress:all, stats:main, settings:main)
+   - Tailwind core utilities for layout only; colour from the token object
+   - generation via the messages API (claude-sonnet-4-6). Ships empty.
    ========================================================================== */
 
 /* ---- design tokens : "exam paper, at night" ------------------------------ */
 const T = {
-  ink:   '#0C1116',   // page
-  paper: '#141C23',   // card
-  raised:'#1A242C',   // controls
-  rule:  '#22303A',   // hairlines
-  bone:  '#E8E4DA',   // primary text
-  muted: '#8A97A2',   // secondary text
-  faint: '#5B6873',   // tertiary / disabled
-  red:   '#D9503F',   // the marker's pen — due, Again, destructive ONLY
+  ink:   '#0C1116',
+  paper: '#141C23',
+  raised:'#1A242C',
+  rule:  '#22303A',
+  bone:  '#E8E4DA',
+  muted: '#8A97A2',
+  faint: '#5B6873',
+  red:   '#D9503F',
 };
 const SERIF = 'Georgia, "Iowan Old Style", "Times New Roman", serif';
 const MONO  = '"SF Mono", "Roboto Mono", ui-monospace, Menlo, Consolas, monospace';
 const SANS  = 'system-ui, -apple-system, "Segoe UI", Roboto, sans-serif';
 
-/* eight-hue ring; a stable hash of the subject name picks one */
 const HUES = ['#5B8BB0','#B0895B','#7FA06A','#A96FA0','#6FA0A0','#B06F6F','#8A7FB0','#A0A05B'];
 function subjectColour(name){
   const s = (name || '').trim().toLowerCase();
@@ -40,6 +38,8 @@ function subjectColour(name){
   for (let i = 0; i < s.length; i++) h = (h * 31 + s.charCodeAt(i)) >>> 0;
   return HUES[h % HUES.length];
 }
+
+const TYPE_LABEL = { flip: 'Flip', cloze: 'Cloze', short: 'Short answer', mcq: 'Multiple choice', extended: 'Extended' };
 
 /* ---- dates : YYYY-MM-DD so they compare lexically ------------------------ */
 const dayStr = (d = new Date()) => {
@@ -53,10 +53,7 @@ const addDays = (base, n) => {
 };
 const TODAY = () => dayStr();
 
-/* ---- storage : every read falls back, every write is guarded ------------- */
-/* The artifact runtime's storage.get() returns { key, value, shared } (or the
-   raw value on some builds) and set() takes a STRING. So we JSON-stringify on
-   write and unwrap + parse on read. A missing key throws -> every read falls back. */
+/* ---- storage : the runtime returns { value } and takes a string ---------- */
 async function load(key, fallback){
   try {
     const r = await window.storage.get(key);
@@ -75,13 +72,11 @@ const DEFAULT_SETTINGS = { interleave: true, newPerDay: 12 };
 const DEFAULT_STATS = { streak: 0, lastDay: '', newByDate: {}, reviewsByDate: {}, bySubject: {} };
 
 /* ---- SM-2 scheduler ------------------------------------------------------ */
-/* progress entry: { ease, interval, reps, lapses, due, flagged, seen } */
 function freshProgress(){
   return { ease: 2.5, interval: 0, reps: 0, lapses: 0, due: TODAY(), flagged: false, seen: false };
 }
 const Q = { AGAIN: 0, HARD: 3, GOOD: 4, EASY: 5 };
 
-/* returns { next, reinsert } — reinsert true means "put back in THIS session" */
 function schedule(prevRaw, q, confidentSure){
   const p = { ...freshProgress(), ...prevRaw };
   p.seen = true;
@@ -91,7 +86,7 @@ function schedule(prevRaw, q, confidentSure){
     p.reps = 0;
     p.ease = Math.max(1.3, p.ease - 0.2);
     p.lapses += 1;
-    p.due = TODAY();            // never scheduled days out on Again
+    p.due = TODAY();
     reinsert = true;
   } else {
     if (q === Q.HARD)      p.ease = Math.max(1.3, p.ease - 0.15);
@@ -100,18 +95,14 @@ function schedule(prevRaw, q, confidentSure){
     let ivl;
     if (p.reps === 0)      ivl = 1;
     else if (p.reps === 1) ivl = 6;
-    else {
-      if (q === Q.HARD)      ivl = p.interval * 1.2;
-      else if (q === Q.EASY) ivl = p.interval * p.ease * 1.3;
-      else                   ivl = p.interval * p.ease;      // Good
-    }
+    else if (q === Q.HARD) ivl = p.interval * 1.2;
+    else if (q === Q.EASY) ivl = p.interval * p.ease * 1.3;
+    else                   ivl = p.interval * p.ease;
     p.reps += 1;
 
-    // confidence penalty: sure but graded below Good flags a misconception
     if (confidentSure && q < Q.GOOD) p.flagged = true;
-    if (q >= Q.GOOD) p.flagged = false;       // clears once genuinely answered Good
-
-    if (p.flagged) ivl = ivl / 2;             // flagged intervals stay halved
+    if (q >= Q.GOOD) p.flagged = false;
+    if (p.flagged) ivl = ivl / 2;
 
     p.interval = Math.max(1, ivl);
     p.due = addDays(TODAY(), p.interval);
@@ -119,7 +110,6 @@ function schedule(prevRaw, q, confidentSure){
   return { next: p, reinsert };
 }
 
-/* human label for a card's scheduler state, for the deck editor */
 function stateLabel(p){
   if (!p || !p.seen) return 'UNSEEN';
   if (p.flagged) return 'MISCONCEPTION';
@@ -129,21 +119,18 @@ function stateLabel(p){
   return `IN ${days}D${lap}`;
 }
 
-/* ---- id helper ----------------------------------------------------------- */
 const uid = () => Date.now().toString(36) + Math.random().toString(36).slice(2, 7);
+function shuffle(a){
+  const r = a.slice();
+  for (let i = r.length - 1; i > 0; i--){ const j = Math.floor(Math.random() * (i + 1)); const t = r[i]; r[i] = r[j]; r[j] = t; }
+  return r;
+}
 
 /* ==========================================================================
    GENERATION
-   Two card shapes come out of the model:
-     flip     : { id, type:'flip', front, back }
-     extended : { id, type:'extended', verb, prompt, marks,
-                  achieved, merit, excellence, skeleton, pitfall }
    ========================================================================== */
-
 const COMMAND_VERBS = ['Describe','Explain','Discuss','Compare and contrast','Evaluate','Justify','Analyse'];
 
-/* pull the first balanced JSON array out of a possibly-truncated reply,
-   rescuing whole objects rather than throwing the lot away */
 function rescueObjects(text){
   const out = [];
   let depth = 0, start = -1, inStr = false, esc = false;
@@ -155,12 +142,12 @@ function rescueObjects(text){
       else if (c === '"') inStr = false;
       continue;
     }
-    if (c === '"') { inStr = true; continue; }
+    if (c === '"'){ inStr = true; continue; }
     if (c === '{'){ if (depth === 0) start = i; depth++; }
     else if (c === '}'){
       depth--;
       if (depth === 0 && start >= 0){
-        try { out.push(JSON.parse(text.slice(start, i + 1))); } catch { /* skip partial */ }
+        try { out.push(JSON.parse(text.slice(start, i + 1))); } catch {}
         start = -1;
       }
     }
@@ -168,21 +155,43 @@ function rescueObjects(text){
   return out;
 }
 function parseJsonArray(text){
-  try {
-    const m = text.match(/\[[\s\S]*\]/);
-    if (m) return JSON.parse(m[0]);
-  } catch { /* fall through to rescue */ }
+  try { const m = text.match(/\[[\s\S]*\]/); if (m) return JSON.parse(m[0]); } catch {}
   return rescueObjects(text);
 }
 
-/* pool cards from several sources and drop duplicates by question text */
+/* turn model JSON into normalised typed cards */
+function cardsFromJson(arr){
+  const out = [];
+  for (const o of arr || []){
+    if (!o || !o.type) continue;
+    const t = o.type;
+    if (t === 'flip' || t === 'cloze'){
+      if (o.front && o.back) out.push({ id: uid(), type: t, front: String(o.front), back: String(o.back) });
+    } else if (t === 'short'){
+      if (o.front && o.back) out.push({ id: uid(), type: 'short', front: String(o.front), back: String(o.back) });
+    } else if (t === 'mcq'){
+      const opts = (o.options || []).map(String).map(s => s.trim()).filter(Boolean);
+      let ans = Number(o.answer);
+      if (!(ans >= 0 && ans < opts.length)) ans = 0;
+      if (o.front && opts.length >= 2) out.push({ id: uid(), type: 'mcq', front: String(o.front), options: opts, answer: ans, why: String(o.why || '') });
+    } else if (t === 'extended'){
+      if (o.prompt && o.achieved) out.push({ id: uid(), type: 'extended',
+        verb: COMMAND_VERBS.includes(o.verb) ? o.verb : (o.verb || 'Explain'),
+        prompt: String(o.prompt), marks: Number(o.marks) || 4,
+        achieved: String(o.achieved || ''), merit: String(o.merit || ''),
+        excellence: String(o.excellence || ''), skeleton: String(o.skeleton || ''),
+        pitfall: String(o.pitfall || '') });
+    }
+  }
+  return out;
+}
 function dedupeCards(cards){
   const seen = new Set();
   const out = [];
   for (const c of cards){
     const key = c.type === 'extended'
       ? 'e:' + String(c.prompt || '').toLowerCase().slice(0, 80)
-      : 'f:' + String(c.front || '').toLowerCase();
+      : (c.type + ':' + String(c.front || '').toLowerCase());
     if (seen.has(key)) continue;
     seen.add(key);
     out.push(c);
@@ -190,7 +199,6 @@ function dedupeCards(cards){
   return out;
 }
 
-/* split long notes at paragraph breaks into ~6000-char batches */
 function batchText(text, size = 6000){
   const paras = text.split(/\n\s*\n/);
   const batches = [];
@@ -206,8 +214,8 @@ function batchText(text, size = 6000){
 function flipPrompt(source, level){
   return `You write flashcards for a ${level} student. From the material below, produce fast-recall cards for definitions, formulae, key facts and vocabulary.
 Return ONLY lines of the form:  question | answer
-One card per line. No numbering, no extra prose. Keep answers tight (a phrase or one sentence).
-Do not invent facts that are not supported by the material.
+One card per line. No numbering, no extra prose. Keep answers tight.
+Do not invent facts not supported by the material.
 
 MATERIAL:
 ${source}`;
@@ -217,160 +225,107 @@ function extendedPrompt(source, level){
   return `You are an expert ${level} examiner. From the material below, write EXTENDED-RESPONSE exam questions that reward how an answer is CONSTRUCTED, not single-word recall.
 
 Return ONLY a JSON array. Each element:
-{
+{ "type":"extended",
   "verb": one of ${COMMAND_VERBS.map(v => '"' + v + '"').join(', ')},
-  "prompt": the full exam question, using that command verb,
-  "marks": integer marks available (typically 3-6),
-  "achieved": model answer at ACHIEVED level — states/describes the correct thing (the WHAT),
-  "merit": model answer at MERIT level — explains with cause and effect linked (the WHY/HOW),
-  "excellence": model answer at EXCELLENCE — links multiple ideas AND applies them to the specific scenario in this question, then evaluates or justifies (the SO WHAT),
-  "skeleton": the sentence pattern / structure that earns the marks (e.g. "Claim -> mechanism -> link to context"),
-  "pitfall": the SPECIFIC mark-losing error for THIS question, not generic advice,
-  "subject": subject name,
-  "topic": topic name,
-  "standard": "${level}"
-}
+  "prompt": full exam question using that verb,
+  "marks": integer (usually 3-6),
+  "achieved": states/describes the correct thing (the WHAT),
+  "merit": explains with cause and effect linked (the WHY/HOW),
+  "excellence": links multiple ideas AND applies them to the scenario in this question, then evaluates/justifies (the SO WHAT),
+  "skeleton": the sentence pattern that earns the marks,
+  "pitfall": the SPECIFIC mark-losing error for THIS question }
 
-Rules:
-- The command verb sets the grade ceiling; make the three answers genuinely differ in depth, not length.
-- Excellence MUST refer to the actual scenario/context in the prompt.
-- Science: claim -> mechanism -> link to context (Excellence connects >=2 concepts + the scenario).
-- Maths: show working; method marks are independent of the final answer; state units; Excellence justifies the method choice.
-- English: point -> evidence(quote) -> analysis of technique -> connection to purpose/wider text; Excellence needs a perceptive link to author's purpose.
-- Do NOT invent NZQA Achievement Standard codes. Put the given level in "standard".
-- Ground every question in the material. No JSON outside the array.
+Rules: the verb sets the grade ceiling; the three answers differ in depth not length; Excellence must refer to the actual scenario. Science: claim -> mechanism -> link to context. Maths: show working; method marks independent of the answer; state units; Excellence justifies the method. English: point -> evidence -> analysis of technique -> connection to purpose. Do NOT invent NZQA codes. No JSON outside the array.
 
 MATERIAL:
 ${source}`;
 }
 
-async function callModel(prompt){
-  // window.claude.complete isn't available in the artifact runtime; POST the
-  // messages API directly (no key needed inside the artifact). max_tokens 1000
-  // per spec — batching + rescueObjects cover any truncation.
+function mixedPrompt(source, level){
+  return `You are an expert ${level} tutor. From the material below, make a MIXED set of study cards. Choose the best type for each idea — do NOT make everything the same type.
+
+Return ONLY a JSON array. Each card is one of:
+{ "type":"flip", "front": question, "back": answer }                       // definitions, facts, formulae, vocab
+{ "type":"cloze", "front": a sentence with one key term replaced by "____", "back": the missing term }
+{ "type":"short", "front": question, "back": a model answer in 1-3 sentences }
+{ "type":"mcq", "front": question, "options": [four options], "answer": index (0-based) of the correct option, "why": one line on why it is right and what the tempting wrong option gets wrong }
+{ "type":"extended", "verb": one of ${COMMAND_VERBS.map(v => '"' + v + '"').join(', ')}, "prompt": full exam question, "marks": int, "achieved": the WHAT, "merit": the WHY/HOW with cause and effect, "excellence": links >=2 ideas + applies to the scenario + evaluates/justifies, "skeleton": the mark-earning sentence pattern, "pitfall": the specific error to avoid here }
+
+Balance for a chunk of notes: roughly half quick cards (flip/cloze/short), a few mcq whose wrong options are REAL misconceptions (not filler), and 1-2 extended for exam practice. Ground everything in the material. Do NOT invent NZQA codes. No JSON outside the array.
+
+MATERIAL:
+${source}`;
+}
+
+async function callModel(prompt, maxTokens = 1000){
   const res = await fetch('https://api.anthropic.com/v1/messages', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', 'anthropic-version': '2023-06-01' },
-    body: JSON.stringify({
-      model: 'claude-sonnet-4-6',
-      max_tokens: 1000,
-      messages: [{ role: 'user', content: prompt }],
-    }),
+    body: JSON.stringify({ model: 'claude-sonnet-4-6', max_tokens: maxTokens, messages: [{ role: 'user', content: prompt }] }),
   });
   if (!res.ok) throw new Error('api ' + res.status);
   const data = await res.json();
   return (data.content || []).filter(b => b.type === 'text').map(b => b.text).join('');
 }
-
-/* same call, but with images (base64 JPEG) in front of the prompt */
-async function callModelMulti(prompt, images){
-  const content = images.map(im => ({
-    type: 'image', source: { type: 'base64', media_type: im.media_type, data: im.data },
-  }));
+async function callModelMulti(prompt, images, maxTokens = 1000){
+  const content = images.map(im => ({ type: 'image', source: { type: 'base64', media_type: im.media_type, data: im.data } }));
   content.push({ type: 'text', text: prompt });
   const res = await fetch('https://api.anthropic.com/v1/messages', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', 'anthropic-version': '2023-06-01' },
-    body: JSON.stringify({ model: 'claude-sonnet-4-6', max_tokens: 1000, messages: [{ role: 'user', content }] }),
+    body: JSON.stringify({ model: 'claude-sonnet-4-6', max_tokens: maxTokens, messages: [{ role: 'user', content }] }),
   });
   if (!res.ok) throw new Error('api ' + res.status);
   const data = await res.json();
   return (data.content || []).filter(b => b.type === 'text').map(b => b.text).join('');
 }
 
-/* generate flip cards from a text source (may be batched) */
-async function genFlip(source, level, onProgress){
-  const batches = batchText(source);
-  const seen = new Set();
-  const cards = [];
-  for (let i = 0; i < batches.length; i++){
-    onProgress && onProgress(i + 1, batches.length);
-    let reply = '';
-    try { reply = await callModel(flipPrompt(batches[i], level)); }
-    catch { continue; }                    // one batch failing must not sink the rest
+/* pick the prompt + parse for a generation mode */
+function promptFor(mode, source, level){
+  if (mode === 'flip') return flipPrompt(source, level);
+  if (mode === 'extended') return extendedPrompt(source, level);
+  return mixedPrompt(source, level);
+}
+function parseReply(mode, reply){
+  if (mode === 'flip'){
+    const cards = [];
     for (const line of reply.split('\n')){
       const idx = line.indexOf('|');
       if (idx < 0) continue;
       const front = line.slice(0, idx).trim().replace(/^\d+[.)]\s*/, '');
-      const back  = line.slice(idx + 1).trim();
-      if (!front || !back) continue;
-      const key = front.toLowerCase();
-      if (seen.has(key)) continue;         // dedupe by question text
-      seen.add(key);
-      cards.push({ id: uid(), type: 'flip', front, back });
+      const back = line.slice(idx + 1).trim();
+      if (front && back) cards.push({ id: uid(), type: 'flip', front, back });
     }
+    return cards;
   }
-  return cards;
+  return cardsFromJson(parseJsonArray(reply));
 }
 
-/* generate extended-response cards from a text source */
-async function genExtended(source, level, onProgress){
+async function genText(source, mode, level, onProgress){
   const batches = batchText(source);
-  const seen = new Set();
-  const cards = [];
+  let cards = [];
   for (let i = 0; i < batches.length; i++){
-    onProgress && onProgress(i + 1, batches.length);
+    onProgress && onProgress(i + 1, batches.length, 'text');
     let reply = '';
-    try { reply = await callModel(extendedPrompt(batches[i], level)); }
-    catch { continue; }
-    for (const o of parseJsonArray(reply)){
-      if (!o || !o.prompt || !o.achieved) continue;
-      const key = String(o.prompt).toLowerCase().slice(0, 80);
-      if (seen.has(key)) continue;
-      seen.add(key);
-      cards.push({
-        id: uid(),
-        type: 'extended',
-        verb: COMMAND_VERBS.includes(o.verb) ? o.verb : (o.verb || 'Explain'),
-        prompt: String(o.prompt),
-        marks: Number(o.marks) || 4,
-        achieved: String(o.achieved || ''),
-        merit: String(o.merit || ''),
-        excellence: String(o.excellence || ''),
-        skeleton: String(o.skeleton || ''),
-        pitfall: String(o.pitfall || ''),
-      });
-    }
+    try { reply = await callModel(promptFor(mode, batches[i], level), 2000); } catch { continue; }
+    cards = cards.concat(parseReply(mode, reply));
   }
   return cards;
 }
-
-/* generate cards from images (photos / diagrams), in small groups per call */
-async function genFromImages(images, cardType, level, onProgress){
+async function genImages(images, mode, level, onProgress){
   const groups = [];
   for (let i = 0; i < images.length; i += 6) groups.push(images.slice(i, i + 6));
   const note = 'Base the cards ONLY on the attached image(s). Read all text, labels, diagrams, formulae and handwriting in them.';
-  const cards = [];
+  let cards = [];
   for (let g = 0; g < groups.length; g++){
-    onProgress && onProgress(g + 1, groups.length);
+    onProgress && onProgress(g + 1, groups.length, 'images');
     let reply = '';
-    try {
-      reply = await callModelMulti(cardType === 'extended' ? extendedPrompt(note, level) : flipPrompt(note, level), groups[g]);
-    } catch { continue; }
-    if (cardType === 'extended'){
-      for (const o of parseJsonArray(reply)){
-        if (!o || !o.prompt || !o.achieved) continue;
-        cards.push({ id: uid(), type: 'extended',
-          verb: COMMAND_VERBS.includes(o.verb) ? o.verb : (o.verb || 'Explain'),
-          prompt: String(o.prompt), marks: Number(o.marks) || 4,
-          achieved: String(o.achieved || ''), merit: String(o.merit || ''),
-          excellence: String(o.excellence || ''), skeleton: String(o.skeleton || ''),
-          pitfall: String(o.pitfall || '') });
-      }
-    } else {
-      for (const line of reply.split('\n')){
-        const idx = line.indexOf('|');
-        if (idx < 0) continue;
-        const front = line.slice(0, idx).trim().replace(/^\d+[.)]\s*/, '');
-        const back = line.slice(idx + 1).trim();
-        if (front && back) cards.push({ id: uid(), type: 'flip', front, back });
-      }
-    }
+    try { reply = await callModelMulti(promptFor(mode, note, level), groups[g], 2000); } catch { continue; }
+    cards = cards.concat(parseReply(mode, reply));
   }
   return cards;
 }
 
-/* mark a typed answer against the A/M/E ladder for one extended card */
 function markPrompt(card, answer, level){
   return `You are a ${level} examiner marking one extended-response answer.
 
@@ -385,21 +340,18 @@ STUDENT ANSWER:
 ${answer}
 
 Return ONLY JSON:
-{
-  "grade": "Not yet" | "Achieved" | "Merit" | "Excellence",
-  "hit": [ up to 3 things the answer did that earned credit ],
+{ "grade": "Not yet" | "Achieved" | "Merit" | "Excellence",
+  "hit": [ up to 3 things that earned credit ],
   "missing": [ up to 3 specific things needed to reach the NEXT grade up ],
-  "lift": one sentence naming the single change that would most raise the grade
-}
+  "lift": one sentence naming the single change that would most raise the grade }
 Be specific to THIS answer. Reward construction (mechanism, links, context) over word count.`;
 }
 async function markAnswer(card, answer, level){
-  const reply = await callModel(markPrompt(card, answer, level));
-  const objs = parseJsonArray('[' + (reply.match(/\{[\s\S]*\}/)?.[0] || '') + ']');
+  const reply = await callModel(markPrompt(card, answer, level), 1000);
+  const objs = rescueObjects(reply);
   return objs[0] || null;
 }
 
-/* manual entry: "question | answer" per line -> flip cards (same parser shape) */
 function parseManual(text){
   const seen = new Set();
   const cards = [];
@@ -407,7 +359,7 @@ function parseManual(text){
     const idx = line.indexOf('|');
     if (idx < 0) continue;
     const front = line.slice(0, idx).trim();
-    const back  = line.slice(idx + 1).trim();
+    const back = line.slice(idx + 1).trim();
     if (!front || !back) continue;
     const key = front.toLowerCase();
     if (seen.has(key)) continue;
@@ -419,17 +371,23 @@ function parseManual(text){
 
 /* ==========================================================================
    FILE EXTRACTION  —  photos, .docx / .pptx / .txt, read in the browser
-   .docx and .pptx are ZIP archives; typed text lives in XML, pictures in a
-   /media/ folder. We pull text AND images out here. Text sends as a few KB;
-   images are shrunk to <=1500px JPEG so a big photo becomes a few hundred KB
-   and the ~32MB API cap never comes near.
    ========================================================================== */
+let _jszip = null;
 async function loadJSZip(){
-  const mod = await import('jszip');           // available in the artifact bundler
-  return mod.default || mod;
+  if (_jszip) return _jszip;
+  try { const m = await import('jszip'); _jszip = m.default || m; return _jszip; } catch {}
+  if (window.JSZip){ _jszip = window.JSZip; return _jszip; }
+  await new Promise((res, rej) => {
+    const s = document.createElement('script');
+    s.src = 'https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js';
+    s.onload = res;
+    s.onerror = () => rej(new Error('Could not load the unzip helper — check your connection.'));
+    document.head.appendChild(s);
+  });
+  if (!window.JSZip) throw new Error('Unzip helper unavailable.');
+  _jszip = window.JSZip;
+  return _jszip;
 }
-
-/* shrink a photo/blob to a small base64 JPEG the model can read cheaply */
 async function resizeImage(blob, maxPx = 1500, quality = 0.82){
   const bmp = await createImageBitmap(blob);
   const scale = Math.min(1, maxPx / Math.max(bmp.width, bmp.height));
@@ -444,14 +402,13 @@ async function resizeImage(blob, maxPx = 1500, quality = 0.82){
 }
 function stripXml(xml){
   return xml
-    .replace(/<\/w:p>/g, '\n').replace(/<\/a:p>/g, '\n')   // paragraph breaks
+    .replace(/<\/w:p>/g, '\n').replace(/<\/a:p>/g, '\n')
     .replace(/<w:br\s*\/?>/g, '\n').replace(/<a:br\s*\/?>/g, '\n')
-    .replace(/<[^>]+>/g, '')                               // drop every tag
+    .replace(/<[^>]+>/g, '')
     .replace(/&amp;/g, '&').replace(/&lt;/g, '<').replace(/&gt;/g, '>')
     .replace(/&quot;/g, '"').replace(/&#3?9;/g, "'")
     .replace(/[ \t]+\n/g, '\n').replace(/\n{3,}/g, '\n\n');
 }
-/* returns { text, images } — images are raw blobs, shrunk later before sending */
 async function extractFile(file){
   const name = (file.name || '').toLowerCase();
   const type = file.type || '';
@@ -460,8 +417,6 @@ async function extractFile(file){
 
   const JSZip = await loadJSZip();
   const zip = await JSZip.loadAsync(file);
-
-  // pictures embedded in the document's /media/ folder
   const images = [];
   const media = Object.keys(zip.files).filter(n => /\/media\/[^/]+\.(png|jpe?g|gif|bmp|webp)$/i.test(n));
   for (const n of media){ try { images.push(await zip.file(n).async('blob')); } catch {} }
@@ -486,7 +441,7 @@ async function extractFile(file){
 }
 
 /* ==========================================================================
-   SMALL UI PRIMITIVES
+   UI PRIMITIVES
    ========================================================================== */
 function Label({ children, style }){
   return <span style={{ fontFamily: MONO, fontSize: 11, letterSpacing: '0.12em',
@@ -499,7 +454,6 @@ function Btn({ children, onClick, kind = 'default', disabled, full, style }){
     padding: '14px 18px', borderRadius: 12, border: `1px solid ${T.rule}`,
     background: T.raised, color: T.bone, cursor: disabled ? 'default' : 'pointer',
     opacity: disabled ? 0.4 : 1, width: full ? '100%' : 'auto', textAlign: 'center',
-    transition: 'background 150ms',
   };
   const kinds = {
     default: {},
@@ -508,56 +462,74 @@ function Btn({ children, onClick, kind = 'default', disabled, full, style }){
     ghost:   { background: 'transparent', borderColor: T.rule },
     again:   { background: 'transparent', color: T.red, borderColor: T.red },
   };
-  return <button onClick={disabled ? undefined : onClick} disabled={disabled}
+  return <button className="sf-btn" onClick={disabled ? undefined : onClick} disabled={disabled}
     style={{ ...base, ...kinds[kind], ...style }}>{children}</button>;
 }
 
-/* the signature element: a hairline margin down the left, carrying subject colour */
+function Segmented({ value, onChange, options }){
+  return (
+    <div style={{ display: 'flex', gap: 4, background: T.ink, borderRadius: 12, padding: 4, border: `1px solid ${T.rule}` }}>
+      {options.map(o => {
+        const active = value === o.v;
+        return (
+          <button key={o.v} className="sf-tap" onClick={() => onChange(o.v)}
+            style={{ flex: 1, padding: '10px 6px', borderRadius: 9, border: 'none', cursor: 'pointer',
+              background: active ? T.bone : 'transparent', color: active ? T.ink : T.muted,
+              fontFamily: MONO, fontSize: 12, letterSpacing: '0.05em', textTransform: 'uppercase',
+              transition: 'background 150ms, color 150ms' }}>{o.label}</button>
+        );
+      })}
+    </div>
+  );
+}
+
 function Margin({ colour }){
-  return <div style={{ position: 'absolute', left: 22, top: 0, bottom: 0, width: 1,
-    background: colour || T.rule, opacity: 0.9 }} />;
+  return <div style={{ position: 'absolute', left: 22, top: 18, bottom: 18, width: 2,
+    background: colour || T.rule, borderRadius: 2, opacity: 0.9 }} />;
 }
 
 /* ==========================================================================
-   STUDY CARD  —  active recall + confidence + grade, shared by both types
-   phases: attempt -> confidence -> reveal -> grade
+   STUDY CARD  —  active recall + confidence + grade
    ========================================================================== */
 function StudyCard({ card, deck, onGrade, reduceMotion }){
   const [phase, setPhase] = useState('attempt');   // attempt | reveal
-  const [sure, setSure] = useState(null);          // true (Sure) | false (Unsure)
+  const [sure, setSure] = useState(null);
+  const [pick, setPick] = useState(null);
   const colour = subjectColour(deck.subject);
+  const isMcq = card.type === 'mcq';
 
-  useEffect(() => { setPhase('attempt'); setSure(null); }, [card.id]);
+  useEffect(() => { setPhase('attempt'); setSure(null); setPick(null); }, [card.id]);
 
-  const grade = (q) => onGrade(q, sure === true);
+  const grade = (q) => onGrade(q, isMcq ? (pick === card.answer) : (sure === true));
   const anim = reduceMotion ? {} : { animation: 'sf-in 200ms ease-out' };
 
   return (
-    <div style={{ position: 'relative', background: T.paper, borderRadius: 18,
-      border: `1px solid ${T.rule}`, padding: '26px 22px 22px 42px', minHeight: 380,
+    <div className="sf-card" style={{ position: 'relative', background: T.paper, borderRadius: 18,
+      border: `1px solid ${T.rule}`, padding: '24px 20px 20px 42px', minHeight: 400,
       display: 'flex', flexDirection: 'column', ...anim }}>
       <Margin colour={colour} />
 
-      {/* header: subject / topic / type */}
       <div className="flex items-center justify-between" style={{ marginBottom: 18 }}>
         <div className="flex flex-col">
           <Label style={{ color: colour }}>{deck.subject || 'Untitled'}</Label>
           <Label style={{ color: T.faint, marginTop: 2 }}>{deck.topic || ''}</Label>
         </div>
-        <Label style={{ color: T.faint }}>
-          {card.type === 'extended' ? 'Extended' : 'Flip'}
-        </Label>
+        <Label style={{ color: T.faint }}>{TYPE_LABEL[card.type] || 'Card'}</Label>
       </div>
 
-      {card.type === 'extended'
-        ? <ExtendedFace card={card} phase={phase} deck={deck} />
+      {card.type === 'extended' ? <ExtendedFace card={card} phase={phase} deck={deck} />
+        : isMcq ? <McqFace card={card} phase={phase} pick={pick} onPick={(i) => { setPick(i); setPhase('reveal'); }} />
+        : card.type === 'short' ? <ShortFace card={card} phase={phase} />
         : <FlipFace card={card} phase={phase} />}
 
       <div style={{ flex: 1 }} />
 
-      {/* controls live in the lower third, where the thumb reaches */}
       <div style={{ marginTop: 18 }}>
-        {phase === 'attempt' && sure === null && (
+        {isMcq ? (
+          phase === 'reveal'
+            ? <GradeRow grade={grade} />
+            : <Label style={{ display: 'block', textAlign: 'center', color: T.faint }}>Tap the answer you think is right</Label>
+        ) : phase === 'attempt' && sure === null ? (
           <div>
             <Label style={{ display: 'block', textAlign: 'center', marginBottom: 10, color: T.faint }}>
               Answer it in your head first
@@ -567,27 +539,27 @@ function StudyCard({ card, deck, onGrade, reduceMotion }){
               <Btn full kind="ghost" onClick={() => setSure(false)}>Unsure</Btn>
             </div>
           </div>
-        )}
-
-        {phase === 'attempt' && sure !== null && (
+        ) : phase === 'attempt' ? (
           <Btn full kind="primary" onClick={() => setPhase('reveal')}>
             {card.type === 'extended' ? 'Reveal model answers' : 'Reveal answer'}
           </Btn>
+        ) : (
+          <GradeRow grade={grade} />
         )}
+      </div>
+    </div>
+  );
+}
 
-        {phase === 'reveal' && (
-          <div>
-            <Label style={{ display: 'block', textAlign: 'center', marginBottom: 10, color: T.faint }}>
-              How did that go?
-            </Label>
-            <div className="grid grid-cols-4 gap-2">
-              <Btn kind="again" onClick={() => grade(Q.AGAIN)}>Again</Btn>
-              <Btn onClick={() => grade(Q.HARD)}>Hard</Btn>
-              <Btn onClick={() => grade(Q.GOOD)}>Good</Btn>
-              <Btn onClick={() => grade(Q.EASY)}>Easy</Btn>
-            </div>
-          </div>
-        )}
+function GradeRow({ grade }){
+  return (
+    <div>
+      <Label style={{ display: 'block', textAlign: 'center', marginBottom: 10, color: T.faint }}>How did that go?</Label>
+      <div className="grid grid-cols-4 gap-2">
+        <Btn kind="again" onClick={() => grade(Q.AGAIN)}>Again</Btn>
+        <Btn onClick={() => grade(Q.HARD)}>Hard</Btn>
+        <Btn onClick={() => grade(Q.GOOD)}>Good</Btn>
+        <Btn onClick={() => grade(Q.EASY)}>Easy</Btn>
       </div>
     </div>
   );
@@ -596,13 +568,10 @@ function StudyCard({ card, deck, onGrade, reduceMotion }){
 function FlipFace({ card, phase }){
   return (
     <div>
-      <div style={{ fontFamily: SERIF, fontSize: 22, lineHeight: 1.4, color: T.bone }}>
-        {card.front}
-      </div>
+      <div style={{ fontFamily: SERIF, fontSize: 22, lineHeight: 1.4, color: T.bone }}>{card.front}</div>
       {phase === 'reveal' && (
         <div style={{ marginTop: 18, paddingTop: 16, borderTop: `1px solid ${T.rule}`,
-          fontFamily: SANS, fontSize: 17, lineHeight: 1.5, color: T.bone,
-          animation: 'sf-in 200ms ease-out' }}>
+          fontFamily: SANS, fontSize: 17, lineHeight: 1.5, color: T.bone, animation: 'sf-in 200ms ease-out' }}>
           {card.back}
         </div>
       )}
@@ -610,7 +579,56 @@ function FlipFace({ card, phase }){
   );
 }
 
-const AME_COLOURS = { Achieved: T.muted, Merit: T.bone, Excellence: T.bone };
+function ShortFace({ card, phase }){
+  return (
+    <div>
+      <div style={{ fontFamily: SERIF, fontSize: 21, lineHeight: 1.4, color: T.bone }}>{card.front}</div>
+      {phase === 'reveal' && (
+        <div style={{ marginTop: 18, paddingTop: 16, borderTop: `1px solid ${T.rule}`, animation: 'sf-in 200ms ease-out' }}>
+          <Label style={{ color: T.faint }}>Model answer</Label>
+          <div style={{ fontFamily: SANS, fontSize: 16, lineHeight: 1.55, color: T.bone, marginTop: 6 }}>{card.back}</div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function McqFace({ card, phase, pick, onPick }){
+  const letters = ['A','B','C','D','E','F'];
+  return (
+    <div>
+      <div style={{ fontFamily: SERIF, fontSize: 21, lineHeight: 1.4, color: T.bone, marginBottom: 14 }}>{card.front}</div>
+      <div className="flex flex-col gap-2">
+        {card.options.map((opt, i) => {
+          const revealed = phase === 'reveal';
+          const isAnswer = i === card.answer;
+          const isPick = pick === i;
+          let border = T.rule, col = T.bone, bg = T.raised, weight = 400;
+          if (revealed && isAnswer){ border = T.bone; weight = 600; }
+          if (revealed && isPick && !isAnswer){ border = T.red; col = T.red; }
+          return (
+            <button key={i} className="sf-tap" disabled={revealed} onClick={() => onPick(i)}
+              style={{ display: 'flex', gap: 10, alignItems: 'flex-start', textAlign: 'left',
+                background: bg, border: `1px solid ${border}`, borderRadius: 12, padding: '12px 14px',
+                cursor: revealed ? 'default' : 'pointer', color: col, transition: 'border-color 150ms' }}>
+              <span style={{ fontFamily: MONO, fontSize: 12, color: T.faint, marginTop: 2 }}>{letters[i]}</span>
+              <span style={{ fontFamily: SANS, fontSize: 15, lineHeight: 1.4, flex: 1, fontWeight: weight }}>{opt}</span>
+              {revealed && isAnswer && <span style={{ color: T.bone }}>✓</span>}
+              {revealed && isPick && !isAnswer && <span style={{ color: T.red }}>✕</span>}
+            </button>
+          );
+        })}
+      </div>
+      {phase === 'reveal' && card.why && (
+        <div style={{ marginTop: 14, paddingTop: 14, borderTop: `1px solid ${T.rule}`,
+          fontFamily: SANS, fontSize: 14, lineHeight: 1.5, color: T.bone, animation: 'sf-in 200ms ease-out' }}>
+          {card.why}
+        </div>
+      )}
+    </div>
+  );
+}
+
 function Rung({ tier, text }){
   return (
     <div style={{ marginBottom: 14 }}>
@@ -635,49 +653,36 @@ function ExtendedFace({ card, phase, deck }){
     try {
       const r = await markAnswer(card, answer, deck.standard || 'NCEA Level 1');
       if (r) setResult(r);
-      else setErr('Could not read the marking. Try again, or check your connection.');
-    } catch {
-      setErr('No connection to the marker. Your answer is safe — try again when online.');
-    } finally { setBusy(false); }
+      else setErr('Could not read the marking. Try again.');
+    } catch { setErr('No connection to the marker. Your answer is safe — try again when online.'); }
+    finally { setBusy(false); }
   };
 
   return (
     <div>
-      {/* command verb, flagged explicitly — it sets the grade ceiling */}
-      <div className="flex items-center gap-2" style={{ marginBottom: 10 }}>
-        <span style={{ fontFamily: MONO, fontSize: 12, letterSpacing: '0.1em',
-          textTransform: 'uppercase', color: T.ink, background: T.bone,
-          padding: '3px 8px', borderRadius: 6 }}>{card.verb}</span>
+      <div className="flex items-center gap-2" style={{ marginBottom: 10, flexWrap: 'wrap' }}>
+        <span style={{ fontFamily: MONO, fontSize: 12, letterSpacing: '0.1em', textTransform: 'uppercase',
+          color: T.ink, background: T.bone, padding: '3px 8px', borderRadius: 6 }}>{card.verb}</span>
         <Label style={{ color: T.faint }}>{card.marks} marks</Label>
         {card.flagged && <Label style={{ color: T.red }}>· Misconception</Label>}
       </div>
 
-      <div style={{ fontFamily: SERIF, fontSize: 20, lineHeight: 1.45, color: T.bone }}>
-        {card.prompt}
-      </div>
+      <div style={{ fontFamily: SERIF, fontSize: 20, lineHeight: 1.45, color: T.bone }}>{card.prompt}</div>
 
-      {/* attempt phase: option to type an answer and be marked A/M/E */}
       {phase === 'attempt' && (
         <div style={{ marginTop: 16 }}>
           {!marking && (
-            <button onClick={() => setMarking(true)} style={{ background: 'none', border: 'none',
-              padding: 0, cursor: 'pointer' }}>
-              <Label style={{ color: T.muted, textDecoration: 'underline' }}>
-                Mark my written answer
-              </Label>
+            <button className="sf-tap" onClick={() => setMarking(true)} style={{ background: 'none', border: 'none', padding: 0, cursor: 'pointer' }}>
+              <Label style={{ color: T.muted, textDecoration: 'underline' }}>Mark my written answer</Label>
             </button>
           )}
           {marking && (
             <div>
-              <textarea value={answer} onChange={e => setAnswer(e.target.value)}
-                placeholder="Write your full answer…" rows={5}
-                style={{ width: '100%', background: T.ink, color: T.bone, border: `1px solid ${T.rule}`,
-                  borderRadius: 12, padding: 12, fontFamily: SANS, fontSize: 15, lineHeight: 1.5,
-                  resize: 'vertical', outline: 'none' }} />
+              <textarea value={answer} onChange={e => setAnswer(e.target.value)} placeholder="Write your full answer…" rows={5}
+                style={{ width: '100%', background: T.ink, color: T.bone, border: `1px solid ${T.rule}`, borderRadius: 12,
+                  padding: 12, fontFamily: SANS, fontSize: 15, lineHeight: 1.5, resize: 'vertical', outline: 'none' }} />
               <div className="flex gap-2" style={{ marginTop: 8 }}>
-                <Btn onClick={doMark} disabled={busy || !answer.trim()}>
-                  {busy ? 'Marking…' : 'Mark it'}
-                </Btn>
+                <Btn onClick={doMark} disabled={busy || !answer.trim()}>{busy ? 'Marking…' : 'Mark it'}</Btn>
                 <Btn kind="ghost" onClick={() => { setMarking(false); setResult(null); setErr(''); }}>Close</Btn>
               </div>
               {err && <div style={{ marginTop: 10, fontFamily: MONO, fontSize: 12, color: T.red }}>{err}</div>}
@@ -687,28 +692,21 @@ function ExtendedFace({ card, phase, deck }){
         </div>
       )}
 
-      {/* reveal phase: the A/M/E ladder + skeleton + this-question pitfall */}
       {phase === 'reveal' && (
-        <div style={{ marginTop: 18, paddingTop: 16, borderTop: `1px solid ${T.rule}`,
-          animation: 'sf-in 200ms ease-out' }}>
-          <Rung tier="Achieved"   text={card.achieved} />
-          <Rung tier="Merit"      text={card.merit} />
+        <div style={{ marginTop: 18, paddingTop: 16, borderTop: `1px solid ${T.rule}`, animation: 'sf-in 200ms ease-out' }}>
+          <Rung tier="Achieved" text={card.achieved} />
+          <Rung tier="Merit" text={card.merit} />
           <Rung tier="Excellence" text={card.excellence} />
           {card.skeleton && (
-            <div style={{ marginTop: 12, padding: '10px 12px', background: T.ink,
-              borderRadius: 10, border: `1px solid ${T.rule}` }}>
+            <div style={{ marginTop: 12, padding: '10px 12px', background: T.ink, borderRadius: 10, border: `1px solid ${T.rule}` }}>
               <Label style={{ color: T.faint }}>Structure that earns it</Label>
-              <div style={{ fontFamily: MONO, fontSize: 13, color: T.bone, marginTop: 4, letterSpacing: '0.02em' }}>
-                {card.skeleton}
-              </div>
+              <div style={{ fontFamily: MONO, fontSize: 13, color: T.bone, marginTop: 4 }}>{card.skeleton}</div>
             </div>
           )}
           {card.pitfall && (
             <div style={{ marginTop: 10 }}>
               <Label style={{ color: T.red }}>What loses marks here</Label>
-              <div style={{ fontFamily: SANS, fontSize: 14, color: T.bone, marginTop: 4, lineHeight: 1.5 }}>
-                {card.pitfall}
-              </div>
+              <div style={{ fontFamily: SANS, fontSize: 14, color: T.bone, marginTop: 4, lineHeight: 1.5 }}>{card.pitfall}</div>
             </div>
           )}
         </div>
@@ -718,12 +716,10 @@ function ExtendedFace({ card, phase, deck }){
 }
 
 function MarkResult({ r }){
-  const gradeColour = r.grade === 'Excellence' || r.grade === 'Merit' ? T.bone
-    : r.grade === 'Achieved' ? T.muted : T.red;
+  const gc = r.grade === 'Excellence' || r.grade === 'Merit' ? T.bone : r.grade === 'Achieved' ? T.muted : T.red;
   return (
-    <div style={{ marginTop: 12, padding: '12px 14px', background: T.ink, borderRadius: 12,
-      border: `1px solid ${T.rule}`, animation: 'sf-in 200ms ease-out' }}>
-      <Label style={{ color: gradeColour }}>Marked: {r.grade}</Label>
+    <div style={{ marginTop: 12, padding: '12px 14px', background: T.ink, borderRadius: 12, border: `1px solid ${T.rule}`, animation: 'sf-in 200ms ease-out' }}>
+      <Label style={{ color: gc }}>Marked: {r.grade}</Label>
       {Array.isArray(r.hit) && r.hit.length > 0 && (
         <div style={{ marginTop: 8 }}>
           <Label style={{ color: T.faint }}>Credit for</Label>
@@ -740,40 +736,32 @@ function MarkResult({ r }){
           </ul>
         </div>
       )}
-      {r.lift && (
-        <div style={{ marginTop: 8, fontFamily: SERIF, fontSize: 15, color: T.bone, lineHeight: 1.5 }}>
-          {r.lift}
-        </div>
-      )}
+      {r.lift && <div style={{ marginTop: 8, fontFamily: SERIF, fontSize: 15, color: T.bone, lineHeight: 1.5 }}>{r.lift}</div>}
     </div>
   );
 }
 
 /* ==========================================================================
-   FEED  —  serves only what's due today; ends deliberately
+   FEED  —  serves what's due; ends deliberately; endless is opt-in
    ========================================================================== */
 function buildQueue(decks, progress, settings, stats){
   const today = TODAY();
   const newUsed = (stats.newByDate && stats.newByDate[today]) || 0;
-  let newBudget = Math.max(0, (settings.newPerDay ?? 12) - newUsed);
+  const newBudget = Math.max(0, ((settings.newPerDay == null ? 12 : settings.newPerDay)) - newUsed);
 
-  // flatten cards with their deck, split into due (seen) and new (unseen)
   const due = [], fresh = [];
   for (const d of decks){
     for (const c of d.cards){
       const p = progress[c.id];
-      if (!p || !p.seen){ fresh.push({ card: c, deck: d }); }
-      else if (p.due <= today){ due.push({ card: c, deck: d }); }
+      if (!p || !p.seen) fresh.push({ card: c, deck: d });
+      else if (p.due <= today) due.push({ card: c, deck: d });
     }
   }
-  // take new cards up to today's budget
-  const takenNew = fresh.slice(0, newBudget);
-  let items = [...due, ...takenNew];
+  let items = [...due, ...fresh.slice(0, newBudget)];
 
   if (settings.interleave){
-    // round-robin across subjects so no topic is blocked together
     const bySub = {};
-    for (const it of items){ (bySub[it.deck.subject] ||= []).push(it); }
+    for (const it of items){ if (!bySub[it.deck.subject]) bySub[it.deck.subject] = []; bySub[it.deck.subject].push(it); }
     const lanes = Object.values(bySub);
     const out = [];
     let n = 0;
@@ -781,84 +769,121 @@ function buildQueue(decks, progress, settings, stats){
       const lane = lanes[n % lanes.length];
       if (lane.length) out.push(lane.shift());
       n++;
-      if (n > items.length * lanes.length + 5) break;   // safety
+      if (n > items.length * lanes.length + 5) break;
     }
     items = out;
   }
   return items;
 }
 
-function Feed({ decks, progress, settings, stats, onGrade, reduceMotion, onDone }){
-  // session queue held in state so Again can re-insert within the session
+function StopScreen({ reviewed, onKeep, canKeep }){
+  return (
+    <div className="flex flex-col items-center justify-center" style={{ minHeight: 420, textAlign: 'center', padding: 24 }}>
+      <Label style={{ color: T.faint }}>Queue clear</Label>
+      <div style={{ fontFamily: SERIF, fontSize: 24, color: T.bone, margin: '14px 0', lineHeight: 1.4 }}>
+        There is nothing below this.<br />Put the phone down.
+      </div>
+      {reviewed > 0 && <Label style={{ color: T.faint }}>{reviewed} reviewed today</Label>}
+      {canKeep && (
+        <div style={{ marginTop: 24 }}>
+          <Btn kind="ghost" onClick={onKeep}>Keep practising anyway</Btn>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function Feed({ decks, progress, settings, stats, onGrade, reduceMotion }){
+  const allItems = useMemo(() => {
+    const out = [];
+    for (const d of decks) for (const c of d.cards) out.push({ card: c, deck: d });
+    return out;
+  }, [decks]);
+
+  const [mode, setMode] = useState('session');   // session | endless
   const [queue, setQueue] = useState(() => buildQueue(decks, progress, settings, stats));
   const [reviewed, setReviewed] = useState(0);
-  const initialLen = useRef(queue.length);
+  const [endless, setEndless] = useState([]);
+  const [eIdx, setEIdx] = useState(0);
 
-  const grade = (q, confidentSure) => {
+  const gradeSession = (q, sure) => {
     const [head, ...rest] = queue;
     if (!head) return;
-    const { reinsert } = onGrade(head.card, head.deck, q, confidentSure);
+    const { reinsert } = onGrade(head.card, head.deck, q, sure);
     setReviewed(r => r + 1);
     if (reinsert){
-      const pos = Math.min(rest.length, 5);       // ~5 positions later, same session
+      const pos = Math.min(rest.length, 5);
       const nq = [...rest];
       nq.splice(pos, 0, head);
       setQueue(nq);
-    } else {
-      setQueue(rest);
-    }
+    } else setQueue(rest);
   };
 
-  const head = queue[0];
+  const startEndless = () => { setEndless(shuffle(allItems)); setEIdx(0); setMode('endless'); };
 
-  if (!head){
+  const gradeEndless = (q, sure) => {
+    const it = endless[eIdx];
+    if (!it) return;
+    onGrade(it.card, it.deck, q, sure);
+    setReviewed(r => r + 1);
+    setEIdx(i => {
+      const n = i + 1;
+      if (n >= endless.length){ setEndless(shuffle(allItems)); return 0; }
+      return n;
+    });
+  };
+
+  if (mode === 'endless'){
+    const it = endless[eIdx];
+    if (!it) return <StopScreen reviewed={reviewed} onKeep={startEndless} canKeep={allItems.length > 0} />;
     return (
-      <div className="flex flex-col items-center justify-center" style={{ minHeight: 420, textAlign: 'center', padding: 24 }}>
-        <Label style={{ color: T.faint }}>Queue clear</Label>
-        <div style={{ fontFamily: SERIF, fontSize: 24, color: T.bone, margin: '14px 0', lineHeight: 1.4 }}>
-          There is nothing below this.<br />Put the phone down.
+      <div>
+        <div className="flex items-center justify-between" style={{ marginBottom: 14 }}>
+          <Label style={{ color: T.faint }}>Extra practice</Label>
+          <button className="sf-tap" onClick={() => setMode('session')} style={{ background: 'none', border: 'none', cursor: 'pointer', padding: 4 }}>
+            <Label style={{ color: T.muted }}>Stop</Label>
+          </button>
         </div>
-        {reviewed > 0 && <Label style={{ color: T.faint }}>{reviewed} reviewed today</Label>}
+        <StudyCard key={it.card.id + ':' + eIdx} card={it.card} deck={it.deck} onGrade={gradeEndless} reduceMotion={reduceMotion} />
       </div>
     );
   }
 
+  const head = queue[0];
+  if (!head) return <StopScreen reviewed={reviewed} onKeep={startEndless} canKeep={allItems.length > 0} />;
+
+  const done = reviewed, left = queue.length;
   return (
     <div>
-      {/* thin progress strip — functional, not decorative */}
-      <div style={{ height: 2, background: T.rule, borderRadius: 2, marginBottom: 14, overflow: 'hidden' }}>
-        <div style={{ height: '100%', width: `${initialLen.current ? (reviewed / (reviewed + queue.length)) * 100 : 0}%`,
-          background: T.bone, transition: reduceMotion ? 'none' : 'width 200ms' }} />
+      <div style={{ height: 3, background: T.rule, borderRadius: 3, marginBottom: 14, overflow: 'hidden' }}>
+        <div style={{ height: '100%', width: `${done + left ? (done / (done + left)) * 100 : 0}%`,
+          background: T.bone, transition: reduceMotion ? 'none' : 'width 250ms ease' }} />
       </div>
-      <StudyCard key={head.card.id} card={head.card} deck={head.deck}
-        onGrade={grade} reduceMotion={reduceMotion} />
+      <StudyCard key={head.card.id} card={head.card} deck={head.deck} onGrade={gradeSession} reduceMotion={reduceMotion} />
     </div>
   );
 }
 
 /* ==========================================================================
-   CREATE  —  generate (notes / topic) or manual; then draft review
-   (photo/PDF attach lives in the existing app's multimodal pipeline — this
-    standalone covers the text paths, which is where Phase 2 lives)
+   CREATE
    ========================================================================== */
-function Create({ onSave, reduceMotion }){
-  const [mode, setMode] = useState('generate');     // generate | manual
-  const [cardType, setCardType] = useState('extended');
+function Create({ onSave }){
+  const [mode, setMode] = useState('generate');   // generate | manual
+  const [cardType, setCardType] = useState('mix'); // mix | extended | flip
   const [source, setSource] = useState('');
   const [level, setLevel] = useState('NCEA Level 1');
   const [busy, setBusy] = useState(false);
-  const [prog, setProg] = useState(null);           // {i,n}
+  const [prog, setProg] = useState(null);
   const [err, setErr] = useState('');
-  const [drafts, setDrafts] = useState(null);       // draft cards awaiting review
+  const [drafts, setDrafts] = useState(null);
   const [meta, setMeta] = useState({ subject: '', topic: '', standard: 'NCEA Level 1' });
   const [attaching, setAttaching] = useState('');
-  const [images, setImages] = useState([]);         // raw blobs, shrunk at generate time
+  const [images, setImages] = useState([]);
   const fileRef = useRef(null);
 
-  // pull text + pictures out of attached files
   const onFiles = async (e) => {
     const files = Array.from(e.target.files || []);
-    if (e.target) e.target.value = '';        // let the same file be re-picked later
+    if (e.target) e.target.value = '';
     if (!files.length) return;
     setErr('');
     let added = '';
@@ -878,7 +903,6 @@ function Create({ onSave, reduceMotion }){
   };
 
   const run = async () => {
-    // manual is synchronous — parse and go straight to review
     if (mode === 'manual'){
       const cards = parseManual(source);
       if (!cards.length){ setErr('Use “question | answer”, one per line.'); return; }
@@ -891,131 +915,113 @@ function Create({ onSave, reduceMotion }){
     setBusy(true); setErr(''); setProg(null);
     try {
       let cards = [];
-      if (source.trim()){
-        cards = cards.concat(cardType === 'extended'
-          ? await genExtended(source, level, (i, n) => setProg({ i, n, phase: 'text' }))
-          : await genFlip(source, level, (i, n) => setProg({ i, n, phase: 'text' })));
-      }
+      if (source.trim()) cards = cards.concat(await genText(source, cardType, level, (i, n, phase) => setProg({ i, n, phase })));
       if (images.length){
         setProg({ i: 0, n: 0, phase: 'prep' });
         const shrunk = [];
         for (const b of images.slice(0, 12)){ try { shrunk.push(await resizeImage(b)); } catch {} }
-        if (shrunk.length){
-          cards = cards.concat(await genFromImages(shrunk, cardType, level, (i, n) => setProg({ i, n, phase: 'images' })));
-        } else if (!cards.length){
-          setErr('Could not read those images. Try a clearer photo.'); setBusy(false); setProg(null); return;
-        }
+        if (shrunk.length) cards = cards.concat(await genImages(shrunk, cardType, level, (i, n, phase) => setProg({ i, n, phase })));
+        else if (!cards.length){ setErr('Could not read those images. Try a clearer photo.'); setBusy(false); setProg(null); return; }
       }
       cards = dedupeCards(cards);
       if (!cards.length){ setErr('Nothing came back. Try clearer notes, a narrower topic, or a sharper photo.'); setBusy(false); return; }
       setMeta({ subject: guessSubject(source), topic: guessTopic(source), standard: level });
       setDrafts(cards.map(c => ({ ...c, keep: true })));
-    } catch (e){
-      setErr('Generation failed. Check your connection and try again.');
-    } finally { setBusy(false); setProg(null); }
+    } catch { setErr('Generation failed. Check your connection and try again.'); }
+    finally { setBusy(false); setProg(null); }
   };
 
   if (drafts){
     return <DraftReview drafts={drafts} setDrafts={setDrafts} meta={meta} setMeta={setMeta}
       onCancel={() => setDrafts(null)}
-      onSave={() => { onSave(drafts.filter(d => d.keep), meta); setDrafts(null); setSource(''); }} />;
+      onSave={() => { onSave(drafts.filter(d => d.keep), meta); setDrafts(null); setSource(''); setImages([]); }} />;
   }
+
+  const progText = !prog ? 'Working…'
+    : prog.phase === 'prep' ? 'Preparing images…'
+    : prog.n > 0 ? `${prog.phase === 'images' ? 'Reading images' : 'Reading notes'} · batch ${prog.i} of ${prog.n}`
+    : 'Working…';
 
   return (
     <div style={{ padding: '4px 2px' }}>
       <Label style={{ color: T.faint }}>New cards</Label>
 
-      <div className="flex gap-2" style={{ margin: '12px 0' }}>
-        <Btn full kind={mode === 'generate' ? 'primary' : 'ghost'} onClick={() => setMode('generate')}>Generate</Btn>
-        <Btn full kind={mode === 'manual' ? 'primary' : 'ghost'} onClick={() => setMode('manual')}>Manual</Btn>
+      <div style={{ margin: '12px 0' }}>
+        <Segmented value={mode} onChange={setMode} options={[{ v: 'generate', label: 'Generate' }, { v: 'manual', label: 'Manual' }]} />
       </div>
 
       {mode === 'generate' && (
-        <div className="flex gap-2" style={{ marginBottom: 12 }}>
-          <Btn full kind={cardType === 'extended' ? 'default' : 'ghost'} onClick={() => setCardType('extended')}
-            style={cardType === 'extended' ? { borderColor: T.bone } : {}}>Extended response</Btn>
-          <Btn full kind={cardType === 'flip' ? 'default' : 'ghost'} onClick={() => setCardType('flip')}
-            style={cardType === 'flip' ? { borderColor: T.bone } : {}}>Flip cards</Btn>
+        <div style={{ marginBottom: 12 }}>
+          <Segmented value={cardType} onChange={setCardType}
+            options={[{ v: 'mix', label: 'Mixed' }, { v: 'extended', label: 'Extended' }, { v: 'flip', label: 'Flip' }]} />
         </div>
       )}
 
       {mode === 'generate' && (
         <div style={{ marginBottom: 12 }}>
-          <input ref={fileRef} type="file" accept="image/*,.docx,.pptx,.txt" multiple
-            onChange={onFiles} style={{ display: 'none' }} />
-          <Btn full kind="ghost" onClick={() => fileRef.current && fileRef.current.click()}>
-            Attach photo / Word / PowerPoint
-          </Btn>
+          <input ref={fileRef} type="file" accept="image/*,.docx,.pptx,.txt" multiple onChange={onFiles} style={{ display: 'none' }} />
+          <Btn full kind="ghost" onClick={() => fileRef.current && fileRef.current.click()}>Attach photo / Word / PowerPoint</Btn>
           {attaching && <Label style={{ color: T.muted, display: 'block', marginTop: 8 }}>{attaching}</Label>}
           {!attaching && images.length > 0 && (
             <div className="flex items-center justify-between" style={{ marginTop: 8 }}>
               <Label style={{ color: T.muted }}>{images.length} image{images.length > 1 ? 's' : ''} attached{images.length > 12 ? ' (first 12 used)' : ''}</Label>
-              <button onClick={() => setImages([])} style={{ background: 'none', border: 'none', cursor: 'pointer', padding: 0 }}>
+              <button className="sf-tap" onClick={() => setImages([])} style={{ background: 'none', border: 'none', cursor: 'pointer', padding: 0 }}>
                 <Label style={{ color: T.red }}>Clear</Label>
               </button>
             </div>
           )}
           {!attaching && images.length === 0 && (
-            <Label style={{ color: T.faint, display: 'block', marginTop: 8 }}>
-              Photos, or the text and pictures inside a file — any size.
-            </Label>
+            <Label style={{ color: T.faint, display: 'block', marginTop: 8 }}>Photos, or the text and pictures inside a file — any size.</Label>
           )}
         </div>
       )}
 
       <textarea value={source} onChange={e => setSource(e.target.value)}
-        placeholder={mode === 'manual'
-          ? 'question | answer\nquestion | answer'
-          : 'Paste your notes, or type a topic like “rates of reaction”…'}
+        placeholder={mode === 'manual' ? 'question | answer\nquestion | answer' : 'Paste your notes, or type a topic like “rates of reaction”…'}
         rows={8}
-        style={{ width: '100%', background: T.paper, color: T.bone, border: `1px solid ${T.rule}`,
-          borderRadius: 12, padding: 14, fontFamily: mode === 'manual' ? MONO : SANS, fontSize: 15,
-          lineHeight: 1.5, resize: 'vertical', outline: 'none' }} />
+        style={{ width: '100%', background: T.paper, color: T.bone, border: `1px solid ${T.rule}`, borderRadius: 12,
+          padding: 14, fontFamily: mode === 'manual' ? MONO : SANS, fontSize: 15, lineHeight: 1.5, resize: 'vertical', outline: 'none' }} />
 
       {mode === 'generate' && (
         <div style={{ marginTop: 10 }}>
           <Label style={{ color: T.faint }}>Level</Label>
           <input value={level} onChange={e => setLevel(e.target.value)}
-            style={{ width: '100%', marginTop: 4, background: T.paper, color: T.bone,
-              border: `1px solid ${T.rule}`, borderRadius: 10, padding: '10px 12px',
-              fontFamily: MONO, fontSize: 13, outline: 'none' }} />
+            style={{ width: '100%', marginTop: 4, background: T.paper, color: T.bone, border: `1px solid ${T.rule}`,
+              borderRadius: 10, padding: '10px 12px', fontFamily: MONO, fontSize: 13, outline: 'none' }} />
         </div>
       )}
 
       {err && <div style={{ marginTop: 12, fontFamily: MONO, fontSize: 12, color: T.red }}>{err}</div>}
-      {busy && (
-        <div style={{ marginTop: 12 }}>
-          <Label style={{ color: T.muted }}>
-            {!prog ? 'Working…'
-              : prog.phase === 'prep' ? 'Preparing images…'
-              : prog.n > 0 ? `${prog.phase === 'images' ? 'Reading images' : 'Reading notes'} · batch ${prog.i} of ${prog.n}`
-              : 'Working…'}
-          </Label>
-        </div>
-      )}
+      {busy && <div style={{ marginTop: 12 }}><Label style={{ color: T.muted }}>{progText}</Label></div>}
 
       <div style={{ marginTop: 16 }}>
         <Btn full kind="primary" onClick={run} disabled={busy}>
-          {busy ? (mode === 'manual' ? 'Reading…' : 'Generating…')
-                : (mode === 'manual' ? 'Read cards' : 'Generate cards')}
+          {busy ? (mode === 'manual' ? 'Reading…' : 'Generating…') : (mode === 'manual' ? 'Read cards' : 'Generate cards')}
         </Btn>
       </div>
     </div>
   );
 }
 
-/* crude offline guesses; user edits them in draft review anyway */
 function guessSubject(text){
   const t = text.toLowerCase();
-  const map = [['biolog','Biology'],['chemis','Chemistry'],['physic','Physics'],
-    ['math','Maths'],['algebra','Maths'],['essay','English'],['shakes','English'],
-    ['histor','History'],['geograph','Geography'],['econom','Economics']];
+  const map = [['biolog','Biology'],['chemis','Chemistry'],['physic','Physics'],['math','Maths'],['algebra','Maths'],
+    ['essay','English'],['shakes','English'],['histor','History'],['geograph','Geography'],['econom','Economics']];
   for (const [k, v] of map) if (t.includes(k)) return v;
   return '';
 }
 function guessTopic(text){
-  const first = text.trim().split('\n')[0].slice(0, 40);
+  const lines = text.trim().split('\n').filter(l => l.trim() && !/^#\s/.test(l));
+  const first = (lines[0] || '').slice(0, 40);
   return first.replace(/[|:.].*$/, '').trim();
+}
+
+function draftPreview(d){
+  if (d.type === 'extended') return { tag: `${d.verb} · ${d.marks}m`, main: d.prompt, sub: 'A: ' + d.achieved };
+  if (d.type === 'mcq') return { tag: 'Multiple choice', main: d.front, sub: '✓ ' + (d.options[d.answer] || '') };
+  if (d.type === 'short') return { tag: 'Short answer', main: d.front, sub: d.back };
+  if (d.type === 'cloze') return { tag: 'Cloze', main: d.front, sub: d.back };
+  return { tag: 'Flip', main: d.front, sub: d.back };
 }
 
 function DraftReview({ drafts, setDrafts, meta, setMeta, onSave, onCancel }){
@@ -1026,48 +1032,38 @@ function DraftReview({ drafts, setDrafts, meta, setMeta, onSave, onCancel }){
     <div style={{ padding: '4px 2px' }}>
       <div className="flex items-center justify-between" style={{ marginBottom: 12 }}>
         <Label style={{ color: T.faint }}>Review · {kept} of {drafts.length} kept</Label>
-        <button onClick={onCancel} style={{ background: 'none', border: 'none', cursor: 'pointer' }}>
+        <button className="sf-tap" onClick={onCancel} style={{ background: 'none', border: 'none', cursor: 'pointer' }}>
           <Label style={{ color: T.muted }}>Discard all</Label>
         </button>
       </div>
 
-      {/* editable subject / topic / standard */}
       <div className="grid grid-cols-3 gap-2" style={{ marginBottom: 14 }}>
         {['subject','topic','standard'].map(k => (
           <div key={k}>
             <Label style={{ color: T.faint }}>{k}</Label>
             <input value={meta[k]} onChange={e => setMeta({ ...meta, [k]: e.target.value })}
-              style={{ width: '100%', marginTop: 4, background: T.paper, color: T.bone,
-                border: `1px solid ${T.rule}`, borderRadius: 8, padding: '8px 10px',
-                fontFamily: MONO, fontSize: 12, outline: 'none' }} />
+              style={{ width: '100%', marginTop: 4, background: T.paper, color: T.bone, border: `1px solid ${T.rule}`,
+                borderRadius: 8, padding: '8px 10px', fontFamily: MONO, fontSize: 12, outline: 'none' }} />
           </div>
         ))}
       </div>
 
       <div className="flex flex-col gap-2" style={{ marginBottom: 16 }}>
-        {drafts.map(d => (
-          <button key={d.id} onClick={() => toggle(d.id)}
-            style={{ textAlign: 'left', position: 'relative', background: T.paper,
-              border: `1px solid ${d.keep ? T.rule : 'transparent'}`, borderRadius: 12,
-              padding: '14px 14px 14px 30px', opacity: d.keep ? 1 : 0.4, cursor: 'pointer' }}>
-            <Margin colour={subjectColour(meta.subject)} />
-            {d.type === 'extended' ? (
-              <>
-                <Label style={{ color: T.faint }}>{d.verb} · {d.marks} marks</Label>
-                <div style={{ fontFamily: SERIF, fontSize: 16, color: T.bone, marginTop: 4, lineHeight: 1.4 }}>{d.prompt}</div>
-                <div style={{ fontFamily: SANS, fontSize: 13, color: T.muted, marginTop: 6, lineHeight: 1.45 }}>
-                  A: {d.achieved}
-                </div>
-              </>
-            ) : (
-              <>
-                <div style={{ fontFamily: SERIF, fontSize: 16, color: T.bone, lineHeight: 1.4 }}>{d.front}</div>
-                <div style={{ fontFamily: SANS, fontSize: 14, color: T.muted, marginTop: 4 }}>{d.back}</div>
-              </>
-            )}
-            {!d.keep && <Label style={{ color: T.red, position: 'absolute', top: 12, right: 12 }}>dropped</Label>}
-          </button>
-        ))}
+        {drafts.map(d => {
+          const p = draftPreview(d);
+          return (
+            <button key={d.id} className="sf-tap" onClick={() => toggle(d.id)}
+              style={{ textAlign: 'left', position: 'relative', background: T.paper,
+                border: `1px solid ${d.keep ? T.rule : 'transparent'}`, borderRadius: 12,
+                padding: '14px 14px 14px 30px', opacity: d.keep ? 1 : 0.4, cursor: 'pointer' }}>
+              <Margin colour={subjectColour(meta.subject)} />
+              <Label style={{ color: T.faint }}>{p.tag}</Label>
+              <div style={{ fontFamily: SERIF, fontSize: 16, color: T.bone, marginTop: 4, lineHeight: 1.4 }}>{p.main}</div>
+              {p.sub && <div style={{ fontFamily: SANS, fontSize: 13, color: T.muted, marginTop: 6, lineHeight: 1.45 }}>{p.sub}</div>}
+              {!d.keep && <Label style={{ color: T.red, position: 'absolute', top: 12, right: 12 }}>dropped</Label>}
+            </button>
+          );
+        })}
       </div>
 
       <Btn full kind="primary" onClick={onSave} disabled={!kept}>Save deck · {kept} cards</Btn>
@@ -1076,7 +1072,7 @@ function DraftReview({ drafts, setDrafts, meta, setMeta, onSave, onCancel }){
 }
 
 /* ==========================================================================
-   DECKS  —  list, editor (edit/delete card, delete deck), scheduler state
+   DECKS
    ========================================================================== */
 function Decks({ decks, progress, onEditCard, onDeleteCard, onDeleteDeck }){
   const [openId, setOpenId] = useState(null);
@@ -1100,11 +1096,11 @@ function Decks({ decks, progress, onEditCard, onDeleteCard, onDeleteDeck }){
       <Label style={{ color: T.faint }}>Decks</Label>
       {decks.map(d => {
         const dueN = d.cards.filter(c => { const p = progress[c.id]; return p && p.seen && p.due <= TODAY(); }).length;
-        const flagN = d.cards.filter(c => progress[c.id]?.flagged).length;
+        const flagN = d.cards.filter(c => { const p = progress[c.id]; return p && p.flagged; }).length;
         return (
-          <button key={d.id} onClick={() => setOpenId(d.id)}
-            style={{ position: 'relative', textAlign: 'left', background: T.paper,
-              border: `1px solid ${T.rule}`, borderRadius: 12, padding: '14px 14px 14px 30px', cursor: 'pointer' }}>
+          <button key={d.id} className="sf-tap" onClick={() => setOpenId(d.id)}
+            style={{ position: 'relative', textAlign: 'left', background: T.paper, border: `1px solid ${T.rule}`,
+              borderRadius: 12, padding: '14px 14px 14px 30px', cursor: 'pointer' }}>
             <Margin colour={subjectColour(d.subject)} />
             <Label style={{ color: subjectColour(d.subject) }}>{d.subject || 'Untitled'}</Label>
             <div style={{ fontFamily: SERIF, fontSize: 17, color: T.bone, marginTop: 2 }}>{d.topic}</div>
@@ -1127,7 +1123,7 @@ function DeckEditor({ deck, progress, onBack, onEditCard, onDeleteCard, onDelete
   return (
     <div style={{ padding: '4px 2px' }}>
       <div className="flex items-center justify-between" style={{ marginBottom: 12 }}>
-        <button onClick={onBack} style={{ background: 'none', border: 'none', cursor: 'pointer' }}>
+        <button className="sf-tap" onClick={onBack} style={{ background: 'none', border: 'none', cursor: 'pointer' }}>
           <Label style={{ color: T.muted }}>‹ Back</Label>
         </button>
         <Label style={{ color: subjectColour(deck.subject) }}>{deck.subject} · {deck.topic}</Label>
@@ -1143,24 +1139,21 @@ function DeckEditor({ deck, progress, onBack, onEditCard, onDeleteCard, onDelete
               onSave={(patch) => { onEditCard(deck.id, c.id, patch); setEditId(null); }}
               onCancel={() => setEditId(null)} />;
           }
+          const prev = draftPreview(c);
           return (
             <div key={c.id} style={{ position: 'relative', background: T.paper, border: `1px solid ${T.rule}`,
               borderRadius: 12, padding: '12px 12px 12px 28px' }}>
               <Margin colour={subjectColour(deck.subject)} />
               <div className="flex items-center justify-between" style={{ marginBottom: 4 }}>
-                <Label style={{ color: c.type === 'extended' ? T.faint : T.faint }}>
-                  {c.type === 'extended' ? `${c.verb} · ${c.marks}m` : 'Flip'}
-                </Label>
+                <Label style={{ color: T.faint }}>{prev.tag}</Label>
                 <Label style={{ color: isMis ? T.red : T.faint }}>{label}</Label>
               </div>
-              <div style={{ fontFamily: SERIF, fontSize: 15, color: T.bone, lineHeight: 1.4 }}>
-                {c.type === 'extended' ? c.prompt : c.front}
-              </div>
+              <div style={{ fontFamily: SERIF, fontSize: 15, color: T.bone, lineHeight: 1.4 }}>{prev.main}</div>
               <div className="flex gap-3" style={{ marginTop: 8 }}>
-                <button onClick={() => setEditId(c.id)} style={{ background: 'none', border: 'none', cursor: 'pointer', padding: 0 }}>
+                <button className="sf-tap" onClick={() => setEditId(c.id)} style={{ background: 'none', border: 'none', cursor: 'pointer', padding: 0 }}>
                   <Label style={{ color: T.muted }}>Edit</Label>
                 </button>
-                <button onClick={() => onDeleteCard(deck.id, c.id)} style={{ background: 'none', border: 'none', cursor: 'pointer', padding: 0 }}>
+                <button className="sf-tap" onClick={() => onDeleteCard(deck.id, c.id)} style={{ background: 'none', border: 'none', cursor: 'pointer', padding: 0 }}>
                   <Label style={{ color: T.red }}>Delete</Label>
                 </button>
               </div>
@@ -1184,40 +1177,50 @@ function DeckEditor({ deck, progress, onBack, onEditCard, onDeleteCard, onDelete
 }
 
 function CardEditRow({ card, onSave, onCancel }){
-  const [f, setF] = useState(card);
+  const [f, setF] = useState(() => card.type === 'mcq' ? { ...card, _opts: (card.options || []).join('\n') } : { ...card });
+  const inp = { width: '100%', marginTop: 4, background: T.ink, color: T.bone, border: `1px solid ${T.rule}`,
+    borderRadius: 8, padding: '8px 10px', fontFamily: SANS, fontSize: 14, outline: 'none', resize: 'vertical' };
   const field = (k, label, area) => (
     <div style={{ marginBottom: 8 }}>
       <Label style={{ color: T.faint }}>{label}</Label>
-      {area
-        ? <textarea value={f[k] || ''} onChange={e => setF({ ...f, [k]: e.target.value })} rows={2}
-            style={inp} />
-        : <input value={f[k] || ''} onChange={e => setF({ ...f, [k]: e.target.value })} style={inp} />}
+      {area ? <textarea value={f[k] || ''} onChange={e => setF({ ...f, [k]: e.target.value })} rows={2} style={inp} />
+            : <input value={f[k] || ''} onChange={e => setF({ ...f, [k]: e.target.value })} style={inp} />}
     </div>
   );
-  const inp = { width: '100%', marginTop: 4, background: T.ink, color: T.bone,
-    border: `1px solid ${T.rule}`, borderRadius: 8, padding: '8px 10px',
-    fontFamily: SANS, fontSize: 14, outline: 'none', resize: 'vertical' };
+
+  const doSave = () => {
+    if (f.type === 'mcq'){
+      const options = (f._opts || '').split('\n').map(s => s.trim()).filter(Boolean);
+      let answer = Number(f.answer);
+      if (!(answer >= 0 && answer < options.length)) answer = 0;
+      const { _opts, ...rest } = f;
+      onSave({ ...rest, options, answer });
+    } else onSave(f);
+  };
 
   return (
     <div style={{ background: T.paper, border: `1px solid ${T.bone}`, borderRadius: 12, padding: 14 }}>
-      {card.type === 'extended' ? (
+      {f.type === 'extended' ? (
         <>
-          {field('verb', 'Verb')}
-          {field('prompt', 'Question', true)}
-          {field('achieved', 'Achieved', true)}
-          {field('merit', 'Merit', true)}
-          {field('excellence', 'Excellence', true)}
-          {field('skeleton', 'Structure')}
-          {field('pitfall', 'What loses marks', true)}
+          {field('verb', 'Verb')}{field('prompt', 'Question', true)}
+          {field('achieved', 'Achieved', true)}{field('merit', 'Merit', true)}{field('excellence', 'Excellence', true)}
+          {field('skeleton', 'Structure')}{field('pitfall', 'What loses marks', true)}
+        </>
+      ) : f.type === 'mcq' ? (
+        <>
+          {field('front', 'Question', true)}
+          {field('_opts', 'Options (one per line)', true)}
+          {field('answer', 'Correct option number (0 = first)')}
+          {field('why', 'Why', true)}
         </>
       ) : (
         <>
-          {field('front', 'Question', true)}
-          {field('back', 'Answer', true)}
+          {field('front', f.type === 'cloze' ? 'Sentence (use ____)' : 'Question', true)}
+          {field('back', f.type === 'short' ? 'Model answer' : 'Answer', true)}
         </>
       )}
       <div className="flex gap-2" style={{ marginTop: 6 }}>
-        <Btn kind="primary" onClick={() => onSave(f)}>Save</Btn>
+        <Btn kind="primary" onClick={doSave}>Save</Btn>
         <Btn kind="ghost" onClick={onCancel}>Cancel</Btn>
       </div>
     </div>
@@ -1225,7 +1228,7 @@ function CardEditRow({ card, onSave, onCancel }){
 }
 
 /* ==========================================================================
-   STATS  —  kept deliberately light. No badges, no notifications.
+   STATS  —  kept light. No badges, no notifications.
    ========================================================================== */
 function Stats({ decks, progress, stats }){
   const today = TODAY();
@@ -1237,11 +1240,10 @@ function Stats({ decks, progress, stats }){
   const totalCards = decks.reduce((s, d) => s + d.cards.length, 0);
   const reviewedToday = (stats.reviewsByDate && stats.reviewsByDate[today]) || 0;
 
-  // per-subject mastery: share of that subject's seen cards not currently due/flagged
   const subjects = {};
   for (const d of decks){
     const s = d.subject || 'Untitled';
-    subjects[s] ||= { total: 0, mastered: 0 };
+    if (!subjects[s]) subjects[s] = { total: 0, mastered: 0 };
     for (const c of d.cards){
       subjects[s].total++;
       const p = progress[c.id];
@@ -1296,14 +1298,14 @@ function Settings({ settings, onChange }){
   return (
     <div style={{ padding: '4px 2px' }}>
       <Label style={{ color: T.faint }}>Settings</Label>
-      <div className="flex items-center justify-between" style={{ margin: '16px 0', padding: '14px', background: T.paper, border: `1px solid ${T.rule}`, borderRadius: 12 }}>
+      <div className="flex items-center justify-between" style={{ margin: '16px 0', padding: 14, background: T.paper, border: `1px solid ${T.rule}`, borderRadius: 12 }}>
         <div>
           <div style={{ fontFamily: SANS, fontSize: 15, color: T.bone }}>Interleave subjects</div>
           <Label style={{ color: T.faint }}>Round-robin so no topic blocks together</Label>
         </div>
-        <button onClick={() => onChange({ ...settings, interleave: !settings.interleave })}
+        <button className="sf-tap" onClick={() => onChange({ ...settings, interleave: !settings.interleave })}
           style={{ width: 48, height: 28, borderRadius: 14, border: `1px solid ${T.rule}`,
-            background: settings.interleave ? T.bone : T.raised, position: 'relative', cursor: 'pointer' }}>
+            background: settings.interleave ? T.bone : T.raised, position: 'relative', cursor: 'pointer', flexShrink: 0 }}>
           <span style={{ position: 'absolute', top: 3, left: settings.interleave ? 23 : 3, width: 20, height: 20,
             borderRadius: 10, background: settings.interleave ? T.ink : T.faint, transition: 'left 150ms' }} />
         </button>
@@ -1312,9 +1314,9 @@ function Settings({ settings, onChange }){
         <div style={{ fontFamily: SANS, fontSize: 15, color: T.bone }}>New cards per day</div>
         <Label style={{ color: T.faint }}>Caps how much fresh material enters the queue</Label>
         <div className="flex items-center gap-3" style={{ marginTop: 10 }}>
-          <Btn kind="ghost" onClick={() => onChange({ ...settings, newPerDay: Math.max(0, (settings.newPerDay ?? 12) - 2) })}>−</Btn>
-          <div style={{ fontFamily: SERIF, fontSize: 24, color: T.bone, minWidth: 40, textAlign: 'center' }}>{settings.newPerDay ?? 12}</div>
-          <Btn kind="ghost" onClick={() => onChange({ ...settings, newPerDay: (settings.newPerDay ?? 12) + 2 })}>+</Btn>
+          <Btn kind="ghost" onClick={() => onChange({ ...settings, newPerDay: Math.max(0, ((settings.newPerDay == null ? 12 : settings.newPerDay)) - 2) })}>−</Btn>
+          <div style={{ fontFamily: SERIF, fontSize: 24, color: T.bone, minWidth: 40, textAlign: 'center' }}>{(settings.newPerDay == null ? 12 : settings.newPerDay)}</div>
+          <Btn kind="ghost" onClick={() => onChange({ ...settings, newPerDay: ((settings.newPerDay == null ? 12 : settings.newPerDay)) + 2 })}>+</Btn>
         </div>
       </div>
     </div>
@@ -1322,18 +1324,17 @@ function Settings({ settings, onChange }){
 }
 
 /* ==========================================================================
-   APP  —  loads the four keys, owns writes, routes tabs
+   APP
    ========================================================================== */
 export default function App(){
   const [ready, setReady] = useState(false);
-  const [tab, setTab] = useState('feed');   // feed | create | decks | stats | settings
+  const [tab, setTab] = useState('feed');
   const [library, setLibrary] = useState({ decks: [] });
   const [progress, setProgress] = useState({});
   const [stats, setStats] = useState(DEFAULT_STATS);
   const [settings, setSettings] = useState(DEFAULT_SETTINGS);
   const reduceMotion = useRef(false);
 
-  // load everything once
   useEffect(() => {
     (async () => {
       const [lib, prog, st, se] = await Promise.all([
@@ -1356,33 +1357,26 @@ export default function App(){
   const persistStats = useCallback((s) => { setStats(s); save('stats:main', s); }, []);
   const persistSettings = useCallback((s) => { setSettings(s); save('settings:main', s); }, []);
 
-  // save a reviewed deck (from draft review)
   const saveDeck = (cards, meta) => {
     const deck = {
       id: uid(),
       subject: (meta.subject || 'Untitled').trim(),
       topic: (meta.topic || '').trim(),
       standard: (meta.standard || 'NCEA Level 1').trim(),
-      cards: cards.map(({ keep, subjectGuess, ...c }) => c),
+      cards: cards.map(({ keep, ...c }) => c),
     };
     persistLibrary({ decks: [...library.decks, deck] });
     setTab('feed');
   };
 
-  // grade a card from the feed -> update progress + stats, return {reinsert}
   const gradeCard = (card, deck, q, confidentSure) => {
     const prev = progress[card.id];
     const wasNew = !prev || !prev.seen;
     const { next, reinsert } = schedule(prev, q, confidentSure);
-    const nextProg = { ...progress, [card.id]: next };
-    persistProgress(nextProg);
+    persistProgress({ ...progress, [card.id]: next });
 
-    // stats: streak, counts per date, per subject
     const today = TODAY();
-    const s = { ...stats,
-      newByDate: { ...stats.newByDate },
-      reviewsByDate: { ...stats.reviewsByDate },
-      bySubject: { ...stats.bySubject } };
+    const s = { ...stats, newByDate: { ...stats.newByDate }, reviewsByDate: { ...stats.reviewsByDate }, bySubject: { ...stats.bySubject } };
     s.reviewsByDate[today] = (s.reviewsByDate[today] || 0) + 1;
     if (wasNew) s.newByDate[today] = (s.newByDate[today] || 0) + 1;
     s.bySubject[deck.subject] = (s.bySubject[deck.subject] || 0) + 1;
@@ -1399,19 +1393,16 @@ export default function App(){
       : { ...d, cards: d.cards.map(c => c.id === cardId ? { ...c, ...patch } : c) }) });
   };
   const deleteCard = (deckId, cardId) => {
-    persistLibrary({ decks: library.decks.map(d => d.id !== deckId ? d
-      : { ...d, cards: d.cards.filter(c => c.id !== cardId) }) });
+    persistLibrary({ decks: library.decks.map(d => d.id !== deckId ? d : { ...d, cards: d.cards.filter(c => c.id !== cardId) }) });
   };
-  const deleteDeck = (deckId) => {
-    persistLibrary({ decks: library.decks.filter(d => d.id !== deckId) });
-  };
+  const deleteDeck = (deckId) => persistLibrary({ decks: library.decks.filter(d => d.id !== deckId) });
 
+  const cardCount = library.decks.reduce((s, d) => s + d.cards.length, 0);
   const dueCount = useMemo(() => {
     if (!ready) return 0;
     const today = TODAY();
     let n = 0;
-    const newBudget = Math.max(0, (settings.newPerDay ?? 12) - ((stats.newByDate && stats.newByDate[today]) || 0));
-    let freshLeft = newBudget;
+    let freshLeft = Math.max(0, ((settings.newPerDay == null ? 12 : settings.newPerDay)) - ((stats.newByDate && stats.newByDate[today]) || 0));
     for (const d of library.decks) for (const c of d.cards){
       const p = progress[c.id];
       if (!p || !p.seen){ if (freshLeft > 0){ n++; freshLeft--; } }
@@ -1420,24 +1411,18 @@ export default function App(){
     return n;
   }, [ready, library, progress, settings, stats]);
 
-  if (!ready){
-    return <Shell><div style={{ padding: 40, textAlign: 'center' }}><Label style={{ color: T.faint }}>Loading…</Label></div></Shell>;
-  }
+  if (!ready) return <Shell><div style={{ padding: 40, textAlign: 'center' }}><Label style={{ color: T.faint }}>Loading…</Label></div></Shell>;
 
   return (
     <Shell>
       <div style={{ minHeight: 440 }}>
-        {tab === 'feed' && <Feed key={'feed-' + library.decks.reduce((s, d) => s + d.cards.length, 0)}
-          decks={library.decks} progress={progress} settings={settings}
-          stats={stats} onGrade={gradeCard} reduceMotion={reduceMotion.current}
-          onDone={() => {}} />}
-        {tab === 'create' && <Create onSave={saveDeck} reduceMotion={reduceMotion.current} />}
-        {tab === 'decks' && <Decks decks={library.decks} progress={progress}
-          onEditCard={editCard} onDeleteCard={deleteCard} onDeleteDeck={deleteDeck} />}
+        {tab === 'feed' && <Feed key={'feed-' + cardCount} decks={library.decks} progress={progress} settings={settings}
+          stats={stats} onGrade={gradeCard} reduceMotion={reduceMotion.current} />}
+        {tab === 'create' && <Create onSave={saveDeck} />}
+        {tab === 'decks' && <Decks decks={library.decks} progress={progress} onEditCard={editCard} onDeleteCard={deleteCard} onDeleteDeck={deleteDeck} />}
         {tab === 'stats' && <Stats decks={library.decks} progress={progress} stats={stats} />}
         {tab === 'settings' && <Settings settings={settings} onChange={persistSettings} />}
       </div>
-
       <Nav tab={tab} setTab={setTab} due={dueCount} />
     </Shell>
   );
@@ -1445,14 +1430,21 @@ export default function App(){
 
 function Shell({ children }){
   return (
-    <div style={{ background: T.ink, minHeight: '100vh', color: T.bone,
-      display: 'flex', justifyContent: 'center' }}>
+    <div style={{ background: T.ink, minHeight: '100vh', color: T.bone, display: 'flex', justifyContent: 'center' }}>
       <style>{`
         @keyframes sf-in { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: none; } }
-        @media (prefers-reduced-motion: reduce){ * { animation: none !important; transition: none !important; } }
         * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
-        textarea, input { font-size: 16px; }  /* stop iOS zoom-on-focus */
+        textarea, input { font-size: 16px; }
         ::placeholder { color: ${T.faint}; }
+        .sf-btn { transition: transform 120ms ease, background 150ms, border-color 150ms, opacity 150ms; }
+        .sf-btn:active:not(:disabled) { transform: scale(0.97); }
+        .sf-tap { transition: transform 120ms ease, border-color 150ms; }
+        .sf-tap:active { transform: scale(0.98); }
+        @media (hover: hover) {
+          .sf-btn:hover:not(:disabled) { border-color: #2E3E49; }
+        }
+        .sf-card { box-shadow: 0 10px 30px rgba(0,0,0,0.35); }
+        @media (prefers-reduced-motion: reduce) { * { animation: none !important; transition: none !important; } }
       `}</style>
       <div style={{ width: '100%', maxWidth: 460, padding: '18px 16px 96px', position: 'relative' }}>
         {children}
@@ -1462,23 +1454,22 @@ function Shell({ children }){
 }
 
 function Nav({ tab, setTab, due }){
-  const items = [
-    ['feed', 'Feed'], ['create', 'New'], ['decks', 'Decks'], ['stats', 'Stats'], ['settings', 'Set'],
-  ];
+  const items = [['feed','Feed'],['create','New'],['decks','Decks'],['stats','Stats'],['settings','Set']];
   return (
     <div style={{ position: 'fixed', bottom: 0, left: 0, right: 0, display: 'flex', justifyContent: 'center' }}>
-      <div style={{ width: '100%', maxWidth: 460, background: T.paper, borderTop: `1px solid ${T.rule}`,
-        display: 'flex', padding: '8px 8px calc(8px + env(safe-area-inset-bottom))' }}>
+      <div style={{ width: '100%', maxWidth: 460, background: 'rgba(20,28,35,0.92)', backdropFilter: 'blur(8px)',
+        borderTop: `1px solid ${T.rule}`, display: 'flex', padding: '6px 8px calc(6px + env(safe-area-inset-bottom))' }}>
         {items.map(([k, label]) => {
           const active = tab === k;
           return (
-            <button key={k} onClick={() => setTab(k)}
-              style={{ flex: 1, background: 'none', border: 'none', cursor: 'pointer', padding: '8px 0', position: 'relative' }}>
+            <button key={k} className="sf-tap" onClick={() => setTab(k)}
+              style={{ flex: 1, background: 'none', border: 'none', cursor: 'pointer', padding: '10px 0 8px', position: 'relative' }}>
+              <span style={{ position: 'absolute', top: 0, left: '50%', transform: 'translateX(-50%)',
+                width: 20, height: 2, borderRadius: 2, background: active ? T.bone : 'transparent' }} />
               <Label style={{ color: active ? T.bone : T.faint }}>{label}</Label>
               {k === 'feed' && due > 0 && (
-                <span style={{ position: 'absolute', top: 2, right: '50%', marginRight: -22,
-                  fontFamily: MONO, fontSize: 10, color: T.ink, background: T.red,
-                  borderRadius: 8, padding: '1px 5px', minWidth: 16, textAlign: 'center' }}>{due}</span>
+                <span style={{ position: 'absolute', top: 4, right: '50%', marginRight: -24, fontFamily: MONO, fontSize: 10,
+                  color: T.ink, background: T.red, borderRadius: 8, padding: '1px 5px', minWidth: 16, textAlign: 'center' }}>{due}</span>
               )}
             </button>
           );
