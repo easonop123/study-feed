@@ -679,7 +679,7 @@ function McqFace({ card, phase, pick, onPick }){
     <div>
       <div style={{ fontFamily: SERIF, fontSize: 21, lineHeight: 1.4, color: T.bone, marginBottom: 14 }}>{card.front}</div>
       <div className="flex flex-col gap-2">
-        {card.options.map((opt, i) => {
+        {(card.options || []).map((opt, i) => {
           const revealed = phase === 'reveal';
           const isAnswer = i === card.answer;
           const isPick = pick === i;
@@ -744,7 +744,6 @@ function ExtendedFace({ card, phase, deck }){
         <span style={{ fontFamily: MONO, fontSize: 12, letterSpacing: '0.1em', textTransform: 'uppercase',
           color: T.ink, background: T.bone, padding: '3px 8px', borderRadius: 6 }}>{card.verb}</span>
         <Label style={{ color: T.faint }}>{card.marks} marks</Label>
-        {card.flagged && <Label style={{ color: T.red }}>· Misconception</Label>}
       </div>
 
       <div style={{ fontFamily: SERIF, fontSize: 20, lineHeight: 1.45, color: T.bone }}>{card.prompt}</div>
@@ -824,10 +823,12 @@ function MarkResult({ r }){
 /* ==========================================================================
    FEED  —  scheduled cards first, then rolls straight on. Never stops.
    ========================================================================== */
+const perDay = (s) => (s && s.newPerDay != null) ? s.newPerDay : 12;
+
 function newBudgetFor(settings, stats){
   if (!settings.capNew) return Infinity;
   const used = (stats.newByDate && stats.newByDate[TODAY()]) || 0;
-  return Math.max(0, ((settings.newPerDay == null ? 12 : settings.newPerDay)) - used);
+  return Math.max(0, perDay(settings) - used);
 }
 
 function buildQueue(decks, progress, settings, stats){
@@ -1082,14 +1083,19 @@ function Create({ onSave, settings }){
           <Label style={{ color: T.faint, display: 'block', marginTop: 3, textTransform: 'none', letterSpacing: 0, fontFamily: SANS, fontSize: 12 }}>
             Sets how hard the questions are and what the marking expects.
           </Label>
-          <select value={LEVEL_PRESETS.includes(level) ? level : '__other'}
-            onChange={e => setLevel(e.target.value === '__other' ? '' : e.target.value)}
-            style={{ width: '100%', marginTop: 6, background: T.paper, color: T.bone, border: `1px solid ${T.rule}`,
-              borderRadius: 10, padding: '11px 12px', fontFamily: MONO, fontSize: 13, outline: 'none',
-              appearance: 'none', WebkitAppearance: 'none' }}>
-            {LEVEL_PRESETS.map(p => <option key={p} value={p} style={{ background: T.paper }}>{p}</option>)}
-            <option value="__other" style={{ background: T.paper }}>Something else…</option>
-          </select>
+          <div style={{ position: 'relative', marginTop: 6 }}>
+            <select value={LEVEL_PRESETS.includes(level) ? level : '__other'}
+              onChange={e => setLevel(e.target.value === '__other' ? '' : e.target.value)}
+              style={{ width: '100%', background: T.paper, color: T.bone, border: `1px solid ${T.rule}`,
+                borderRadius: 10, padding: '11px 34px 11px 12px', fontFamily: MONO, outline: 'none',
+                appearance: 'none', WebkitAppearance: 'none' }}>
+              {LEVEL_PRESETS.map(p => <option key={p} value={p} style={{ background: T.paper }}>{p}</option>)}
+              <option value="__other" style={{ background: T.paper }}>Something else…</option>
+            </select>
+            {/* appearance:none removes the native arrow — put one back, or it reads as a dead text box */}
+            <span style={{ position: 'absolute', right: 13, top: '50%', transform: 'translateY(-50%)',
+              color: T.muted, fontSize: 11, pointerEvents: 'none' }}>▼</span>
+          </div>
           {!LEVEL_PRESETS.includes(level) && (
             <input value={level} onChange={e => setLevel(e.target.value)} autoFocus
               placeholder="e.g. IB Diploma, Year 12 Physics, first-year uni"
@@ -1285,7 +1291,7 @@ function DeckEditor({ deck, progress, onBack, onEditCard, onDeleteCard, onDelete
 }
 
 /* only substitute for null/undefined — `|| ''` would blank a legitimate 0 */
-const val = (v) => (v === null || v === undefined) ? '' : v;
+const fieldVal = (v) => (v === null || v === undefined) ? '' : v;
 
 function CardEditRow({ card, onSave, onCancel }){
   const [f, setF] = useState(() => card.type === 'mcq'
@@ -1296,8 +1302,8 @@ function CardEditRow({ card, onSave, onCancel }){
   const field = (k, label, area) => (
     <div style={{ marginBottom: 8 }}>
       <Label style={{ color: T.faint }}>{label}</Label>
-      {area ? <textarea value={val(f[k])} onChange={e => setF({ ...f, [k]: e.target.value })} rows={2} style={inp} />
-            : <input value={val(f[k])} onChange={e => setF({ ...f, [k]: e.target.value })} style={inp} />}
+      {area ? <textarea value={fieldVal(f[k])} onChange={e => setF({ ...f, [k]: e.target.value })} rows={2} style={inp} />
+            : <input value={fieldVal(f[k])} onChange={e => setF({ ...f, [k]: e.target.value })} style={inp} />}
     </div>
   );
 
@@ -1411,53 +1417,58 @@ function Stat({ n, k, red }){
 /* ==========================================================================
    SETTINGS
    ========================================================================== */
+function Toggle({ on, onClick }){
+  return (
+    <button className="sf-tap" onClick={onClick}
+      style={{ width: 48, height: 28, borderRadius: 14, border: `1px solid ${T.rule}`,
+        background: on ? T.bone : T.raised, position: 'relative', cursor: 'pointer', flexShrink: 0 }}>
+      <span style={{ position: 'absolute', top: 3, left: on ? 23 : 3, width: 20, height: 20,
+        borderRadius: 10, background: on ? T.ink : T.faint, transition: 'left 150ms' }} />
+    </button>
+  );
+}
+
+function SettingRow({ title, note, children }){
+  return (
+    <div className="flex items-center justify-between" style={{ marginBottom: 16, padding: 14,
+      background: T.paper, border: `1px solid ${T.rule}`, borderRadius: 12 }}>
+      <div style={{ paddingRight: 12 }}>
+        <div style={{ fontFamily: SANS, fontSize: 15, color: T.bone }}>{title}</div>
+        <Label style={{ color: T.faint }}>{note}</Label>
+      </div>
+      {children}
+    </div>
+  );
+}
+
 function Settings({ settings, onChange }){
+  const set = (patch) => onChange({ ...settings, ...patch });
   return (
     <div style={{ padding: '4px 2px' }}>
       <Label style={{ color: T.faint }}>Settings</Label>
-      <div className="flex items-center justify-between" style={{ margin: '16px 0', padding: 14, background: T.paper, border: `1px solid ${T.rule}`, borderRadius: 12 }}>
-        <div>
-          <div style={{ fontFamily: SANS, fontSize: 15, color: T.bone }}>Interleave subjects</div>
-          <Label style={{ color: T.faint }}>Round-robin so no topic blocks together</Label>
-        </div>
-        <button className="sf-tap" onClick={() => onChange({ ...settings, interleave: !settings.interleave })}
-          style={{ width: 48, height: 28, borderRadius: 14, border: `1px solid ${T.rule}`,
-            background: settings.interleave ? T.bone : T.raised, position: 'relative', cursor: 'pointer', flexShrink: 0 }}>
-          <span style={{ position: 'absolute', top: 3, left: settings.interleave ? 23 : 3, width: 20, height: 20,
-            borderRadius: 10, background: settings.interleave ? T.ink : T.faint, transition: 'left 150ms' }} />
-        </button>
-      </div>
-      <div className="flex items-center justify-between" style={{ marginBottom: 16, padding: 14, background: T.paper, border: `1px solid ${T.rule}`, borderRadius: 12 }}>
-        <div style={{ paddingRight: 12 }}>
-          <div style={{ fontFamily: SANS, fontSize: 15, color: T.bone }}>Save usage</div>
-          <Label style={{ color: T.faint }}>Faster, cheaper model for everything. Long answers get weaker.</Label>
-        </div>
-        <button className="sf-tap" onClick={() => onChange({ ...settings, saveUsage: !settings.saveUsage })}
-          style={{ width: 48, height: 28, borderRadius: 14, border: `1px solid ${T.rule}`,
-            background: settings.saveUsage ? T.bone : T.raised, position: 'relative', cursor: 'pointer', flexShrink: 0 }}>
-          <span style={{ position: 'absolute', top: 3, left: settings.saveUsage ? 23 : 3, width: 20, height: 20,
-            borderRadius: 10, background: settings.saveUsage ? T.ink : T.faint, transition: 'left 150ms' }} />
-        </button>
-      </div>
+      <div style={{ height: 16 }} />
+
+      <SettingRow title="Interleave subjects" note="Round-robin so no topic blocks together">
+        <Toggle on={settings.interleave} onClick={() => set({ interleave: !settings.interleave })} />
+      </SettingRow>
+
+      <SettingRow title="Save usage" note="Faster, cheaper model for everything. Long answers get weaker.">
+        <Toggle on={settings.saveUsage} onClick={() => set({ saveUsage: !settings.saveUsage })} />
+      </SettingRow>
 
       <div style={{ padding: 14, background: T.paper, border: `1px solid ${T.rule}`, borderRadius: 12 }}>
         <div className="flex items-center justify-between">
-          <div>
+          <div style={{ paddingRight: 12 }}>
             <div style={{ fontFamily: SANS, fontSize: 15, color: T.bone }}>Limit new cards per day</div>
             <Label style={{ color: T.faint }}>Off means every new card is available straight away</Label>
           </div>
-          <button className="sf-tap" onClick={() => onChange({ ...settings, capNew: !settings.capNew })}
-            style={{ width: 48, height: 28, borderRadius: 14, border: `1px solid ${T.rule}`,
-              background: settings.capNew ? T.bone : T.raised, position: 'relative', cursor: 'pointer', flexShrink: 0 }}>
-            <span style={{ position: 'absolute', top: 3, left: settings.capNew ? 23 : 3, width: 20, height: 20,
-              borderRadius: 10, background: settings.capNew ? T.ink : T.faint, transition: 'left 150ms' }} />
-          </button>
+          <Toggle on={settings.capNew} onClick={() => set({ capNew: !settings.capNew })} />
         </div>
         {settings.capNew && (
           <div className="flex items-center gap-3" style={{ marginTop: 12 }}>
-            <Btn kind="ghost" onClick={() => onChange({ ...settings, newPerDay: Math.max(0, ((settings.newPerDay == null ? 12 : settings.newPerDay)) - 2) })}>−</Btn>
-            <div style={{ fontFamily: SERIF, fontSize: 24, color: T.bone, minWidth: 40, textAlign: 'center' }}>{(settings.newPerDay == null ? 12 : settings.newPerDay)}</div>
-            <Btn kind="ghost" onClick={() => onChange({ ...settings, newPerDay: ((settings.newPerDay == null ? 12 : settings.newPerDay)) + 2 })}>+</Btn>
+            <Btn kind="ghost" onClick={() => set({ newPerDay: Math.max(0, perDay(settings) - 2) })}>−</Btn>
+            <div style={{ fontFamily: SERIF, fontSize: 24, color: T.bone, minWidth: 40, textAlign: 'center' }}>{perDay(settings)}</div>
+            <Btn kind="ghost" onClick={() => set({ newPerDay: perDay(settings) + 2 })}>+</Btn>
           </div>
         )}
       </div>
@@ -1586,7 +1597,7 @@ function Shell({ children }){
       <style>{`
         @keyframes sf-in { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: none; } }
         * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
-        textarea, input { font-size: 16px; }
+        textarea, input, select { font-size: 16px; }  /* stops iOS zooming on tap */
         ::placeholder { color: ${T.faint}; }
         .sf-btn { transition: transform 120ms ease, background 150ms, border-color 150ms, opacity 150ms; }
         .sf-btn:active:not(:disabled) { transform: scale(0.97); }
