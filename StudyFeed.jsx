@@ -41,6 +41,9 @@ function subjectColour(name){
 
 const TYPE_LABEL = { flip: 'Flip', cloze: 'Cloze', short: 'Short answer', mcq: 'Multiple choice', extended: 'Extended' };
 
+/* Presets for the common case; "Something else…" keeps it curriculum-agnostic. */
+const LEVEL_PRESETS = ['NCEA Level 1', 'NCEA Level 2', 'NCEA Level 3'];
+
 /* ---- dates : YYYY-MM-DD so they compare lexically ------------------------ */
 const dayStr = (d = new Date()) => {
   const z = new Date(d.getTime() - d.getTimezoneOffset() * 60000);
@@ -70,7 +73,9 @@ async function save(key, value){
 
 /* capNew off by default: the feed is continuous, so nothing needs throttling */
 const DEFAULT_SETTINGS = { interleave: true, newPerDay: 12, capNew: false, saveUsage: false };
-const DEFAULT_STATS = { streak: 0, lastDay: '', newByDate: {}, reviewsByDate: {}, bySubject: {} };
+/* reviewsByDate counts scheduled revision only; extra practice is counted
+   separately so the headline number can't be padded by looping the pool. */
+const DEFAULT_STATS = { streak: 0, lastDay: '', newByDate: {}, reviewsByDate: {}, practiceByDate: {}, bySubject: {} };
 
 /* ---- SM-2 scheduler ------------------------------------------------------ */
 function freshProgress(){
@@ -273,34 +278,34 @@ ${source}`;
    one batch across both models sends the same notes twice, and the duplicated
    input cancels most of the saving. */
 const MODEL_SMART = 'claude-sonnet-4-6';
-const MODEL_CHEAP = 'claude-haiku-4-5';
+const MODEL_CHEAP = 'claude-haiku-4-5-20251001';   // dated ID — guaranteed to resolve
 
 function pickModel(mode, settings){
   if (settings && settings.saveUsage) return MODEL_CHEAP;   // user opted for cheap everywhere
   return mode === 'flip' ? MODEL_CHEAP : MODEL_SMART;       // flip-only is all short cards
 }
 
-async function callModel(prompt, maxTokens = 1000, model = MODEL_SMART){
-  const res = await fetch('https://api.anthropic.com/v1/messages', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json', 'anthropic-version': '2023-06-01' },
-    body: JSON.stringify({ model, max_tokens: maxTokens, messages: [{ role: 'user', content: prompt }] }),
-  });
-  if (!res.ok) throw new Error('api ' + res.status);
-  const data = await res.json();
-  return (data.content || []).filter(b => b.type === 'text').map(b => b.text).join('');
-}
-async function callModelMulti(prompt, images, maxTokens = 1000, model = MODEL_SMART){
-  const content = images.map(im => ({ type: 'image', source: { type: 'base64', media_type: im.media_type, data: im.data } }));
-  content.push({ type: 'text', text: prompt });
+/* Generation swallows per-batch failures so one bad batch can't sink the rest —
+   but a failure that hits EVERY batch (bad model id, no network, rate limit)
+   would otherwise surface as a blank "nothing came back". Record it. */
+let lastApiError = '';
+const noteApiError = (e) => { lastApiError = (e && e.message) ? String(e.message) : String(e); };
+
+async function postMessages(content, maxTokens, model){
   const res = await fetch('https://api.anthropic.com/v1/messages', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', 'anthropic-version': '2023-06-01' },
     body: JSON.stringify({ model, max_tokens: maxTokens, messages: [{ role: 'user', content }] }),
   });
-  if (!res.ok) throw new Error('api ' + res.status);
+  if (!res.ok) throw new Error('API returned ' + res.status + (res.status === 404 ? ' (unknown model)' : ''));
   const data = await res.json();
   return (data.content || []).filter(b => b.type === 'text').map(b => b.text).join('');
+}
+const callModel = (prompt, maxTokens = 1000, model = MODEL_SMART) => postMessages(prompt, maxTokens, model);
+function callModelMulti(prompt, images, maxTokens = 1000, model = MODEL_SMART){
+  const content = images.map(im => ({ type: 'image', source: { type: 'base64', media_type: im.media_type, data: im.data } }));
+  content.push({ type: 'text', text: prompt });
+  return postMessages(content, maxTokens, model);
 }
 
 /* pick the prompt + parse for a generation mode */
@@ -330,7 +335,8 @@ async function genText(source, mode, level, onProgress, model){
   for (let i = 0; i < batches.length; i++){
     onProgress && onProgress(i + 1, batches.length, 'text');
     let reply = '';
-    try { reply = await callModel(promptFor(mode, batches[i], level), 2000, model); } catch { continue; }
+    try { reply = await callModel(promptFor(mode, batches[i], level), 2000, model); }
+    catch (e){ noteApiError(e); continue; }
     cards = cards.concat(parseReply(mode, reply));
   }
   return cards;
@@ -343,7 +349,8 @@ async function genImages(images, mode, level, onProgress, model){
   for (let g = 0; g < groups.length; g++){
     onProgress && onProgress(g + 1, groups.length, 'images');
     let reply = '';
-    try { reply = await callModelMulti(promptFor(mode, note, level), groups[g], 2000, model); } catch { continue; }
+    try { reply = await callModelMulti(promptFor(mode, note, level), groups[g], 2000, model); }
+    catch (e){ noteApiError(e); continue; }
     cards = cards.concat(parseReply(mode, reply));
   }
   return cards;
@@ -531,7 +538,16 @@ function Margin({ colour }){
 /* ==========================================================================
    STUDY CARD  —  active recall + confidence + grade
    ========================================================================== */
-function StudyCard({ card, deck, onGrade, reduceMotion }){
+/* "in 4 days" is the only thing that makes Again/Hard/Good/Easy mean anything */
+function intervalWord(days){
+  const d = Math.max(1, Math.round(days));
+  if (d === 1) return 'tomorrow';
+  if (d < 30) return d + ' days';
+  const m = Math.round(d / 30);
+  return m === 1 ? 'a month' : m + ' months';
+}
+
+function StudyCard({ card, deck, onGrade, reduceMotion, prog, practice }){
   const [phase, setPhase] = useState('attempt');   // attempt | reveal
   const [sure, setSure] = useState(null);
   const [pick, setPick] = useState(null);
@@ -539,6 +555,18 @@ function StudyCard({ card, deck, onGrade, reduceMotion }){
   const isMcq = card.type === 'mcq';
 
   useEffect(() => { setPhase('attempt'); setSure(null); setPick(null); }, [card.id]);
+
+  // preview what each grade would do, so the buttons explain themselves
+  const previews = useMemo(() => {
+    if (practice) return null;                     // practice doesn't reschedule anything
+    const confident = isMcq ? (pick === card.answer) : (sure === true);
+    const forGrade = (q) => {
+      if (q === Q.AGAIN) return 'in a moment';
+      const r = schedule(prog, q, confident);
+      return intervalWord(r.next.interval);
+    };
+    return { 0: forGrade(Q.AGAIN), 3: forGrade(Q.HARD), 4: forGrade(Q.GOOD), 5: forGrade(Q.EASY) };
+  }, [prog, practice, sure, pick, isMcq, card.id, card.answer]);
 
   const grade = (q) => onGrade(q, isMcq ? (pick === card.answer) : (sure === true));
   const anim = reduceMotion ? {} : { animation: 'sf-in 200ms ease-out' };
@@ -567,7 +595,7 @@ function StudyCard({ card, deck, onGrade, reduceMotion }){
       <div style={{ marginTop: 18 }}>
         {isMcq ? (
           phase === 'reveal'
-            ? <GradeRow grade={grade} />
+            ? <GradeRow grade={grade} previews={previews} />
             : <Label style={{ display: 'block', textAlign: 'center', color: T.faint }}>Tap the answer you think is right</Label>
         ) : phase === 'attempt' && sure === null ? (
           <div>
@@ -584,22 +612,34 @@ function StudyCard({ card, deck, onGrade, reduceMotion }){
             {card.type === 'extended' ? 'Reveal model answers' : 'Reveal answer'}
           </Btn>
         ) : (
-          <GradeRow grade={grade} />
+          <GradeRow grade={grade} previews={previews} />
         )}
       </div>
     </div>
   );
 }
 
-function GradeRow({ grade }){
+function GradeRow({ grade, previews }){
+  const items = [
+    [Q.AGAIN, 'Again', 'got it wrong', 'again'],
+    [Q.HARD,  'Hard',  'only just',    'default'],
+    [Q.GOOD,  'Good',  'knew it',      'default'],
+    [Q.EASY,  'Easy',  'instantly',    'default'],
+  ];
   return (
     <div>
-      <Label style={{ display: 'block', textAlign: 'center', marginBottom: 10, color: T.faint }}>How did that go?</Label>
+      <Label style={{ display: 'block', textAlign: 'center', marginBottom: 10, color: T.faint }}>
+        {previews ? 'How well did you know it? — sets when it comes back' : 'How well did you know it?'}
+      </Label>
       <div className="grid grid-cols-4 gap-2">
-        <Btn kind="again" onClick={() => grade(Q.AGAIN)}>Again</Btn>
-        <Btn onClick={() => grade(Q.HARD)}>Hard</Btn>
-        <Btn onClick={() => grade(Q.GOOD)}>Good</Btn>
-        <Btn onClick={() => grade(Q.EASY)}>Easy</Btn>
+        {items.map(([q, label, meaning, kind]) => (
+          <Btn key={q} kind={kind} onClick={() => grade(q)} style={{ padding: '10px 4px', lineHeight: 1.25 }}>
+            <span style={{ display: 'block' }}>{label}</span>
+            <span style={{ display: 'block', fontSize: 9, letterSpacing: '0.04em', opacity: 0.65, marginTop: 3, textTransform: 'none' }}>
+              {previews ? previews[q] : meaning}
+            </span>
+          </Btn>
+        ))}
       </div>
     </div>
   );
@@ -891,7 +931,8 @@ function Feed({ decks, progress, settings, stats, onGrade, reduceMotion }){
           <Label style={{ color: T.faint }}>Extra practice · not scheduled</Label>
           {reviewed > 0 && <Label style={{ color: T.faint }}>{reviewed} today</Label>}
         </div>
-        <StudyCard key={it.card.id + ':' + pIdx} card={it.card} deck={it.deck} onGrade={gradePractice} reduceMotion={reduceMotion} />
+        <StudyCard key={it.card.id + ':' + pIdx} card={it.card} deck={it.deck} onGrade={gradePractice}
+          reduceMotion={reduceMotion} prog={progress[it.card.id]} practice={true} />
       </div>
     );
   }
@@ -903,7 +944,8 @@ function Feed({ decks, progress, settings, stats, onGrade, reduceMotion }){
         <div style={{ height: '100%', width: `${done + scheduledLeft ? (done / (done + scheduledLeft)) * 100 : 0}%`,
           background: T.bone, transition: reduceMotion ? 'none' : 'width 250ms ease' }} />
       </div>
-      <StudyCard key={queue[0].card.id} card={queue[0].card} deck={queue[0].deck} onGrade={gradeScheduled} reduceMotion={reduceMotion} />
+      <StudyCard key={queue[0].card.id} card={queue[0].card} deck={queue[0].deck} onGrade={gradeScheduled}
+        reduceMotion={reduceMotion} prog={progress[queue[0].card.id]} practice={false} />
     </div>
   );
 }
@@ -947,30 +989,37 @@ function Create({ onSave, settings }){
   };
 
   const run = async () => {
+    const lvl = level.trim() || 'NCEA Level 1';   // "Something else…" left blank
     if (mode === 'manual'){
       const cards = parseManual(source);
       if (!cards.length){ setErr('Use “question | answer”, one per line.'); return; }
-      setMeta({ subject: guessSubject(source), topic: guessTopic(source), standard: level });
+      setMeta({ subject: guessSubject(source), topic: guessTopic(source), standard: lvl });
       setDrafts(cards.map(c => ({ ...c, keep: true })));
       return;
     }
     if (!source.trim() && !images.length){ setErr('Paste notes, type a topic, or attach a file or photo first.'); return; }
 
     setBusy(true); setErr(''); setProg(null);
+    lastApiError = '';
     try {
       const model = pickModel(cardType, settings);
       let cards = [];
-      if (source.trim()) cards = cards.concat(await genText(source, cardType, level, (i, n, phase) => setProg({ i, n, phase }), model));
+      if (source.trim()) cards = cards.concat(await genText(source, cardType, lvl, (i, n, phase) => setProg({ i, n, phase }), model));
       if (images.length){
         setProg({ i: 0, n: 0, phase: 'prep' });
         const shrunk = [];
         for (const b of images.slice(0, 12)){ try { shrunk.push(await resizeImage(b)); } catch {} }
-        if (shrunk.length) cards = cards.concat(await genImages(shrunk, cardType, level, (i, n, phase) => setProg({ i, n, phase }), model));
+        if (shrunk.length) cards = cards.concat(await genImages(shrunk, cardType, lvl, (i, n, phase) => setProg({ i, n, phase }), model));
         else if (!cards.length){ setErr('Could not read those images. Try a clearer photo.'); setBusy(false); setProg(null); return; }
       }
       cards = dedupeCards(cards);
-      if (!cards.length){ setErr('Nothing came back. Try clearer notes, a narrower topic, or a sharper photo.'); setBusy(false); return; }
-      setMeta({ subject: guessSubject(source), topic: guessTopic(source), standard: level });
+      if (!cards.length){
+        setErr(lastApiError
+          ? `Nothing came back — ${lastApiError}.`
+          : 'Nothing came back. Try clearer notes, a narrower topic, or a sharper photo.');
+        setBusy(false); return;
+      }
+      setMeta({ subject: guessSubject(source), topic: guessTopic(source), standard: lvl });
       setDrafts(cards.map(c => ({ ...c, keep: true })));
     } catch { setErr('Generation failed. Check your connection and try again.'); }
     finally { setBusy(false); setProg(null); }
@@ -1028,11 +1077,25 @@ function Create({ onSave, settings }){
           padding: 14, fontFamily: mode === 'manual' ? MONO : SANS, fontSize: 15, lineHeight: 1.5, resize: 'vertical', outline: 'none' }} />
 
       {mode === 'generate' && (
-        <div style={{ marginTop: 10 }}>
-          <Label style={{ color: T.faint }}>Level</Label>
-          <input value={level} onChange={e => setLevel(e.target.value)}
-            style={{ width: '100%', marginTop: 4, background: T.paper, color: T.bone, border: `1px solid ${T.rule}`,
-              borderRadius: 10, padding: '10px 12px', fontFamily: MONO, fontSize: 13, outline: 'none' }} />
+        <div style={{ marginTop: 12 }}>
+          <Label style={{ color: T.faint }}>Pitch the questions at</Label>
+          <Label style={{ color: T.faint, display: 'block', marginTop: 3, textTransform: 'none', letterSpacing: 0, fontFamily: SANS, fontSize: 12 }}>
+            Sets how hard the questions are and what the marking expects.
+          </Label>
+          <select value={LEVEL_PRESETS.includes(level) ? level : '__other'}
+            onChange={e => setLevel(e.target.value === '__other' ? '' : e.target.value)}
+            style={{ width: '100%', marginTop: 6, background: T.paper, color: T.bone, border: `1px solid ${T.rule}`,
+              borderRadius: 10, padding: '11px 12px', fontFamily: MONO, fontSize: 13, outline: 'none',
+              appearance: 'none', WebkitAppearance: 'none' }}>
+            {LEVEL_PRESETS.map(p => <option key={p} value={p} style={{ background: T.paper }}>{p}</option>)}
+            <option value="__other" style={{ background: T.paper }}>Something else…</option>
+          </select>
+          {!LEVEL_PRESETS.includes(level) && (
+            <input value={level} onChange={e => setLevel(e.target.value)} autoFocus
+              placeholder="e.g. IB Diploma, Year 12 Physics, first-year uni"
+              style={{ width: '100%', marginTop: 6, background: T.paper, color: T.bone, border: `1px solid ${T.rule}`,
+                borderRadius: 10, padding: '10px 12px', fontFamily: SANS, fontSize: 14, outline: 'none' }} />
+          )}
         </div>
       )}
 
@@ -1289,6 +1352,7 @@ function Stats({ decks, progress, stats }){
   }, [decks, progress]);
   const totalCards = decks.reduce((s, d) => s + d.cards.length, 0);
   const reviewedToday = (stats.reviewsByDate && stats.reviewsByDate[today]) || 0;
+  const practiceToday = (stats.practiceByDate && stats.practiceByDate[today]) || 0;
 
   const subjects = {};
   for (const d of decks){
@@ -1304,11 +1368,14 @@ function Stats({ decks, progress, stats }){
   return (
     <div style={{ padding: '4px 2px' }}>
       <Label style={{ color: T.faint }}>Today</Label>
-      <div className="grid grid-cols-3 gap-2" style={{ margin: '10px 0 20px' }}>
+      <div className="grid grid-cols-3 gap-2" style={{ margin: '10px 0 8px' }}>
         <Stat n={stats.streak || 0} k="day streak" />
         <Stat n={reviewedToday} k="reviewed" />
         <Stat n={dueTotal} k="due now" red={dueTotal > 0} />
       </div>
+      <Label style={{ color: T.faint, display: 'block', marginBottom: 20 }}>
+        {practiceToday > 0 ? `plus ${practiceToday} extra practice (not scheduled)` : 'reviewed counts scheduled revision only'}
+      </Label>
 
       <Label style={{ color: T.faint }}>Mastery by subject</Label>
       <div className="flex flex-col gap-3" style={{ marginTop: 10 }}>
@@ -1459,8 +1526,10 @@ export default function App(){
       persistProgress({ ...progress, [card.id]: r.next });
     }
 
-    const s = { ...stats, newByDate: { ...stats.newByDate }, reviewsByDate: { ...stats.reviewsByDate }, bySubject: { ...stats.bySubject } };
-    s.reviewsByDate[today] = (s.reviewsByDate[today] || 0) + 1;
+    const s = { ...stats, newByDate: { ...stats.newByDate }, reviewsByDate: { ...stats.reviewsByDate },
+      practiceByDate: { ...stats.practiceByDate }, bySubject: { ...stats.bySubject } };
+    if (practice) s.practiceByDate[today] = (s.practiceByDate[today] || 0) + 1;
+    else s.reviewsByDate[today] = (s.reviewsByDate[today] || 0) + 1;
     if (wasNew) s.newByDate[today] = (s.newByDate[today] || 0) + 1;
     s.bySubject[deck.subject] = (s.bySubject[deck.subject] || 0) + 1;
     if (s.lastDay !== today){
