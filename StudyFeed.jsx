@@ -175,6 +175,21 @@ function parseJsonArray(text){
   return rescueObjects(text);
 }
 
+/* pool cards from several sources and drop duplicates by question text */
+function dedupeCards(cards){
+  const seen = new Set();
+  const out = [];
+  for (const c of cards){
+    const key = c.type === 'extended'
+      ? 'e:' + String(c.prompt || '').toLowerCase().slice(0, 80)
+      : 'f:' + String(c.front || '').toLowerCase();
+    if (seen.has(key)) continue;
+    seen.add(key);
+    out.push(c);
+  }
+  return out;
+}
+
 /* split long notes at paragraph breaks into ~6000-char batches */
 function batchText(text, size = 6000){
   const paras = text.split(/\n\s*\n/);
@@ -247,6 +262,22 @@ async function callModel(prompt){
   return (data.content || []).filter(b => b.type === 'text').map(b => b.text).join('');
 }
 
+/* same call, but with images (base64 JPEG) in front of the prompt */
+async function callModelMulti(prompt, images){
+  const content = images.map(im => ({
+    type: 'image', source: { type: 'base64', media_type: im.media_type, data: im.data },
+  }));
+  content.push({ type: 'text', text: prompt });
+  const res = await fetch('https://api.anthropic.com/v1/messages', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'anthropic-version': '2023-06-01' },
+    body: JSON.stringify({ model: 'claude-sonnet-4-6', max_tokens: 1000, messages: [{ role: 'user', content }] }),
+  });
+  if (!res.ok) throw new Error('api ' + res.status);
+  const data = await res.json();
+  return (data.content || []).filter(b => b.type === 'text').map(b => b.text).join('');
+}
+
 /* generate flip cards from a text source (may be batched) */
 async function genFlip(source, level, onProgress){
   const batches = batchText(source);
@@ -304,6 +335,41 @@ async function genExtended(source, level, onProgress){
   return cards;
 }
 
+/* generate cards from images (photos / diagrams), in small groups per call */
+async function genFromImages(images, cardType, level, onProgress){
+  const groups = [];
+  for (let i = 0; i < images.length; i += 6) groups.push(images.slice(i, i + 6));
+  const note = 'Base the cards ONLY on the attached image(s). Read all text, labels, diagrams, formulae and handwriting in them.';
+  const cards = [];
+  for (let g = 0; g < groups.length; g++){
+    onProgress && onProgress(g + 1, groups.length);
+    let reply = '';
+    try {
+      reply = await callModelMulti(cardType === 'extended' ? extendedPrompt(note, level) : flipPrompt(note, level), groups[g]);
+    } catch { continue; }
+    if (cardType === 'extended'){
+      for (const o of parseJsonArray(reply)){
+        if (!o || !o.prompt || !o.achieved) continue;
+        cards.push({ id: uid(), type: 'extended',
+          verb: COMMAND_VERBS.includes(o.verb) ? o.verb : (o.verb || 'Explain'),
+          prompt: String(o.prompt), marks: Number(o.marks) || 4,
+          achieved: String(o.achieved || ''), merit: String(o.merit || ''),
+          excellence: String(o.excellence || ''), skeleton: String(o.skeleton || ''),
+          pitfall: String(o.pitfall || '') });
+      }
+    } else {
+      for (const line of reply.split('\n')){
+        const idx = line.indexOf('|');
+        if (idx < 0) continue;
+        const front = line.slice(0, idx).trim().replace(/^\d+[.)]\s*/, '');
+        const back = line.slice(idx + 1).trim();
+        if (front && back) cards.push({ id: uid(), type: 'flip', front, back });
+      }
+    }
+  }
+  return cards;
+}
+
 /* mark a typed answer against the A/M/E ladder for one extended card */
 function markPrompt(card, answer, level){
   return `You are a ${level} examiner marking one extended-response answer.
@@ -352,15 +418,29 @@ function parseManual(text){
 }
 
 /* ==========================================================================
-   FILE EXTRACTION  —  .docx / .pptx / .txt read in the browser
-   .docx and .pptx are ZIP archives; the typed text lives in XML inside them.
-   We extract ONLY the text here, so a 60MB deck sends as a few KB and the
-   ~32MB API request cap never comes near. (Images inside the files are not
-   read yet — that's the multimodal follow-up.)
+   FILE EXTRACTION  —  photos, .docx / .pptx / .txt, read in the browser
+   .docx and .pptx are ZIP archives; typed text lives in XML, pictures in a
+   /media/ folder. We pull text AND images out here. Text sends as a few KB;
+   images are shrunk to <=1500px JPEG so a big photo becomes a few hundred KB
+   and the ~32MB API cap never comes near.
    ========================================================================== */
 async function loadJSZip(){
   const mod = await import('jszip');           // available in the artifact bundler
   return mod.default || mod;
+}
+
+/* shrink a photo/blob to a small base64 JPEG the model can read cheaply */
+async function resizeImage(blob, maxPx = 1500, quality = 0.82){
+  const bmp = await createImageBitmap(blob);
+  const scale = Math.min(1, maxPx / Math.max(bmp.width, bmp.height));
+  const w = Math.max(1, Math.round(bmp.width * scale));
+  const h = Math.max(1, Math.round(bmp.height * scale));
+  const canvas = document.createElement('canvas');
+  canvas.width = w; canvas.height = h;
+  canvas.getContext('2d').drawImage(bmp, 0, 0, w, h);
+  if (bmp.close) bmp.close();
+  const url = canvas.toDataURL('image/jpeg', quality);
+  return { media_type: 'image/jpeg', data: url.split(',')[1] };
 }
 function stripXml(xml){
   return xml
@@ -371,28 +451,38 @@ function stripXml(xml){
     .replace(/&quot;/g, '"').replace(/&#3?9;/g, "'")
     .replace(/[ \t]+\n/g, '\n').replace(/\n{3,}/g, '\n\n');
 }
+/* returns { text, images } — images are raw blobs, shrunk later before sending */
 async function extractFile(file){
   const name = (file.name || '').toLowerCase();
-  if (name.endsWith('.txt') || file.type === 'text/plain') return (await file.text()).trim();
+  const type = file.type || '';
+  if (type.startsWith('image/')) return { text: '', images: [file] };
+  if (name.endsWith('.txt') || type === 'text/plain') return { text: (await file.text()).trim(), images: [] };
 
   const JSZip = await loadJSZip();
   const zip = await JSZip.loadAsync(file);
 
+  // pictures embedded in the document's /media/ folder
+  const images = [];
+  const media = Object.keys(zip.files).filter(n => /\/media\/[^/]+\.(png|jpe?g|gif|bmp|webp)$/i.test(n));
+  for (const n of media){ try { images.push(await zip.file(n).async('blob')); } catch {} }
+
   if (name.endsWith('.docx')){
     const doc = zip.file('word/document.xml');
-    if (!doc) throw new Error('This .docx has no readable text.');
-    return stripXml(await doc.async('string')).trim();
+    const text = doc ? stripXml(await doc.async('string')).trim() : '';
+    if (!text && !images.length) throw new Error('This .docx had no readable text or images.');
+    return { text, images };
   }
   if (name.endsWith('.pptx')){
     const slides = Object.keys(zip.files)
       .filter(n => /^ppt\/slides\/slide\d+\.xml$/.test(n))
       .sort((a, b) => parseInt(a.match(/(\d+)/)[1]) - parseInt(b.match(/(\d+)/)[1]));
-    if (!slides.length) throw new Error('This .pptx has no readable slides.');
     const parts = [];
     for (const n of slides) parts.push(stripXml(await zip.file(n).async('string')).trim());
-    return parts.filter(Boolean).join('\n\n');
+    const text = parts.filter(Boolean).join('\n\n');
+    if (!text && !images.length) throw new Error('This .pptx had no readable content.');
+    return { text, images };
   }
-  throw new Error('Use a .docx, .pptx or .txt file.');
+  throw new Error('Use a photo, .docx, .pptx or .txt file.');
 }
 
 /* ==========================================================================
@@ -762,48 +852,63 @@ function Create({ onSave, reduceMotion }){
   const [drafts, setDrafts] = useState(null);       // draft cards awaiting review
   const [meta, setMeta] = useState({ subject: '', topic: '', standard: 'NCEA Level 1' });
   const [attaching, setAttaching] = useState('');
+  const [images, setImages] = useState([]);         // raw blobs, shrunk at generate time
   const fileRef = useRef(null);
 
-  // pull text out of attached files and append it to the source box
+  // pull text + pictures out of attached files
   const onFiles = async (e) => {
     const files = Array.from(e.target.files || []);
     if (e.target) e.target.value = '';        // let the same file be re-picked later
     if (!files.length) return;
     setErr('');
     let added = '';
+    const gotImages = [];
     for (const f of files){
       setAttaching(`Reading ${f.name}…`);
       try {
-        const text = await extractFile(f);
+        const { text, images: imgs } = await extractFile(f);
         if (text) added += (added ? '\n\n' : '') + `# ${f.name}\n${text}`;
-        else setErr(`No text found in ${f.name}.`);
+        if (imgs && imgs.length) gotImages.push(...imgs);
+        if (!text && (!imgs || !imgs.length)) setErr(`Nothing readable in ${f.name}.`);
       } catch (er){ setErr(er.message || `Could not read ${f.name}.`); }
     }
     setAttaching('');
     if (added) setSource(s => s ? s + '\n\n' + added : added);
+    if (gotImages.length) setImages(prev => [...prev, ...gotImages]);
   };
 
   const run = async () => {
-    if (!source.trim()){ setErr('Paste some notes or type a topic first.'); return; }
+    // manual is synchronous — parse and go straight to review
+    if (mode === 'manual'){
+      const cards = parseManual(source);
+      if (!cards.length){ setErr('Use “question | answer”, one per line.'); return; }
+      setMeta({ subject: guessSubject(source), topic: guessTopic(source), standard: level });
+      setDrafts(cards.map(c => ({ ...c, keep: true })));
+      return;
+    }
+    if (!source.trim() && !images.length){ setErr('Paste notes, type a topic, or attach a file or photo first.'); return; }
+
     setBusy(true); setErr(''); setProg(null);
     try {
-      let cards;
-      if (mode === 'manual'){
-        cards = parseManual(source);
-        if (!cards.length){ setErr('Use “question | answer”, one per line.'); setBusy(false); return; }
-      } else if (cardType === 'extended'){
-        cards = await genExtended(source, level, (i, n) => setProg({ i, n }));
-      } else {
-        cards = await genFlip(source, level, (i, n) => setProg({ i, n }));
+      let cards = [];
+      if (source.trim()){
+        cards = cards.concat(cardType === 'extended'
+          ? await genExtended(source, level, (i, n) => setProg({ i, n, phase: 'text' }))
+          : await genFlip(source, level, (i, n) => setProg({ i, n, phase: 'text' })));
       }
-      if (!cards.length){ setErr('Nothing came back. Try clearer notes, or a narrower topic.'); setBusy(false); return; }
-      // infer subject/topic from first extended card if present
-      const first = cards.find(c => c.type === 'extended');
-      setMeta({
-        subject: (first && first.subjectGuess) || guessSubject(source),
-        topic: guessTopic(source),
-        standard: level,
-      });
+      if (images.length){
+        setProg({ i: 0, n: 0, phase: 'prep' });
+        const shrunk = [];
+        for (const b of images.slice(0, 12)){ try { shrunk.push(await resizeImage(b)); } catch {} }
+        if (shrunk.length){
+          cards = cards.concat(await genFromImages(shrunk, cardType, level, (i, n) => setProg({ i, n, phase: 'images' })));
+        } else if (!cards.length){
+          setErr('Could not read those images. Try a clearer photo.'); setBusy(false); setProg(null); return;
+        }
+      }
+      cards = dedupeCards(cards);
+      if (!cards.length){ setErr('Nothing came back. Try clearer notes, a narrower topic, or a sharper photo.'); setBusy(false); return; }
+      setMeta({ subject: guessSubject(source), topic: guessTopic(source), standard: level });
       setDrafts(cards.map(c => ({ ...c, keep: true })));
     } catch (e){
       setErr('Generation failed. Check your connection and try again.');
@@ -836,16 +941,25 @@ function Create({ onSave, reduceMotion }){
 
       {mode === 'generate' && (
         <div style={{ marginBottom: 12 }}>
-          <input ref={fileRef} type="file" accept=".docx,.pptx,.txt" multiple
+          <input ref={fileRef} type="file" accept="image/*,.docx,.pptx,.txt" multiple
             onChange={onFiles} style={{ display: 'none' }} />
           <Btn full kind="ghost" onClick={() => fileRef.current && fileRef.current.click()}>
-            Attach Word / PowerPoint / text
+            Attach photo / Word / PowerPoint
           </Btn>
-          {attaching
-            ? <Label style={{ color: T.muted, display: 'block', marginTop: 8 }}>{attaching}</Label>
-            : <Label style={{ color: T.faint, display: 'block', marginTop: 8 }}>
-                Reads the typed text from the file — any size. Pictures inside aren’t read yet.
-              </Label>}
+          {attaching && <Label style={{ color: T.muted, display: 'block', marginTop: 8 }}>{attaching}</Label>}
+          {!attaching && images.length > 0 && (
+            <div className="flex items-center justify-between" style={{ marginTop: 8 }}>
+              <Label style={{ color: T.muted }}>{images.length} image{images.length > 1 ? 's' : ''} attached{images.length > 12 ? ' (first 12 used)' : ''}</Label>
+              <button onClick={() => setImages([])} style={{ background: 'none', border: 'none', cursor: 'pointer', padding: 0 }}>
+                <Label style={{ color: T.red }}>Clear</Label>
+              </button>
+            </div>
+          )}
+          {!attaching && images.length === 0 && (
+            <Label style={{ color: T.faint, display: 'block', marginTop: 8 }}>
+              Photos, or the text and pictures inside a file — any size.
+            </Label>
+          )}
         </div>
       )}
 
@@ -869,9 +983,14 @@ function Create({ onSave, reduceMotion }){
       )}
 
       {err && <div style={{ marginTop: 12, fontFamily: MONO, fontSize: 12, color: T.red }}>{err}</div>}
-      {busy && prog && (
+      {busy && (
         <div style={{ marginTop: 12 }}>
-          <Label style={{ color: T.muted }}>Batch {prog.i} of {prog.n}</Label>
+          <Label style={{ color: T.muted }}>
+            {!prog ? 'Working…'
+              : prog.phase === 'prep' ? 'Preparing images…'
+              : prog.n > 0 ? `${prog.phase === 'images' ? 'Reading images' : 'Reading notes'} · batch ${prog.i} of ${prog.n}`
+              : 'Working…'}
+          </Label>
         </div>
       )}
 

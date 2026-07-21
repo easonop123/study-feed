@@ -30,6 +30,6 @@ Card shapes:
 
 - **Built:** SM-2 scheduler, flip cards, generation (notes/topic/manual, batched), draft review, deck editor, ends-deliberately feed, stats, settings.
 - **Phase 2:** extended-response cards end to end — command verb, A/M/E ladder, structural skeleton, per-question pitfall, and a "mark my written answer" mode graded against the ladder.
-- **Word / PowerPoint upload:** `.docx` / `.pptx` / `.txt` are unzipped and text-extracted in the browser, so only the text is sent — no file-size ceiling. Images *inside* those files aren't read yet (multimodal follow-up).
-- **Runtime shims:** storage read/write unwrap `{value}` + JSON round-trip; model calls POST the messages API (`claude-sonnet-4-6`); feed queue rebuilds on card-count change.
-- **Not in this file yet:** photo/PDF (multimodal) generation, reading images inside Word/PPT, worked-problem cards, remaining Phase 2b question types.
+- **Upload:** photos (`image/*`), `.docx`, `.pptx`, `.txt`. Office files are unzipped in the browser — typed text pulled from the XML, pictures pulled from `/media/`. Photos and embedded pictures are shrunk to ≤1500px JPEG and sent as image blocks; text sends as text. Only extracted content is sent, so no file-size ceiling. Up to 12 images per generate.
+- **Runtime shims:** storage read/write unwrap `{value}` + JSON round-trip; model calls POST the messages API (`claude-sonnet-4-6`), with a multimodal variant for images; feed queue rebuilds on card-count change.
+- **Not in this file yet:** PDF input, worked-problem cards, remaining Phase 2b question types.
