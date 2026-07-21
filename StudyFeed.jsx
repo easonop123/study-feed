@@ -54,12 +54,20 @@ const addDays = (base, n) => {
 const TODAY = () => dayStr();
 
 /* ---- storage : every read falls back, every write is guarded ------------- */
+/* The artifact runtime's storage.get() returns { key, value, shared } (or the
+   raw value on some builds) and set() takes a STRING. So we JSON-stringify on
+   write and unwrap + parse on read. A missing key throws -> every read falls back. */
 async function load(key, fallback){
-  try { const v = await window.storage.get(key); return (v === undefined || v === null) ? fallback : v; }
-  catch { return fallback; }
+  try {
+    const r = await window.storage.get(key);
+    if (r === undefined || r === null) return fallback;
+    const val = (r && typeof r === 'object' && 'value' in r) ? r.value : r;
+    if (val === undefined || val === null) return fallback;
+    return typeof val === 'string' ? JSON.parse(val) : val;
+  } catch { return fallback; }
 }
 async function save(key, value){
-  try { await window.storage.set(key, value); return true; }
+  try { await window.storage.set(key, JSON.stringify(value)); return true; }
   catch (e){ console.error('storage.set failed', key, e); return false; }
 }
 
@@ -222,9 +230,21 @@ ${source}`;
 }
 
 async function callModel(prompt){
-  // window.claude.complete returns a Promise<string> inside a claude.ai artifact.
-  const r = await window.claude.complete(prompt);
-  return typeof r === 'string' ? r : String(r ?? '');
+  // window.claude.complete isn't available in the artifact runtime; POST the
+  // messages API directly (no key needed inside the artifact). max_tokens 1000
+  // per spec — batching + rescueObjects cover any truncation.
+  const res = await fetch('https://api.anthropic.com/v1/messages', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'anthropic-version': '2023-06-01' },
+    body: JSON.stringify({
+      model: 'claude-sonnet-4-6',
+      max_tokens: 1000,
+      messages: [{ role: 'user', content: prompt }],
+    }),
+  });
+  if (!res.ok) throw new Error('api ' + res.status);
+  const data = await res.json();
+  return (data.content || []).filter(b => b.type === 'text').map(b => b.text).join('');
 }
 
 /* generate flip cards from a text source (may be batched) */
@@ -329,6 +349,50 @@ function parseManual(text){
     cards.push({ id: uid(), type: 'flip', front, back });
   }
   return cards;
+}
+
+/* ==========================================================================
+   FILE EXTRACTION  —  .docx / .pptx / .txt read in the browser
+   .docx and .pptx are ZIP archives; the typed text lives in XML inside them.
+   We extract ONLY the text here, so a 60MB deck sends as a few KB and the
+   ~32MB API request cap never comes near. (Images inside the files are not
+   read yet — that's the multimodal follow-up.)
+   ========================================================================== */
+async function loadJSZip(){
+  const mod = await import('jszip');           // available in the artifact bundler
+  return mod.default || mod;
+}
+function stripXml(xml){
+  return xml
+    .replace(/<\/w:p>/g, '\n').replace(/<\/a:p>/g, '\n')   // paragraph breaks
+    .replace(/<w:br\s*\/?>/g, '\n').replace(/<a:br\s*\/?>/g, '\n')
+    .replace(/<[^>]+>/g, '')                               // drop every tag
+    .replace(/&amp;/g, '&').replace(/&lt;/g, '<').replace(/&gt;/g, '>')
+    .replace(/&quot;/g, '"').replace(/&#3?9;/g, "'")
+    .replace(/[ \t]+\n/g, '\n').replace(/\n{3,}/g, '\n\n');
+}
+async function extractFile(file){
+  const name = (file.name || '').toLowerCase();
+  if (name.endsWith('.txt') || file.type === 'text/plain') return (await file.text()).trim();
+
+  const JSZip = await loadJSZip();
+  const zip = await JSZip.loadAsync(file);
+
+  if (name.endsWith('.docx')){
+    const doc = zip.file('word/document.xml');
+    if (!doc) throw new Error('This .docx has no readable text.');
+    return stripXml(await doc.async('string')).trim();
+  }
+  if (name.endsWith('.pptx')){
+    const slides = Object.keys(zip.files)
+      .filter(n => /^ppt\/slides\/slide\d+\.xml$/.test(n))
+      .sort((a, b) => parseInt(a.match(/(\d+)/)[1]) - parseInt(b.match(/(\d+)/)[1]));
+    if (!slides.length) throw new Error('This .pptx has no readable slides.');
+    const parts = [];
+    for (const n of slides) parts.push(stripXml(await zip.file(n).async('string')).trim());
+    return parts.filter(Boolean).join('\n\n');
+  }
+  throw new Error('Use a .docx, .pptx or .txt file.');
 }
 
 /* ==========================================================================
@@ -697,6 +761,27 @@ function Create({ onSave, reduceMotion }){
   const [err, setErr] = useState('');
   const [drafts, setDrafts] = useState(null);       // draft cards awaiting review
   const [meta, setMeta] = useState({ subject: '', topic: '', standard: 'NCEA Level 1' });
+  const [attaching, setAttaching] = useState('');
+  const fileRef = useRef(null);
+
+  // pull text out of attached files and append it to the source box
+  const onFiles = async (e) => {
+    const files = Array.from(e.target.files || []);
+    if (e.target) e.target.value = '';        // let the same file be re-picked later
+    if (!files.length) return;
+    setErr('');
+    let added = '';
+    for (const f of files){
+      setAttaching(`Reading ${f.name}…`);
+      try {
+        const text = await extractFile(f);
+        if (text) added += (added ? '\n\n' : '') + `# ${f.name}\n${text}`;
+        else setErr(`No text found in ${f.name}.`);
+      } catch (er){ setErr(er.message || `Could not read ${f.name}.`); }
+    }
+    setAttaching('');
+    if (added) setSource(s => s ? s + '\n\n' + added : added);
+  };
 
   const run = async () => {
     if (!source.trim()){ setErr('Paste some notes or type a topic first.'); return; }
@@ -746,6 +831,21 @@ function Create({ onSave, reduceMotion }){
             style={cardType === 'extended' ? { borderColor: T.bone } : {}}>Extended response</Btn>
           <Btn full kind={cardType === 'flip' ? 'default' : 'ghost'} onClick={() => setCardType('flip')}
             style={cardType === 'flip' ? { borderColor: T.bone } : {}}>Flip cards</Btn>
+        </div>
+      )}
+
+      {mode === 'generate' && (
+        <div style={{ marginBottom: 12 }}>
+          <input ref={fileRef} type="file" accept=".docx,.pptx,.txt" multiple
+            onChange={onFiles} style={{ display: 'none' }} />
+          <Btn full kind="ghost" onClick={() => fileRef.current && fileRef.current.click()}>
+            Attach Word / PowerPoint / text
+          </Btn>
+          {attaching
+            ? <Label style={{ color: T.muted, display: 'block', marginTop: 8 }}>{attaching}</Label>
+            : <Label style={{ color: T.faint, display: 'block', marginTop: 8 }}>
+                Reads the typed text from the file — any size. Pictures inside aren’t read yet.
+              </Label>}
         </div>
       )}
 
@@ -1208,7 +1308,8 @@ export default function App(){
   return (
     <Shell>
       <div style={{ minHeight: 440 }}>
-        {tab === 'feed' && <Feed decks={library.decks} progress={progress} settings={settings}
+        {tab === 'feed' && <Feed key={'feed-' + library.decks.reduce((s, d) => s + d.cards.length, 0)}
+          decks={library.decks} progress={progress} settings={settings}
           stats={stats} onGrade={gradeCard} reduceMotion={reduceMotion.current}
           onDone={() => {}} />}
         {tab === 'create' && <Create onSave={saveDeck} reduceMotion={reduceMotion.current} />}
