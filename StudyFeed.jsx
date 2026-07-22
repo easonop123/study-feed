@@ -116,10 +116,15 @@ function freshProgress(){
 }
 const Q = { AGAIN: 0, HARD: 3, GOOD: 4, EASY: 5 };
 
-function schedule(prevRaw, q, confidentSure){
+/* `committedWrong` is only for multiple choice, where picking an option is a
+   real commitment. Everywhere else the "I thought I knew this" signal is
+   DERIVED: a card you'd built a real interval on, that you then blank, is
+   exactly overconfidence — no need to interrupt and ask. */
+function schedule(prevRaw, q, committedWrong){
   const p = { ...freshProgress(), ...prevRaw };
   p.seen = true;
   let reinsert = false;
+  const wasKnown = !!(prevRaw && prevRaw.seen && (prevRaw.reps >= 2 || prevRaw.interval >= 6));
 
   if (q === Q.AGAIN){
     p.reps = 0;
@@ -127,6 +132,7 @@ function schedule(prevRaw, q, confidentSure){
     p.lapses += 1;
     p.due = TODAY();
     reinsert = true;
+    if (wasKnown || committedWrong) p.flagged = true;   // you thought you had this
   } else {
     if (q === Q.HARD)      p.ease = Math.max(1.3, p.ease - 0.15);
     else if (q === Q.EASY) p.ease = p.ease + 0.15;
@@ -139,7 +145,7 @@ function schedule(prevRaw, q, confidentSure){
     else                   ivl = p.interval * p.ease;
     p.reps += 1;
 
-    if (confidentSure && q < Q.GOOD) p.flagged = true;
+    if (committedWrong && q < Q.GOOD) p.flagged = true;
     if (q >= Q.GOOD) p.flagged = false;
     if (p.flagged) ivl = ivl / 2;
 
@@ -658,25 +664,26 @@ function Icon({ name, active }){
    ========================================================================== */
 function StudyCard({ card, deck, onGrade, reduceMotion, prog, practice }){
   const [phase, setPhase] = useState('attempt');
-  const [sure, setSure] = useState(null);
   const [pick, setPick] = useState(null);
   const colour = subjectColour(deck.subject);
   const isMcq = card.type === 'mcq';
+  const isLong = card.type === 'extended';
 
-  useEffect(() => { setPhase('attempt'); setSure(null); setPick(null); }, [card.id]);
+  useEffect(() => { setPhase('attempt'); setPick(null); }, [card.id]);
+
+  const committedWrong = isMcq && pick !== null && pick !== card.answer;
 
   const previews = useMemo(() => {
     if (practice) return null;
-    const confident = isMcq ? (pick === card.answer) : (sure === true);
     const forGrade = (q) => {
       if (q === Q.AGAIN) return 'in a moment';
-      const r = schedule(prog, q, confident);
+      const r = schedule(prog, q, committedWrong);
       return intervalWord(r.next.interval);
     };
     return { 0: forGrade(Q.AGAIN), 3: forGrade(Q.HARD), 4: forGrade(Q.GOOD), 5: forGrade(Q.EASY) };
-  }, [prog, practice, sure, pick, isMcq, card.id, card.answer]);
+  }, [prog, practice, committedWrong, card.id]);
 
-  const grade = (q) => onGrade(q, isMcq ? (pick === card.answer) : (sure === true));
+  const grade = (q) => onGrade(q, committedWrong);
   const anim = reduceMotion ? {} : { animation: 'sf-in 260ms cubic-bezier(.2,.8,.3,1)' };
 
   return (
@@ -702,7 +709,7 @@ function StudyCard({ card, deck, onGrade, reduceMotion, prog, practice }){
         </div>
       )}
 
-      {card.type === 'extended' ? <ExtendedFace card={card} phase={phase} deck={deck} />
+      {isLong ? <ExtendedFace card={card} phase={phase} deck={deck} onReveal={() => setPhase('reveal')} />
         : isMcq ? <McqFace card={card} phase={phase} pick={pick} onPick={(i) => { setPick(i); setPhase('reveal'); }} />
         : card.type === 'short' ? <ShortFace card={card} phase={phase} />
         : <FlipFace card={card} phase={phase} />}
@@ -710,34 +717,25 @@ function StudyCard({ card, deck, onGrade, reduceMotion, prog, practice }){
       <div style={{ flex: 1, minHeight: 16 }} />
 
       <div style={{ marginTop: 18 }}>
-        {isMcq ? (
-          phase === 'reveal'
-            ? <GradeRow grade={grade} previews={previews} sure={pick === card.answer} />
-            : <Sub style={{ textAlign: 'center' }}>Tap the answer you think is right</Sub>
-        ) : phase === 'attempt' ? (
-          /* One tap: calls it AND reveals. Guessing before you look is the
-             whole point — and the guess is what catches "sure but wrong". */
-          <div>
-            <Sub style={{ textAlign: 'center', marginBottom: 4, fontWeight: 600, color: T.ink }}>
-              Answer it in your head first
-            </Sub>
-            <Sub style={{ textAlign: 'center', marginBottom: 12, fontSize: 12.5 }}>
-              Then call it — the answer shows either way.
-            </Sub>
-            <div className="flex gap-3">
-              <Btn full kind="primary" onClick={() => { setSure(true); setPhase('reveal'); }}>I've got it</Btn>
-              <Btn full kind="soft" onClick={() => { setSure(false); setPhase('reveal'); }}>No idea</Btn>
-            </div>
-          </div>
+        {phase === 'reveal' ? (
+          <GradeRow grade={grade} previews={previews} />
+        ) : isMcq ? (
+          <Sub style={{ textAlign: 'center' }}>Tap the answer you think is right</Sub>
+        ) : isLong ? (
+          /* long answers run their own controls — you write, not guess */
+          null
         ) : (
-          <GradeRow grade={grade} previews={previews} sure={sure === true} />
+          <div>
+            <Sub style={{ textAlign: 'center', marginBottom: 12 }}>Say it in your head, then check</Sub>
+            <Btn full kind="primary" onClick={() => setPhase('reveal')}>Show answer</Btn>
+          </div>
         )}
       </div>
     </Card>
   );
 }
 
-function GradeRow({ grade, previews, sure }){
+function GradeRow({ grade, previews }){
   const items = [
     [Q.AGAIN, 'Again', 'got it wrong', T.red],
     [Q.HARD,  'Hard',  'only just',    T.amber],
@@ -746,11 +744,7 @@ function GradeRow({ grade, previews, sure }){
   ];
   return (
     <div>
-      {/* deliberately a different question from the one before the reveal:
-          that was a prediction, this is what actually happened */}
-      <Sub style={{ textAlign: 'center', marginBottom: 12 }}>
-        {sure ? 'You reckoned you had it — how did it actually go?' : 'Now you\'ve seen it — how did that go?'}
-      </Sub>
+      <Sub style={{ textAlign: 'center', marginBottom: 12 }}>How did that go?</Sub>
       <div className="grid grid-cols-4 gap-2 sf-stagger">
         {items.map(([q, label, meaning, c]) => (
           <button key={q} className="sf-btn" onClick={() => grade(q)}
@@ -845,23 +839,29 @@ function Rung({ tier, text, colour }){
   );
 }
 
-function ExtendedFace({ card, phase, deck }){
-  const [marking, setMarking] = useState(false);
+/* Long answers are a WRITING exercise — you can't rehearse six marks in your
+   head. So the textarea is the main event, not a link, and marking is the
+   primary action. Skipping to the model answers stays available. */
+function ExtendedFace({ card, phase, deck, onReveal }){
   const [answer, setAnswer] = useState('');
   const [busy, setBusy] = useState(false);
   const [result, setResult] = useState(null);
   const [err, setErr] = useState('');
+
+  useEffect(() => { setAnswer(''); setResult(null); setErr(''); }, [card.id]);
 
   const doMark = async () => {
     if (!answer.trim()) return;
     setBusy(true); setErr(''); setResult(null);
     try {
       const r = await markAnswer(card, answer, deck.standard || 'NCEA Level 1');
-      if (r) setResult(r);
+      if (r){ setResult(r); onReveal && onReveal(); }   // show feedback and the ladder together
       else setErr('Could not read the marking. Try again.');
     } catch { setErr('No connection to the marker. Your answer is safe — try again when online.'); }
     finally { setBusy(false); }
   };
+
+  const words = answer.trim() ? answer.trim().split(/\s+/).length : 0;
 
   return (
     <div>
@@ -874,29 +874,27 @@ function ExtendedFace({ card, phase, deck }){
 
       {phase === 'attempt' && (
         <div style={{ marginTop: 16 }}>
-          {!marking && (
-            <Btn kind="soft" onClick={() => setMarking(true)} style={{ fontSize: 14, padding: '11px 16px' }}>
-              Mark my written answer
+          <Sub style={{ marginBottom: 8, fontWeight: 600, color: T.ink }}>Write your answer</Sub>
+          <textarea value={answer} onChange={e => setAnswer(e.target.value)}
+            placeholder={`Use the ${card.verb.toLowerCase()} command properly — ${card.marks} marks means ${card.marks >= 5 ? 'several linked points' : 'more than one point'}.`}
+            rows={6}
+            style={{ width: '100%', background: T.well, color: T.ink, border: `1px solid ${T.border}`,
+              borderRadius: R.well, padding: 14, fontFamily: SANS, fontSize: 15, lineHeight: 1.55,
+              resize: 'vertical', outline: 'none' }} />
+          <div className="flex items-center justify-between" style={{ marginTop: 7, marginBottom: 11 }}>
+            <Sub style={{ fontSize: 12 }}>{words > 0 ? `${words} words` : 'Even a rough attempt beats reading the answer'}</Sub>
+          </div>
+          <div className="flex gap-2">
+            <Btn full kind="primary" onClick={doMark} disabled={busy || !answer.trim()}>
+              {busy ? 'Marking…' : 'Mark my answer'}
             </Btn>
-          )}
-          {marking && (
-            <div>
-              <textarea value={answer} onChange={e => setAnswer(e.target.value)} placeholder="Write your full answer…" rows={5}
-                style={{ width: '100%', background: T.well, color: T.ink, border: `1px solid ${T.border}`,
-                  borderRadius: R.well, padding: 14, fontFamily: SANS, fontSize: 15, lineHeight: 1.55,
-                  resize: 'vertical', outline: 'none' }} />
-              <div className="flex gap-2" style={{ marginTop: 10 }}>
-                <Btn kind="primary" onClick={doMark} disabled={busy || !answer.trim()} style={{ fontSize: 14, padding: '11px 18px' }}>
-                  {busy ? 'Marking…' : 'Mark it'}
-                </Btn>
-                <Btn kind="ghost" onClick={() => { setMarking(false); setResult(null); setErr(''); }} style={{ fontSize: 14, padding: '11px 14px' }}>Close</Btn>
-              </div>
-              {err && <Sub style={{ marginTop: 10, color: T.red }}>{err}</Sub>}
-              {result && <MarkResult r={result} />}
-            </div>
-          )}
+            <Btn kind="soft" onClick={() => onReveal && onReveal()} style={{ whiteSpace: 'nowrap' }}>Skip</Btn>
+          </div>
+          {err && <Sub style={{ marginTop: 10, color: T.red }}>{err}</Sub>}
         </div>
       )}
+
+      {result && <MarkResult r={result} />}
 
       {phase === 'reveal' && (
         <div style={REVEAL}>
@@ -1695,7 +1693,7 @@ export default function App(){
   };
 
   /* practice=true: count the review, but never touch the scheduler */
-  const gradeCard = (card, deck, q, confidentSure, practice) => {
+  const gradeCard = (card, deck, q, committedWrong, practice) => {
     const today = TODAY();
     let reinsert = false;
     let wasNew = false;
@@ -1703,7 +1701,7 @@ export default function App(){
     if (!practice){
       const prev = progress[card.id];
       wasNew = !prev || !prev.seen;
-      const r = schedule(prev, q, confidentSure);
+      const r = schedule(prev, q, committedWrong);
       reinsert = r.reinsert;
       persistProgress({ ...progress, [card.id]: r.next });
     }
