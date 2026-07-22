@@ -31,6 +31,25 @@ const SERIF = 'Georgia, "Iowan Old Style", "Times New Roman", serif';
 const MONO  = '"SF Mono", "Roboto Mono", ui-monospace, Menlo, Consolas, monospace';
 const SANS  = 'system-ui, -apple-system, "Segoe UI", Roboto, sans-serif';
 
+/* Materials. The card should read as a sheet of paper under a lamp: a warm-cool
+   gradient, a lit top edge, and a shadow with enough spread to sit off the page. */
+const rgba = (hex, a) => {
+  const n = parseInt(hex.slice(1), 16);
+  return `rgba(${(n >> 16) & 255}, ${(n >> 8) & 255}, ${n & 255}, ${a})`;
+};
+const SURFACE = {
+  card:    `linear-gradient(168deg, #18222B 0%, ${T.paper} 46%, #111920 100%)`,
+  raised:  `linear-gradient(180deg, #1E2932 0%, ${T.raised} 100%)`,
+  primary: `linear-gradient(180deg, #F2EEE4 0%, ${T.bone} 100%)`,
+};
+const SHADOW = {
+  card:  '0 24px 48px -16px rgba(0,0,0,0.66), 0 2px 6px rgba(0,0,0,0.4)',
+  btn:   '0 1px 2px rgba(0,0,0,0.4)',
+  lift:  '0 10px 24px -8px rgba(0,0,0,0.55)',
+};
+/* faint horizontal rules, like refill paper — the signature texture */
+const RULED = `repeating-linear-gradient(to bottom, transparent 0px, transparent 33px, ${rgba('#22303A', 0.5)} 33px, ${rgba('#22303A', 0.5)} 34px)`;
+
 const HUES = ['#5B8BB0','#B0895B','#7FA06A','#A96FA0','#6FA0A0','#B06F6F','#8A7FB0','#A0A05B'];
 function subjectColour(name){
   const s = (name || '').trim().toLowerCase();
@@ -497,17 +516,21 @@ function Label({ children, style }){
 
 function Btn({ children, onClick, kind = 'default', disabled, full, style }){
   const base = {
-    fontFamily: MONO, fontSize: 13, letterSpacing: '0.08em', textTransform: 'uppercase',
-    padding: '14px 18px', borderRadius: 12, border: `1px solid ${T.rule}`,
-    background: T.raised, color: T.bone, cursor: disabled ? 'default' : 'pointer',
-    opacity: disabled ? 0.4 : 1, width: full ? '100%' : 'auto', textAlign: 'center',
+    fontFamily: MONO, fontSize: 12.5, letterSpacing: '0.09em', textTransform: 'uppercase',
+    fontWeight: 500, padding: '14px 18px', borderRadius: 11,
+    border: `1px solid ${T.rule}`, background: SURFACE.raised, color: T.bone,
+    cursor: disabled ? 'default' : 'pointer', opacity: disabled ? 0.35 : 1,
+    width: full ? '100%' : 'auto', textAlign: 'center',
+    boxShadow: `${SHADOW.btn}, inset 0 1px 0 ${rgba('#FFFFFF', 0.05)}`,
   };
   const kinds = {
     default: {},
-    primary: { background: T.bone, color: T.ink, borderColor: T.bone },
-    danger:  { background: 'transparent', color: T.red, borderColor: T.red },
-    ghost:   { background: 'transparent', borderColor: T.rule },
-    again:   { background: 'transparent', color: T.red, borderColor: T.red },
+    primary: { background: SURFACE.primary, color: T.ink, borderColor: '#F2EEE4', fontWeight: 600,
+               boxShadow: `${SHADOW.lift}, inset 0 -1px 0 ${rgba('#000000', 0.12)}` },
+    danger:  { background: 'transparent', color: T.red, borderColor: rgba(T.red, 0.55), boxShadow: 'none' },
+    ghost:   { background: 'transparent', borderColor: T.rule, boxShadow: 'none' },
+    again:   { background: rgba(T.red, 0.08), color: T.red, borderColor: rgba(T.red, 0.45),
+               boxShadow: `inset 0 1px 0 ${rgba('#FFFFFF', 0.03)}` },
   };
   return <button className="sf-btn" onClick={disabled ? undefined : onClick} disabled={disabled}
     style={{ ...base, ...kinds[kind], ...style }}>{children}</button>;
@@ -515,24 +538,30 @@ function Btn({ children, onClick, kind = 'default', disabled, full, style }){
 
 function Segmented({ value, onChange, options }){
   return (
-    <div style={{ display: 'flex', gap: 4, background: T.ink, borderRadius: 12, padding: 4, border: `1px solid ${T.rule}` }}>
+    <div style={{ display: 'flex', gap: 3, background: rgba('#0C1116', 0.7), borderRadius: 12, padding: 3,
+      border: `1px solid ${T.rule}`, boxShadow: `inset 0 2px 5px ${rgba('#000000', 0.35)}` }}>
       {options.map(o => {
         const active = value === o.v;
         return (
           <button key={o.v} className="sf-tap" onClick={() => onChange(o.v)}
             style={{ flex: 1, padding: '10px 6px', borderRadius: 9, border: 'none', cursor: 'pointer',
-              background: active ? T.bone : 'transparent', color: active ? T.ink : T.muted,
-              fontFamily: MONO, fontSize: 12, letterSpacing: '0.05em', textTransform: 'uppercase',
-              transition: 'background 150ms, color 150ms' }}>{o.label}</button>
+              background: active ? SURFACE.primary : 'transparent', color: active ? T.ink : T.muted,
+              fontFamily: MONO, fontSize: 11.5, letterSpacing: '0.06em', textTransform: 'uppercase',
+              fontWeight: active ? 600 : 400,
+              boxShadow: active ? `0 2px 6px ${rgba('#000000', 0.35)}` : 'none',
+              transition: 'background 180ms, color 180ms, box-shadow 180ms' }}>{o.label}</button>
         );
       })}
     </div>
   );
 }
 
-function Margin({ colour }){
-  return <div style={{ position: 'absolute', left: 22, top: 18, bottom: 18, width: 2,
-    background: colour || T.rule, borderRadius: 2, opacity: 0.9 }} />;
+function Margin({ colour, inset = 18 }){
+  return (
+    <div style={{ position: 'absolute', left: 22, top: inset, bottom: inset, width: 2,
+      background: `linear-gradient(to bottom, ${rgba(colour || T.rule, 0.15)}, ${colour || T.rule} 18%, ${colour || T.rule} 82%, ${rgba(colour || T.rule, 0.15)})`,
+      borderRadius: 2 }} />
+  );
 }
 
 /* ==========================================================================
@@ -572,25 +601,36 @@ function StudyCard({ card, deck, onGrade, reduceMotion, prog, practice }){
   const anim = reduceMotion ? {} : { animation: 'sf-in 200ms ease-out' };
 
   return (
-    <div className="sf-card" style={{ position: 'relative', background: T.paper, borderRadius: 18,
-      border: `1px solid ${T.rule}`, padding: '24px 20px 20px 42px', minHeight: 400,
-      display: 'flex', flexDirection: 'column', ...anim }}>
-      <Margin colour={colour} />
+    <div className="sf-card" style={{ position: 'relative', background: SURFACE.card, borderRadius: 20,
+      border: `1px solid ${T.rule}`, padding: '22px 20px 20px 42px', minHeight: 400,
+      display: 'flex', flexDirection: 'column', overflow: 'hidden',
+      boxShadow: `${SHADOW.card}, inset 0 1px 0 ${rgba('#FFFFFF', 0.06)}`, ...anim }}>
 
-      <div className="flex items-center justify-between" style={{ marginBottom: 18 }}>
+      {/* ruled paper, behind everything */}
+      <div style={{ position: 'absolute', inset: 0, backgroundImage: RULED,
+        backgroundPosition: '0 62px', opacity: 0.5, pointerEvents: 'none' }} />
+      <Margin colour={colour} inset={0} />
+
+      <div className="flex items-center justify-between" style={{ marginBottom: 20, position: 'relative' }}>
         <div className="flex flex-col">
-          <Label style={{ color: colour }}>{deck.subject || 'Untitled'}</Label>
-          <Label style={{ color: T.faint, marginTop: 2 }}>{deck.topic || ''}</Label>
+          <span style={{ fontFamily: MONO, fontSize: 10.5, letterSpacing: '0.16em', textTransform: 'uppercase',
+            color: colour, fontWeight: 600 }}>{deck.subject || 'Untitled'}</span>
+          <span style={{ fontFamily: MONO, fontSize: 10, letterSpacing: '0.1em', textTransform: 'uppercase',
+            color: T.faint, marginTop: 3 }}>{deck.topic || ''}</span>
         </div>
-        <Label style={{ color: T.faint }}>{TYPE_LABEL[card.type] || 'Card'}</Label>
+        <span style={{ fontFamily: MONO, fontSize: 9.5, letterSpacing: '0.12em', textTransform: 'uppercase',
+          color: T.muted, border: `1px solid ${T.rule}`, borderRadius: 20, padding: '4px 9px',
+          background: rgba('#0C1116', 0.5) }}>{TYPE_LABEL[card.type] || 'Card'}</span>
       </div>
 
+      {/* content sits above the ruled overlay */}
+      <div style={{ position: 'relative', zIndex: 1, display: 'flex', flexDirection: 'column', flex: 1 }}>
       {card.type === 'extended' ? <ExtendedFace card={card} phase={phase} deck={deck} />
         : isMcq ? <McqFace card={card} phase={phase} pick={pick} onPick={(i) => { setPick(i); setPhase('reveal'); }} />
         : card.type === 'short' ? <ShortFace card={card} phase={phase} />
         : <FlipFace card={card} phase={phase} />}
 
-      <div style={{ flex: 1 }} />
+      <div style={{ flex: 1, minHeight: 16 }} />
 
       <div style={{ marginTop: 18 }}>
         {isMcq ? (
@@ -615,6 +655,7 @@ function StudyCard({ card, deck, onGrade, reduceMotion, prog, practice }){
           <GradeRow grade={grade} previews={previews} />
         )}
       </div>
+      </div>
     </div>
   );
 }
@@ -631,11 +672,12 @@ function GradeRow({ grade, previews }){
       <Label style={{ display: 'block', textAlign: 'center', marginBottom: 10, color: T.faint }}>
         {previews ? 'How well did you know it? — sets when it comes back' : 'How well did you know it?'}
       </Label>
-      <div className="grid grid-cols-4 gap-2">
+      <div className="grid grid-cols-4 gap-2 sf-stagger">
         {items.map(([q, label, meaning, kind]) => (
-          <Btn key={q} kind={kind} onClick={() => grade(q)} style={{ padding: '10px 4px', lineHeight: 1.25 }}>
-            <span style={{ display: 'block' }}>{label}</span>
-            <span style={{ display: 'block', fontSize: 9, letterSpacing: '0.04em', opacity: 0.65, marginTop: 3, textTransform: 'none' }}>
+          <Btn key={q} kind={kind} onClick={() => grade(q)} style={{ padding: '11px 3px', lineHeight: 1.2 }}>
+            <span style={{ display: 'block', fontSize: 12 }}>{label}</span>
+            <span style={{ display: 'block', fontFamily: SANS, fontSize: 9.5, letterSpacing: 0,
+              opacity: 0.6, marginTop: 4, textTransform: 'none', fontWeight: 400 }}>
               {previews ? previews[q] : meaning}
             </span>
           </Btn>
@@ -645,16 +687,16 @@ function GradeRow({ grade, previews }){
   );
 }
 
+const QUESTION = { fontFamily: SERIF, fontSize: 23, lineHeight: 1.42, color: T.bone, letterSpacing: '-0.005em' };
+const ANSWER   = { fontFamily: SANS, fontSize: 16.5, lineHeight: 1.6, color: rgba('#E8E4DA', 0.92) };
+const HAIRLINE = (extra) => ({ marginTop: 20, paddingTop: 18,
+  borderTop: `1px solid ${rgba('#22303A', 0.9)}`, animation: 'sf-reveal 260ms cubic-bezier(.2,.7,.3,1)', ...extra });
+
 function FlipFace({ card, phase }){
   return (
     <div>
-      <div style={{ fontFamily: SERIF, fontSize: 22, lineHeight: 1.4, color: T.bone }}>{card.front}</div>
-      {phase === 'reveal' && (
-        <div style={{ marginTop: 18, paddingTop: 16, borderTop: `1px solid ${T.rule}`,
-          fontFamily: SANS, fontSize: 17, lineHeight: 1.5, color: T.bone, animation: 'sf-in 200ms ease-out' }}>
-          {card.back}
-        </div>
-      )}
+      <div style={QUESTION}>{card.front}</div>
+      {phase === 'reveal' && <div style={{ ...HAIRLINE(), ...ANSWER }}>{card.back}</div>}
     </div>
   );
 }
@@ -662,11 +704,11 @@ function FlipFace({ card, phase }){
 function ShortFace({ card, phase }){
   return (
     <div>
-      <div style={{ fontFamily: SERIF, fontSize: 21, lineHeight: 1.4, color: T.bone }}>{card.front}</div>
+      <div style={QUESTION}>{card.front}</div>
       {phase === 'reveal' && (
-        <div style={{ marginTop: 18, paddingTop: 16, borderTop: `1px solid ${T.rule}`, animation: 'sf-in 200ms ease-out' }}>
+        <div style={HAIRLINE()}>
           <Label style={{ color: T.faint }}>Model answer</Label>
-          <div style={{ fontFamily: SANS, fontSize: 16, lineHeight: 1.55, color: T.bone, marginTop: 6 }}>{card.back}</div>
+          <div style={{ ...ANSWER, marginTop: 8 }}>{card.back}</div>
         </div>
       )}
     </div>
@@ -683,18 +725,21 @@ function McqFace({ card, phase, pick, onPick }){
           const revealed = phase === 'reveal';
           const isAnswer = i === card.answer;
           const isPick = pick === i;
-          let border = T.rule, col = T.bone, bg = T.raised, weight = 400;
-          if (revealed && isAnswer){ border = T.bone; weight = 600; }
-          if (revealed && isPick && !isAnswer){ border = T.red; col = T.red; }
+          let border = T.rule, col = T.bone, bg = SURFACE.raised, weight = 400, dim = 1;
+          if (revealed && isAnswer){ border = rgba(T.bone, 0.55); weight = 600; bg = rgba(T.bone, 0.07); }
+          if (revealed && isPick && !isAnswer){ border = rgba(T.red, 0.55); col = T.red; bg = rgba(T.red, 0.07); }
+          if (revealed && !isAnswer && !isPick) dim = 0.45;
           return (
             <button key={i} className="sf-tap" disabled={revealed} onClick={() => onPick(i)}
-              style={{ display: 'flex', gap: 10, alignItems: 'flex-start', textAlign: 'left',
-                background: bg, border: `1px solid ${border}`, borderRadius: 12, padding: '12px 14px',
-                cursor: revealed ? 'default' : 'pointer', color: col, transition: 'border-color 150ms' }}>
-              <span style={{ fontFamily: MONO, fontSize: 12, color: T.faint, marginTop: 2 }}>{letters[i]}</span>
-              <span style={{ fontFamily: SANS, fontSize: 15, lineHeight: 1.4, flex: 1, fontWeight: weight }}>{opt}</span>
-              {revealed && isAnswer && <span style={{ color: T.bone }}>✓</span>}
-              {revealed && isPick && !isAnswer && <span style={{ color: T.red }}>✕</span>}
+              style={{ display: 'flex', gap: 11, alignItems: 'flex-start', textAlign: 'left',
+                background: bg, border: `1px solid ${border}`, borderRadius: 12, padding: '13px 14px',
+                cursor: revealed ? 'default' : 'pointer', color: col, opacity: dim,
+                boxShadow: revealed ? 'none' : `${SHADOW.btn}, inset 0 1px 0 ${rgba('#FFFFFF', 0.04)}`,
+                transition: 'border-color 160ms, opacity 200ms, background 160ms' }}>
+              <span style={{ fontFamily: MONO, fontSize: 11, color: T.faint, marginTop: 3, letterSpacing: '0.06em' }}>{letters[i]}</span>
+              <span style={{ fontFamily: SANS, fontSize: 15.5, lineHeight: 1.45, flex: 1, fontWeight: weight }}>{opt}</span>
+              {revealed && isAnswer && <span style={{ color: T.bone, fontSize: 14 }}>✓</span>}
+              {revealed && isPick && !isAnswer && <span style={{ color: T.red, fontSize: 14 }}>✕</span>}
             </button>
           );
         })}
@@ -941,9 +986,16 @@ function Feed({ decks, progress, settings, stats, onGrade, reduceMotion }){
   const done = reviewed;
   return (
     <div>
-      <div style={{ height: 3, background: T.rule, borderRadius: 3, marginBottom: 14, overflow: 'hidden' }}>
-        <div style={{ height: '100%', width: `${done + scheduledLeft ? (done / (done + scheduledLeft)) * 100 : 0}%`,
-          background: T.bone, transition: reduceMotion ? 'none' : 'width 250ms ease' }} />
+      <div className="flex items-center gap-3" style={{ marginBottom: 14 }}>
+        <div style={{ flex: 1, height: 3, background: rgba('#22303A', 0.9), borderRadius: 3, overflow: 'hidden' }}>
+          <div style={{ height: '100%', width: `${done + scheduledLeft ? (done / (done + scheduledLeft)) * 100 : 0}%`,
+            background: `linear-gradient(90deg, ${rgba(T.bone, 0.55)}, ${T.bone})`,
+            boxShadow: `0 0 10px ${rgba(T.bone, 0.35)}`,
+            transition: reduceMotion ? 'none' : 'width 320ms cubic-bezier(.2,.7,.3,1)' }} />
+        </div>
+        <span style={{ fontFamily: MONO, fontSize: 9.5, letterSpacing: '0.12em', color: T.faint }}>
+          {scheduledLeft} LEFT
+        </span>
       </div>
       <StudyCard key={queue[0].card.id} card={queue[0].card} deck={queue[0].deck} onGrade={gradeScheduled}
         reduceMotion={reduceMotion} prog={progress[queue[0].card.id]} practice={false} />
@@ -1213,8 +1265,9 @@ function Decks({ decks, progress, onEditCard, onDeleteCard, onDeleteDeck }){
         const flagN = d.cards.filter(c => { const p = progress[c.id]; return p && p.flagged; }).length;
         return (
           <button key={d.id} className="sf-tap" onClick={() => setOpenId(d.id)}
-            style={{ position: 'relative', textAlign: 'left', background: T.paper, border: `1px solid ${T.rule}`,
-              borderRadius: 12, padding: '14px 14px 14px 30px', cursor: 'pointer' }}>
+            style={{ position: 'relative', textAlign: 'left', background: SURFACE.card, border: `1px solid ${T.rule}`,
+              borderRadius: 14, padding: '15px 14px 15px 32px', cursor: 'pointer',
+              boxShadow: `${SHADOW.btn}, inset 0 1px 0 ${rgba('#FFFFFF', 0.04)}` }}>
             <Margin colour={subjectColour(d.subject)} />
             <Label style={{ color: subjectColour(d.subject) }}>{d.subject || 'Untitled'}</Label>
             <div style={{ fontFamily: SERIF, fontSize: 17, color: T.bone, marginTop: 2 }}>{d.topic}</div>
@@ -1407,9 +1460,13 @@ function Stats({ decks, progress, stats }){
 }
 function Stat({ n, k, red }){
   return (
-    <div style={{ background: T.paper, border: `1px solid ${T.rule}`, borderRadius: 12, padding: '14px 10px', textAlign: 'center' }}>
-      <div style={{ fontFamily: SERIF, fontSize: 28, color: red ? T.red : T.bone }}>{n}</div>
-      <Label style={{ color: T.faint }}>{k}</Label>
+    <div style={{ background: SURFACE.card, border: `1px solid ${T.rule}`, borderRadius: 14,
+      padding: '16px 8px 13px', textAlign: 'center',
+      boxShadow: `${SHADOW.btn}, inset 0 1px 0 ${rgba('#FFFFFF', 0.05)}` }}>
+      <div style={{ fontFamily: SERIF, fontSize: 32, lineHeight: 1, color: red ? T.red : T.bone,
+        letterSpacing: '-0.02em' }}>{n}</div>
+      <span style={{ display: 'block', fontFamily: MONO, fontSize: 9.5, letterSpacing: '0.13em',
+        textTransform: 'uppercase', color: T.faint, marginTop: 7 }}>{k}</span>
     </div>
   );
 }
@@ -1578,6 +1635,7 @@ export default function App(){
 
   return (
     <Shell>
+      <Masthead due={dueCount} />
       <div style={{ minHeight: 440 }}>
         {tab === 'feed' && <Feed key={'feed-' + cardCount} decks={library.decks} progress={progress} settings={settings}
           stats={stats} onGrade={gradeCard} reduceMotion={reduceMotion.current} />}
@@ -1595,23 +1653,64 @@ function Shell({ children }){
   return (
     <div style={{ background: T.ink, minHeight: '100vh', color: T.bone, display: 'flex', justifyContent: 'center' }}>
       <style>{`
-        @keyframes sf-in { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: none; } }
+        @keyframes sf-in {
+          from { opacity: 0; transform: translateY(10px) scale(0.994); }
+          to   { opacity: 1; transform: none; }
+        }
+        @keyframes sf-reveal {
+          from { opacity: 0; transform: translateY(-4px); clip-path: inset(0 0 100% 0); }
+          to   { opacity: 1; transform: none; clip-path: inset(0 0 0 0); }
+        }
+        @keyframes sf-rise { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: none; } }
+
         * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+        body { overscroll-behavior-y: none; }
         textarea, input, select { font-size: 16px; }  /* stops iOS zooming on tap */
         ::placeholder { color: ${T.faint}; }
-        .sf-btn { transition: transform 120ms ease, background 150ms, border-color 150ms, opacity 150ms; }
-        .sf-btn:active:not(:disabled) { transform: scale(0.97); }
-        .sf-tap { transition: transform 120ms ease, border-color 150ms; }
-        .sf-tap:active { transform: scale(0.98); }
-        @media (hover: hover) {
-          .sf-btn:hover:not(:disabled) { border-color: #2E3E49; }
+        ::selection { background: ${rgba(T.bone, 0.18)}; }
+
+        /* buttons feel pressed, not just recoloured */
+        .sf-btn {
+          transition: transform 90ms cubic-bezier(.3,.7,.4,1), filter 160ms, border-color 160ms, opacity 160ms;
+          -webkit-user-select: none; user-select: none;
         }
-        .sf-card { box-shadow: 0 10px 30px rgba(0,0,0,0.35); }
+        .sf-btn:active:not(:disabled) { transform: translateY(1px) scale(0.985); filter: brightness(0.94); }
+        .sf-tap { transition: transform 90ms cubic-bezier(.3,.7,.4,1), border-color 160ms, background 160ms; }
+        .sf-tap:active { transform: translateY(1px) scale(0.99); }
+        @media (hover: hover) {
+          .sf-btn:hover:not(:disabled) { border-color: ${rgba(T.bone, 0.3)}; }
+          .sf-tap:hover { border-color: ${rgba(T.bone, 0.22)}; }
+        }
+        :focus-visible { outline: 2px solid ${rgba(T.bone, 0.5)}; outline-offset: 2px; }
+
+        .sf-stagger > * { animation: sf-rise 260ms cubic-bezier(.2,.7,.3,1) backwards; }
+        .sf-stagger > *:nth-child(1) { animation-delay: 0ms; }
+        .sf-stagger > *:nth-child(2) { animation-delay: 35ms; }
+        .sf-stagger > *:nth-child(3) { animation-delay: 70ms; }
+        .sf-stagger > *:nth-child(4) { animation-delay: 105ms; }
+
         @media (prefers-reduced-motion: reduce) { * { animation: none !important; transition: none !important; } }
       `}</style>
-      <div style={{ width: '100%', maxWidth: 460, padding: '18px 16px 96px', position: 'relative' }}>
+      {/* lamplight from above — stops the flat-black look */}
+      <div style={{ position: 'fixed', inset: 0, pointerEvents: 'none',
+        background: `radial-gradient(120% 70% at 50% -12%, ${rgba('#2A3A47', 0.5)} 0%, transparent 62%)` }} />
+      <div style={{ width: '100%', maxWidth: 460, padding: '10px 16px 100px', position: 'relative' }}>
         {children}
       </div>
+    </div>
+  );
+}
+
+function Masthead({ due }){
+  return (
+    <div className="flex items-center justify-between" style={{ padding: '8px 2px 16px' }}>
+      <span style={{ fontFamily: MONO, fontSize: 11, letterSpacing: '0.28em', textTransform: 'uppercase',
+        color: T.muted, fontWeight: 600 }}>Study&nbsp;Feed</span>
+      {due > 0 && (
+        <span style={{ fontFamily: MONO, fontSize: 10, letterSpacing: '0.12em', textTransform: 'uppercase',
+          color: T.red, border: `1px solid ${rgba(T.red, 0.4)}`, background: rgba(T.red, 0.08),
+          borderRadius: 20, padding: '4px 10px' }}>{due} due</span>
+      )}
     </div>
   );
 }
@@ -1619,20 +1718,27 @@ function Shell({ children }){
 function Nav({ tab, setTab, due }){
   const items = [['feed','Feed'],['create','New'],['decks','Decks'],['stats','Stats'],['settings','Set']];
   return (
-    <div style={{ position: 'fixed', bottom: 0, left: 0, right: 0, display: 'flex', justifyContent: 'center' }}>
-      <div style={{ width: '100%', maxWidth: 460, background: 'rgba(20,28,35,0.92)', backdropFilter: 'blur(8px)',
-        borderTop: `1px solid ${T.rule}`, display: 'flex', padding: '6px 8px calc(6px + env(safe-area-inset-bottom))' }}>
+    <div style={{ position: 'fixed', bottom: 0, left: 0, right: 0, display: 'flex', justifyContent: 'center',
+      background: `linear-gradient(to top, ${T.ink} 55%, transparent)`, paddingTop: 18, pointerEvents: 'none' }}>
+      <div style={{ width: '100%', maxWidth: 460, pointerEvents: 'auto',
+        background: rgba('#141C23', 0.86), backdropFilter: 'blur(14px)', WebkitBackdropFilter: 'blur(14px)',
+        borderTop: `1px solid ${rgba(T.bone, 0.07)}`, display: 'flex',
+        padding: '4px 6px calc(6px + env(safe-area-inset-bottom))' }}>
         {items.map(([k, label]) => {
           const active = tab === k;
           return (
-            <button key={k} className="sf-tap" onClick={() => setTab(k)}
-              style={{ flex: 1, background: 'none', border: 'none', cursor: 'pointer', padding: '10px 0 8px', position: 'relative' }}>
-              <span style={{ position: 'absolute', top: 0, left: '50%', transform: 'translateX(-50%)',
-                width: 20, height: 2, borderRadius: 2, background: active ? T.bone : 'transparent' }} />
-              <Label style={{ color: active ? T.bone : T.faint }}>{label}</Label>
+            <button key={k} onClick={() => setTab(k)}
+              style={{ flex: 1, background: 'none', border: 'none', cursor: 'pointer',
+                padding: '11px 0 9px', position: 'relative',
+                transition: 'opacity 160ms', opacity: active ? 1 : 0.72 }}>
+              <span style={{ position: 'absolute', top: 2, left: '50%', transform: 'translateX(-50%)',
+                width: active ? 22 : 0, height: 2, borderRadius: 2, background: T.bone,
+                transition: 'width 200ms cubic-bezier(.2,.7,.3,1)' }} />
+              <span style={{ fontFamily: MONO, fontSize: 10, letterSpacing: '0.14em', textTransform: 'uppercase',
+                color: active ? T.bone : T.faint, fontWeight: active ? 600 : 400, transition: 'color 160ms' }}>{label}</span>
               {k === 'feed' && due > 0 && (
-                <span style={{ position: 'absolute', top: 4, right: '50%', marginRight: -24, fontFamily: MONO, fontSize: 10,
-                  color: T.ink, background: T.red, borderRadius: 8, padding: '1px 5px', minWidth: 16, textAlign: 'center' }}>{due}</span>
+                <span style={{ position: 'absolute', top: 6, right: '50%', marginRight: -26, width: 5, height: 5,
+                  borderRadius: 5, background: T.red }} />
               )}
             </button>
           );
