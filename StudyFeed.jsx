@@ -1353,13 +1353,13 @@ function DraftReview({ drafts, setDrafts, meta, setMeta, onSave, onCancel }){
 /* ==========================================================================
    DECKS
    ========================================================================== */
-function Decks({ decks, progress, onEditCard, onDeleteCard, onDeleteDeck }){
+function Decks({ decks, progress, onEditCard, onDeleteCard, onDeleteDeck, onRenameDeck }){
   const [openId, setOpenId] = useState(null);
   const open = decks.find(d => d.id === openId);
 
   if (open){
     return <DeckEditor deck={open} progress={progress} onBack={() => setOpenId(null)}
-      onEditCard={onEditCard} onDeleteCard={onDeleteCard}
+      onEditCard={onEditCard} onDeleteCard={onDeleteCard} onRenameDeck={onRenameDeck}
       onDeleteDeck={() => { onDeleteDeck(open.id); setOpenId(null); }} />;
   }
 
@@ -1403,10 +1403,25 @@ function Decks({ decks, progress, onEditCard, onDeleteCard, onDeleteDeck }){
   );
 }
 
-function DeckEditor({ deck, progress, onBack, onEditCard, onDeleteCard, onDeleteDeck }){
+function DeckEditor({ deck, progress, onBack, onEditCard, onDeleteCard, onDeleteDeck, onRenameDeck }){
   const [confirmDeck, setConfirmDeck] = useState(false);
   const [editId, setEditId] = useState(null);
+  const [renaming, setRenaming] = useState(false);
+  const [draftMeta, setDraftMeta] = useState({ subject: deck.subject, topic: deck.topic, standard: deck.standard });
   const colour = subjectColour(deck.subject);
+
+  const startRename = () => {
+    setDraftMeta({ subject: deck.subject, topic: deck.topic, standard: deck.standard });
+    setRenaming(true);
+  };
+  const saveRename = () => {
+    onRenameDeck(deck.id, {
+      subject: (draftMeta.subject || 'Untitled').trim(),
+      topic: (draftMeta.topic || '').trim(),
+      standard: (draftMeta.standard || 'NCEA Level 1').trim(),
+    });
+    setRenaming(false);
+  };
 
   return (
     <div>
@@ -1414,11 +1429,33 @@ function DeckEditor({ deck, progress, onBack, onEditCard, onDeleteCard, onDelete
         <button className="sf-tap" onClick={onBack}
           style={{ width: 38, height: 38, borderRadius: R.pill, background: T.surface, border: `1px solid ${T.border}`,
             cursor: 'pointer', fontSize: 17, color: T.ink, boxShadow: SH.raised, flexShrink: 0 }}>‹</button>
-        <div style={{ minWidth: 0 }}>
+        <div style={{ minWidth: 0, flex: 1 }}>
           <Title style={{ fontSize: 18, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{deck.topic || 'Deck'}</Title>
           <Sub style={{ fontSize: 13 }}>{deck.subject} · {deck.cards.length} cards</Sub>
         </div>
+        {!renaming && (
+          <Btn kind="soft" onClick={startRename} style={{ fontSize: 13, padding: '9px 15px', flexShrink: 0 }}>Rename</Btn>
+        )}
       </div>
+
+      {renaming && (
+        <Card style={{ padding: 15, marginBottom: 14, borderColor: T.accent, borderWidth: 1.5 }}>
+          <div style={{ fontFamily: SANS, fontSize: 15, fontWeight: 700, color: T.ink, marginBottom: 3 }}>Rename this deck</div>
+          <Sub style={{ fontSize: 12.5, marginBottom: 12 }}>Changing the subject also changes its colour.</Sub>
+          {[['subject','Subject','e.g. Chemistry'],['topic','Topic','e.g. Rates of reaction'],['standard','Level','e.g. NCEA Level 1']].map(([k, label, ph]) => (
+            <div key={k} style={{ marginBottom: 10 }}>
+              <div style={{ fontFamily: SANS, fontSize: 12.5, fontWeight: 700, color: T.muted, marginBottom: 5 }}>{label}</div>
+              <input value={draftMeta[k] || ''} placeholder={ph}
+                onChange={e => setDraftMeta({ ...draftMeta, [k]: e.target.value })}
+                style={{ ...INPUT, fontSize: 14.5 }} />
+            </div>
+          ))}
+          <div className="flex gap-2" style={{ marginTop: 4 }}>
+            <Btn kind="primary" onClick={saveRename} style={{ fontSize: 14, padding: '11px 20px' }}>Save</Btn>
+            <Btn kind="ghost" onClick={() => setRenaming(false)} style={{ fontSize: 14, padding: '11px 16px' }}>Cancel</Btn>
+          </div>
+        </Card>
+      )}
 
       <div className="flex flex-col gap-2">
         {deck.cards.map(c => {
@@ -1739,6 +1776,9 @@ export default function App(){
     persistLibrary({ decks: library.decks.map(d => d.id !== deckId ? d : { ...d, cards: d.cards.filter(c => c.id !== cardId) }) });
   };
   const deleteDeck = (deckId) => persistLibrary({ decks: library.decks.filter(d => d.id !== deckId) });
+  const renameDeck = (deckId, patch) => {
+    persistLibrary({ decks: library.decks.map(d => d.id === deckId ? { ...d, ...patch } : d) });
+  };
 
   const cardCount = library.decks.reduce((s, d) => s + d.cards.length, 0);
   const dueCount = useMemo(() => {
@@ -1769,7 +1809,8 @@ export default function App(){
         <div style={{ display: tab === 'create' ? 'block' : 'none' }}>
           <Create onSave={saveDeck} settings={settings} onSettings={persistSettings} onPending={setPendingCount} />
         </div>
-        {tab === 'decks' && <Decks decks={library.decks} progress={progress} onEditCard={editCard} onDeleteCard={deleteCard} onDeleteDeck={deleteDeck} />}
+        {tab === 'decks' && <Decks decks={library.decks} progress={progress} onEditCard={editCard}
+          onDeleteCard={deleteCard} onDeleteDeck={deleteDeck} onRenameDeck={renameDeck} />}
         {tab === 'stats' && <Stats decks={library.decks} progress={progress} stats={stats} />}
         {tab === 'settings' && <Settings settings={settings} onChange={persistSettings} />}
       </div>
