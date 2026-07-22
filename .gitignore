@@ -8,3 +8,6 @@ Thumbs.db
 *.log
 .vscode/
 .idea/
+
+.check-out.js
+dev/
