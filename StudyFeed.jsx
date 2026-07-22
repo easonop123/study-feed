@@ -2,55 +2,54 @@ import React, { useState, useEffect, useRef, useMemo, useCallback } from 'react'
 
 /* ============================================================================
    STUDY FEED  —  single-file build
-   - Phase 2 extended-response cards (verb, A/M/E ladder, skeleton, pitfall,
-     mark-my-answer) plus a MIX of lighter types: flip, cloze, short answer,
-     multiple choice.
-   - Feed still ends deliberately; an opt-in "keep practising" mode goes endless.
+   Card types: flip, cloze, short answer, multiple choice, extended response.
+   Continuous feed (scheduled cards, then endless practice). SM-2 scheduling.
+
+   Visual direction: light, soft, rounded. White cards on a near-white page,
+   indigo accent, pill buttons, one rounded sans throughout.
 
    Constraints honoured:
    - single file, default export, no required props
    - no localStorage/sessionStorage. window.storage.* wrapped in try/catch;
-     a missing key throws, so every read falls back.
+     storage.get returns { value } and set takes a JSON string.
    - four storage keys (library:main, progress:all, stats:main, settings:main)
    - Tailwind core utilities for layout only; colour from the token object
-   - generation via the messages API (claude-sonnet-4-6). Ships empty.
+   - avoids ?? / ?. / ||= (the artifact transpiler rejects them)
    ========================================================================== */
 
-/* ---- design tokens : "exam paper, at night" ------------------------------ */
+/* ---- tokens -------------------------------------------------------------- */
 const T = {
-  ink:   '#0C1116',
-  paper: '#141C23',
-  raised:'#1A242C',
-  rule:  '#22303A',
-  bone:  '#E8E4DA',
-  muted: '#8A97A2',
-  faint: '#5B6873',
-  red:   '#D9503F',
+  bg:        '#F6F7FB',
+  surface:   '#FFFFFF',
+  well:      '#F1F3F9',
+  border:    '#E4E7F0',
+  ink:       '#14162B',
+  muted:     '#5C6178',
+  faint:     '#9AA0B4',
+  accent:    '#4255FF',
+  accentInk: '#2F3EDB',
+  green:     '#10B981',
+  amber:     '#F59E0B',
+  red:       '#E5484D',
 };
-const SERIF = 'Georgia, "Iowan Old Style", "Times New Roman", serif';
-const MONO  = '"SF Mono", "Roboto Mono", ui-monospace, Menlo, Consolas, monospace';
-const SANS  = 'system-ui, -apple-system, "Segoe UI", Roboto, sans-serif';
 
-/* Materials. The card should read as a sheet of paper under a lamp: a warm-cool
-   gradient, a lit top edge, and a shadow with enough spread to sit off the page. */
+const SANS = '-apple-system, BlinkMacSystemFont, "SF Pro Rounded", "Segoe UI", Roboto, system-ui, sans-serif';
+
 const rgba = (hex, a) => {
   const n = parseInt(hex.slice(1), 16);
   return `rgba(${(n >> 16) & 255}, ${(n >> 8) & 255}, ${n & 255}, ${a})`;
 };
-const SURFACE = {
-  card:    `linear-gradient(168deg, #18222B 0%, ${T.paper} 46%, #111920 100%)`,
-  raised:  `linear-gradient(180deg, #1E2932 0%, ${T.raised} 100%)`,
-  primary: `linear-gradient(180deg, #F2EEE4 0%, ${T.bone} 100%)`,
-};
-const SHADOW = {
-  card:  '0 24px 48px -16px rgba(0,0,0,0.66), 0 2px 6px rgba(0,0,0,0.4)',
-  btn:   '0 1px 2px rgba(0,0,0,0.4)',
-  lift:  '0 10px 24px -8px rgba(0,0,0,0.55)',
-};
-/* faint horizontal rules, like refill paper — the signature texture */
-const RULED = `repeating-linear-gradient(to bottom, transparent 0px, transparent 33px, ${rgba('#22303A', 0.5)} 33px, ${rgba('#22303A', 0.5)} 34px)`;
 
-const HUES = ['#5B8BB0','#B0895B','#7FA06A','#A96FA0','#6FA0A0','#B06F6F','#8A7FB0','#A0A05B'];
+const R  = { card: 20, well: 16, input: 14, pill: 999 };
+const SH = {
+  card:    '0 1px 2px rgba(20,22,43,0.04), 0 10px 28px -12px rgba(20,22,43,0.16)',
+  raised:  '0 1px 2px rgba(20,22,43,0.06)',
+  pop:     '0 2px 10px rgba(20,22,43,0.09)',
+  accent:  `0 6px 16px -4px ${rgba('#4255FF', 0.45)}`,
+};
+
+/* friendly hues that read well on white */
+const HUES = ['#4255FF','#F59E0B','#10B981','#A855F7','#06B6D4','#EC4899','#8B5CF6','#F97316'];
 function subjectColour(name){
   const s = (name || '').trim().toLowerCase();
   let h = 0;
@@ -58,9 +57,7 @@ function subjectColour(name){
   return HUES[h % HUES.length];
 }
 
-const TYPE_LABEL = { flip: 'Flip', cloze: 'Cloze', short: 'Short answer', mcq: 'Multiple choice', extended: 'Extended' };
-
-/* Presets for the common case; "Something else…" keeps it curriculum-agnostic. */
+const TYPE_LABEL = { flip: 'Flip', cloze: 'Fill the blank', short: 'Short answer', mcq: 'Multiple choice', extended: 'Long answer' };
 const LEVEL_PRESETS = ['NCEA Level 1', 'NCEA Level 2', 'NCEA Level 3'];
 
 /* ---- dates : YYYY-MM-DD so they compare lexically ------------------------ */
@@ -75,14 +72,14 @@ const addDays = (base, n) => {
 };
 const TODAY = () => dayStr();
 
-/* ---- storage : the runtime returns { value } and takes a string ---------- */
+/* ---- storage ------------------------------------------------------------- */
 async function load(key, fallback){
   try {
     const r = await window.storage.get(key);
     if (r === undefined || r === null) return fallback;
-    const val = (r && typeof r === 'object' && 'value' in r) ? r.value : r;
-    if (val === undefined || val === null) return fallback;
-    return typeof val === 'string' ? JSON.parse(val) : val;
+    const raw = (r && typeof r === 'object' && 'value' in r) ? r.value : r;
+    if (raw === undefined || raw === null) return fallback;
+    return typeof raw === 'string' ? JSON.parse(raw) : raw;
   } catch { return fallback; }
 }
 async function save(key, value){
@@ -90,10 +87,7 @@ async function save(key, value){
   catch (e){ console.error('storage.set failed', key, e); return false; }
 }
 
-/* capNew off by default: the feed is continuous, so nothing needs throttling */
 const DEFAULT_SETTINGS = { interleave: true, newPerDay: 12, capNew: false, saveUsage: false };
-/* reviewsByDate counts scheduled revision only; extra practice is counted
-   separately so the headline number can't be padded by looping the pool. */
 const DEFAULT_STATS = { streak: 0, lastDay: '', newByDate: {}, reviewsByDate: {}, practiceByDate: {}, bySubject: {} };
 
 /* ---- SM-2 scheduler ------------------------------------------------------ */
@@ -136,12 +130,19 @@ function schedule(prevRaw, q, confidentSure){
 }
 
 function stateLabel(p){
-  if (!p || !p.seen) return 'UNSEEN';
-  if (p.flagged) return 'MISCONCEPTION';
-  if (p.due <= TODAY()) return 'DUE';
+  if (!p || !p.seen) return 'New';
+  if (p.flagged) return 'Keeps tripping you up';
+  if (p.due <= TODAY()) return 'Due now';
   const days = Math.max(1, Math.round((new Date(p.due) - new Date(TODAY())) / 86400000));
-  const lap = p.lapses ? ` · ${p.lapses} LAPSE${p.lapses > 1 ? 'S' : ''}` : '';
-  return `IN ${days}D${lap}`;
+  return 'In ' + days + (days === 1 ? ' day' : ' days');
+}
+
+function intervalWord(days){
+  const d = Math.max(1, Math.round(days));
+  if (d === 1) return 'tomorrow';
+  if (d < 30) return d + ' days';
+  const m = Math.round(d / 30);
+  return m === 1 ? 'a month' : m + ' months';
 }
 
 const uid = () => Date.now().toString(36) + Math.random().toString(36).slice(2, 7);
@@ -184,7 +185,6 @@ function parseJsonArray(text){
   return rescueObjects(text);
 }
 
-/* turn model JSON into normalised typed cards */
 function cardsFromJson(arr){
   const out = [];
   for (const o of arr || []){
@@ -224,7 +224,7 @@ function dedupeCards(cards){
   return out;
 }
 
-/* bigger batches = fewer API calls = less of your usage burned per generate */
+/* bigger batches = fewer API calls = less usage burned per generate */
 function batchText(text, size = 12000){
   const paras = text.split(/\n\s*\n/);
   const batches = [];
@@ -271,7 +271,7 @@ function mixedPrompt(source, level){
   return `You are an expert ${level} tutor. From the material below, make a MIXED set of study cards. Choose the best type for each idea — do NOT make everything the same type.
 
 Return ONLY a JSON array. Each card is one of:
-{ "type":"flip", "front": question, "back": answer }                       // definitions, facts, formulae, vocab
+{ "type":"flip", "front": question, "back": answer }
 { "type":"cloze", "front": a sentence with one key term replaced by "____", "back": the missing term }
 { "type":"short", "front": question, "back": a model answer in 1-3 sentences }
 { "type":"mcq", "front": question, "options": [four options], "answer": index (0-based) of the correct option, "why": one line on why it is right and what the tempting wrong option gets wrong }
@@ -291,21 +291,18 @@ MATERIAL:
 ${source}`;
 }
 
-/* Two tiers. Haiku is ~3x cheaper per token and plenty for short recall cards;
-   Sonnet does the work where quality actually shows — extended-response
-   ladders and marking a written answer. Routing is per WHOLE call: splitting
-   one batch across both models sends the same notes twice, and the duplicated
-   input cancels most of the saving. */
+/* Two tiers. Haiku is ~3x cheaper and plenty for short recall; Sonnet does the
+   work where quality shows. Routing is per WHOLE call — splitting one batch
+   across both sends the same notes twice and cancels most of the saving. */
 const MODEL_SMART = 'claude-sonnet-4-6';
-const MODEL_CHEAP = 'claude-haiku-4-5-20251001';   // dated ID — guaranteed to resolve
+const MODEL_CHEAP = 'claude-haiku-4-5-20251001';
 
 function pickModel(mode, settings){
-  if (settings && settings.saveUsage) return MODEL_CHEAP;   // user opted for cheap everywhere
-  return mode === 'flip' ? MODEL_CHEAP : MODEL_SMART;       // flip-only is all short cards
+  if (settings && settings.saveUsage) return MODEL_CHEAP;
+  return mode === 'flip' ? MODEL_CHEAP : MODEL_SMART;
 }
 
-/* Generation swallows per-batch failures so one bad batch can't sink the rest —
-   but a failure that hits EVERY batch (bad model id, no network, rate limit)
+/* One bad batch shouldn't sink the rest — but a failure hitting EVERY batch
    would otherwise surface as a blank "nothing came back". Record it. */
 let lastApiError = '';
 const noteApiError = (e) => { lastApiError = (e && e.message) ? String(e.message) : String(e); };
@@ -327,7 +324,6 @@ function callModelMulti(prompt, images, maxTokens = 1000, model = MODEL_SMART){
   return postMessages(content, maxTokens, model);
 }
 
-/* pick the prompt + parse for a generation mode */
 function promptFor(mode, source, level){
   if (mode === 'flip') return flipPrompt(source, level);
   if (mode === 'extended') return extendedPrompt(source, level);
@@ -396,7 +392,6 @@ Return ONLY JSON:
 Be specific to THIS answer. Reward construction (mechanism, links, context) over word count.`;
 }
 async function markAnswer(card, answer, level){
-  // always the smarter model — grading against A/M/E is the bit worth paying for
   const reply = await callModel(markPrompt(card, answer, level), 1000, MODEL_SMART);
   const objs = rescueObjects(reply);
   return objs[0] || null;
@@ -420,9 +415,9 @@ function parseManual(text){
 }
 
 /* ==========================================================================
-   FILE EXTRACTION  —  photos, .docx / .pptx / .txt, read in the browser
+   FILE EXTRACTION
    ========================================================================== */
-const MIN_EMBEDDED_IMAGE_BYTES = 15000;   // below this it's a logo/bullet/icon
+const MIN_EMBEDDED_IMAGE_BYTES = 15000;
 const MAX_EMBEDDED_IMAGES = 6;
 
 let _jszip = null;
@@ -432,7 +427,7 @@ async function loadJSZip(){
   try {
     const m = await import('jszip');
     const cand = (m && m.default) ? m.default : m;
-    if (isZipLib(cand)){ _jszip = cand; return _jszip; }   // don't cache a dud
+    if (isZipLib(cand)){ _jszip = cand; return _jszip; }
   } catch {}
   if (isZipLib(window.JSZip)){ _jszip = window.JSZip; return _jszip; }
   await new Promise((res, rej) => {
@@ -475,8 +470,8 @@ async function extractFile(file){
 
   const JSZip = await loadJSZip();
   const zip = await JSZip.loadAsync(file);
-  // Only real content images: skip logos/bullets/icons, and cap the count.
-  // Every image sent costs usage, and a deck's decorative art teaches nothing.
+
+  // content images only — logos and bullet icons cost usage and teach nothing
   const images = [];
   const media = Object.keys(zip.files).filter(n => /\/media\/[^/]+\.(png|jpe?g|gif|bmp|webp)$/i.test(n));
   for (const n of media){
@@ -490,7 +485,7 @@ async function extractFile(file){
   if (name.endsWith('.docx')){
     const doc = zip.file('word/document.xml');
     const text = doc ? stripXml(await doc.async('string')).trim() : '';
-    if (!text && !images.length) throw new Error('This .docx had no readable text or images.');
+    if (!text && !images.length) throw new Error('This Word file had no readable text or pictures.');
     return { text, images };
   }
   if (name.endsWith('.pptx')){
@@ -500,37 +495,44 @@ async function extractFile(file){
     const parts = [];
     for (const n of slides) parts.push(stripXml(await zip.file(n).async('string')).trim());
     const text = parts.filter(Boolean).join('\n\n');
-    if (!text && !images.length) throw new Error('This .pptx had no readable content.');
+    if (!text && !images.length) throw new Error('This PowerPoint had no readable content.');
     return { text, images };
   }
-  throw new Error('Use a photo, .docx, .pptx or .txt file.');
+  throw new Error('Use a photo, Word, PowerPoint or text file.');
 }
 
 /* ==========================================================================
    UI PRIMITIVES
    ========================================================================== */
-function Label({ children, style }){
-  return <span style={{ fontFamily: MONO, fontSize: 11, letterSpacing: '0.12em',
-    textTransform: 'uppercase', color: T.muted, ...style }}>{children}</span>;
+function Title({ children, style }){
+  return <div style={{ fontFamily: SANS, fontSize: 21, fontWeight: 700, color: T.ink, letterSpacing: '-0.02em', ...style }}>{children}</div>;
+}
+function Sub({ children, style }){
+  return <div style={{ fontFamily: SANS, fontSize: 13.5, color: T.muted, lineHeight: 1.45, ...style }}>{children}</div>;
+}
+function Chip({ children, colour = T.accent, solid, style }){
+  return (
+    <span style={{ display: 'inline-block', fontFamily: SANS, fontSize: 12, fontWeight: 600,
+      color: solid ? '#fff' : colour, background: solid ? colour : rgba(colour, 0.12),
+      borderRadius: R.pill, padding: '4px 10px', whiteSpace: 'nowrap', ...style }}>{children}</span>
+  );
 }
 
 function Btn({ children, onClick, kind = 'default', disabled, full, style }){
   const base = {
-    fontFamily: MONO, fontSize: 12.5, letterSpacing: '0.09em', textTransform: 'uppercase',
-    fontWeight: 500, padding: '14px 18px', borderRadius: 11,
-    border: `1px solid ${T.rule}`, background: SURFACE.raised, color: T.bone,
-    cursor: disabled ? 'default' : 'pointer', opacity: disabled ? 0.35 : 1,
-    width: full ? '100%' : 'auto', textAlign: 'center',
-    boxShadow: `${SHADOW.btn}, inset 0 1px 0 ${rgba('#FFFFFF', 0.05)}`,
+    fontFamily: SANS, fontSize: 15, fontWeight: 600, letterSpacing: '-0.01em',
+    padding: '14px 20px', borderRadius: R.pill, border: '1px solid transparent',
+    background: T.surface, color: T.ink, cursor: disabled ? 'default' : 'pointer',
+    opacity: disabled ? 0.45 : 1, width: full ? '100%' : 'auto', textAlign: 'center',
+    boxShadow: SH.raised, borderColor: T.border,
   };
   const kinds = {
     default: {},
-    primary: { background: SURFACE.primary, color: T.ink, borderColor: '#F2EEE4', fontWeight: 600,
-               boxShadow: `${SHADOW.lift}, inset 0 -1px 0 ${rgba('#000000', 0.12)}` },
-    danger:  { background: 'transparent', color: T.red, borderColor: rgba(T.red, 0.55), boxShadow: 'none' },
-    ghost:   { background: 'transparent', borderColor: T.rule, boxShadow: 'none' },
-    again:   { background: rgba(T.red, 0.08), color: T.red, borderColor: rgba(T.red, 0.45),
-               boxShadow: `inset 0 1px 0 ${rgba('#FFFFFF', 0.03)}` },
+    primary: { background: T.accent, color: '#fff', borderColor: T.accent, boxShadow: SH.accent },
+    ghost:   { background: 'transparent', boxShadow: 'none', color: T.muted },
+    soft:    { background: T.well, borderColor: 'transparent', boxShadow: 'none' },
+    danger:  { background: rgba(T.red, 0.1), color: T.red, borderColor: 'transparent', boxShadow: 'none' },
+    again:   { background: rgba(T.red, 0.1), color: T.red, borderColor: 'transparent', boxShadow: 'none' },
   };
   return <button className="sf-btn" onClick={disabled ? undefined : onClick} disabled={disabled}
     style={{ ...base, ...kinds[kind], ...style }}>{children}</button>;
@@ -538,46 +540,55 @@ function Btn({ children, onClick, kind = 'default', disabled, full, style }){
 
 function Segmented({ value, onChange, options }){
   return (
-    <div style={{ display: 'flex', gap: 3, background: rgba('#0C1116', 0.7), borderRadius: 12, padding: 3,
-      border: `1px solid ${T.rule}`, boxShadow: `inset 0 2px 5px ${rgba('#000000', 0.35)}` }}>
+    <div style={{ display: 'flex', gap: 3, background: T.well, borderRadius: R.pill, padding: 4 }}>
       {options.map(o => {
         const active = value === o.v;
         return (
           <button key={o.v} className="sf-tap" onClick={() => onChange(o.v)}
-            style={{ flex: 1, padding: '10px 6px', borderRadius: 9, border: 'none', cursor: 'pointer',
-              background: active ? SURFACE.primary : 'transparent', color: active ? T.ink : T.muted,
-              fontFamily: MONO, fontSize: 11.5, letterSpacing: '0.06em', textTransform: 'uppercase',
-              fontWeight: active ? 600 : 400,
-              boxShadow: active ? `0 2px 6px ${rgba('#000000', 0.35)}` : 'none',
-              transition: 'background 180ms, color 180ms, box-shadow 180ms' }}>{o.label}</button>
+            style={{ flex: 1, padding: '10px 6px', borderRadius: R.pill, border: 'none', cursor: 'pointer',
+              background: active ? T.surface : 'transparent', color: active ? T.ink : T.muted,
+              fontFamily: SANS, fontSize: 14, fontWeight: active ? 700 : 500,
+              boxShadow: active ? SH.pop : 'none', transition: 'background 180ms, color 180ms, box-shadow 180ms' }}>
+            {o.label}
+          </button>
         );
       })}
     </div>
   );
 }
 
-function Margin({ colour, inset = 18 }){
+function Card({ children, style, className }){
   return (
-    <div style={{ position: 'absolute', left: 22, top: inset, bottom: inset, width: 2,
-      background: `linear-gradient(to bottom, ${rgba(colour || T.rule, 0.15)}, ${colour || T.rule} 18%, ${colour || T.rule} 82%, ${rgba(colour || T.rule, 0.15)})`,
-      borderRadius: 2 }} />
+    <div className={className} style={{ background: T.surface, borderRadius: R.card,
+      border: `1px solid ${T.border}`, boxShadow: SH.card, ...style }}>{children}</div>
   );
 }
 
-/* ==========================================================================
-   STUDY CARD  —  active recall + confidence + grade
-   ========================================================================== */
-/* "in 4 days" is the only thing that makes Again/Hard/Good/Easy mean anything */
-function intervalWord(days){
-  const d = Math.max(1, Math.round(days));
-  if (d === 1) return 'tomorrow';
-  if (d < 30) return d + ' days';
-  const m = Math.round(d / 30);
-  return m === 1 ? 'a month' : m + ' months';
+/* small square icon tile, like the reference app's list rows */
+function Tile({ colour, glyph, size = 40 }){
+  return (
+    <div style={{ width: size, height: size, borderRadius: 12, background: rgba(colour, 0.14),
+      display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0,
+      color: colour, fontFamily: SANS, fontSize: size * 0.42, fontWeight: 700 }}>{glyph}</div>
+  );
 }
 
+function Icon({ name, active }){
+  const c = active ? T.accent : T.faint;
+  const common = { width: 24, height: 24, viewBox: '0 0 24 24', fill: 'none',
+    stroke: c, strokeWidth: active ? 2.2 : 1.9, strokeLinecap: 'round', strokeLinejoin: 'round' };
+  if (name === 'feed') return <svg {...common}><rect x="3" y="7" width="18" height="13" rx="3.5" /><path d="M7 4h10" /></svg>;
+  if (name === 'create') return <svg {...common}><circle cx="12" cy="12" r="8.5" /><path d="M12 8.5v7M8.5 12h7" /></svg>;
+  if (name === 'decks') return <svg {...common}><path d="M3 7.5A2.5 2.5 0 0 1 5.5 5h3.2l2 2.2h7.8A2.5 2.5 0 0 1 21 9.7v7.8a2.5 2.5 0 0 1-2.5 2.5h-13A2.5 2.5 0 0 1 3 17.5z" /></svg>;
+  if (name === 'stats') return <svg {...common}><path d="M5.5 19.5V12M12 19.5V5M18.5 19.5v-5.5" /></svg>;
+  return <svg {...common}><path d="M4 8h16M4 16h16" /><circle cx="9.5" cy="8" r="2.2" fill={T.surface} /><circle cx="15" cy="16" r="2.2" fill={T.surface} /></svg>;
+}
+
+/* ==========================================================================
+   STUDY CARD
+   ========================================================================== */
 function StudyCard({ card, deck, onGrade, reduceMotion, prog, practice }){
-  const [phase, setPhase] = useState('attempt');   // attempt | reveal
+  const [phase, setPhase] = useState('attempt');
   const [sure, setSure] = useState(null);
   const [pick, setPick] = useState(null);
   const colour = subjectColour(deck.subject);
@@ -585,9 +596,8 @@ function StudyCard({ card, deck, onGrade, reduceMotion, prog, practice }){
 
   useEffect(() => { setPhase('attempt'); setSure(null); setPick(null); }, [card.id]);
 
-  // preview what each grade would do, so the buttons explain themselves
   const previews = useMemo(() => {
-    if (practice) return null;                     // practice doesn't reschedule anything
+    if (practice) return null;
     const confident = isMcq ? (pick === card.answer) : (sure === true);
     const forGrade = (q) => {
       if (q === Q.AGAIN) return 'in a moment';
@@ -598,33 +608,21 @@ function StudyCard({ card, deck, onGrade, reduceMotion, prog, practice }){
   }, [prog, practice, sure, pick, isMcq, card.id, card.answer]);
 
   const grade = (q) => onGrade(q, isMcq ? (pick === card.answer) : (sure === true));
-  const anim = reduceMotion ? {} : { animation: 'sf-in 200ms ease-out' };
+  const anim = reduceMotion ? {} : { animation: 'sf-in 260ms cubic-bezier(.2,.8,.3,1)' };
 
   return (
-    <div className="sf-card" style={{ position: 'relative', background: SURFACE.card, borderRadius: 20,
-      border: `1px solid ${T.rule}`, padding: '22px 20px 20px 42px', minHeight: 400,
-      display: 'flex', flexDirection: 'column', overflow: 'hidden',
-      boxShadow: `${SHADOW.card}, inset 0 1px 0 ${rgba('#FFFFFF', 0.06)}`, ...anim }}>
-
-      {/* ruled paper, behind everything */}
-      <div style={{ position: 'absolute', inset: 0, backgroundImage: RULED,
-        backgroundPosition: '0 62px', opacity: 0.5, pointerEvents: 'none' }} />
-      <Margin colour={colour} inset={0} />
-
-      <div className="flex items-center justify-between" style={{ marginBottom: 20, position: 'relative' }}>
-        <div className="flex flex-col">
-          <span style={{ fontFamily: MONO, fontSize: 10.5, letterSpacing: '0.16em', textTransform: 'uppercase',
-            color: colour, fontWeight: 600 }}>{deck.subject || 'Untitled'}</span>
-          <span style={{ fontFamily: MONO, fontSize: 10, letterSpacing: '0.1em', textTransform: 'uppercase',
-            color: T.faint, marginTop: 3 }}>{deck.topic || ''}</span>
+    <Card style={{ padding: '18px 18px 18px', minHeight: 400, display: 'flex', flexDirection: 'column', ...anim }}>
+      <div className="flex items-center justify-between" style={{ marginBottom: 18 }}>
+        <div className="flex items-center gap-3">
+          <Tile colour={colour} glyph={(deck.subject || '?').trim().charAt(0).toUpperCase()} size={36} />
+          <div>
+            <div style={{ fontFamily: SANS, fontSize: 14, fontWeight: 700, color: T.ink }}>{deck.subject || 'Untitled'}</div>
+            <div style={{ fontFamily: SANS, fontSize: 12.5, color: T.faint }}>{deck.topic || ''}</div>
+          </div>
         </div>
-        <span style={{ fontFamily: MONO, fontSize: 9.5, letterSpacing: '0.12em', textTransform: 'uppercase',
-          color: T.muted, border: `1px solid ${T.rule}`, borderRadius: 20, padding: '4px 9px',
-          background: rgba('#0C1116', 0.5) }}>{TYPE_LABEL[card.type] || 'Card'}</span>
+        <Chip colour={T.muted}>{TYPE_LABEL[card.type] || 'Card'}</Chip>
       </div>
 
-      {/* content sits above the ruled overlay */}
-      <div style={{ position: 'relative', zIndex: 1, display: 'flex', flexDirection: 'column', flex: 1 }}>
       {card.type === 'extended' ? <ExtendedFace card={card} phase={phase} deck={deck} />
         : isMcq ? <McqFace card={card} phase={phase} pick={pick} onPick={(i) => { setPick(i); setPhase('reveal'); }} />
         : card.type === 'short' ? <ShortFace card={card} phase={phase} />
@@ -636,67 +634,65 @@ function StudyCard({ card, deck, onGrade, reduceMotion, prog, practice }){
         {isMcq ? (
           phase === 'reveal'
             ? <GradeRow grade={grade} previews={previews} />
-            : <Label style={{ display: 'block', textAlign: 'center', color: T.faint }}>Tap the answer you think is right</Label>
+            : <Sub style={{ textAlign: 'center' }}>Tap the answer you think is right</Sub>
         ) : phase === 'attempt' && sure === null ? (
           <div>
-            <Label style={{ display: 'block', textAlign: 'center', marginBottom: 10, color: T.faint }}>
-              Answer it in your head first
-            </Label>
+            <Sub style={{ textAlign: 'center', marginBottom: 12 }}>Answer it in your head first</Sub>
             <div className="flex gap-3">
-              <Btn full onClick={() => setSure(true)}>Sure</Btn>
-              <Btn full kind="ghost" onClick={() => setSure(false)}>Unsure</Btn>
+              <Btn full kind="primary" onClick={() => setSure(true)}>I know it</Btn>
+              <Btn full kind="soft" onClick={() => setSure(false)}>Not sure</Btn>
             </div>
           </div>
         ) : phase === 'attempt' ? (
           <Btn full kind="primary" onClick={() => setPhase('reveal')}>
-            {card.type === 'extended' ? 'Reveal model answers' : 'Reveal answer'}
+            {card.type === 'extended' ? 'Show model answers' : 'Show answer'}
           </Btn>
         ) : (
           <GradeRow grade={grade} previews={previews} />
         )}
       </div>
-      </div>
-    </div>
+    </Card>
   );
 }
 
 function GradeRow({ grade, previews }){
   const items = [
-    [Q.AGAIN, 'Again', 'got it wrong', 'again'],
-    [Q.HARD,  'Hard',  'only just',    'default'],
-    [Q.GOOD,  'Good',  'knew it',      'default'],
-    [Q.EASY,  'Easy',  'instantly',    'default'],
+    [Q.AGAIN, 'Again', 'got it wrong', T.red],
+    [Q.HARD,  'Hard',  'only just',    T.amber],
+    [Q.GOOD,  'Good',  'knew it',      T.green],
+    [Q.EASY,  'Easy',  'instantly',    T.accent],
   ];
   return (
     <div>
-      <Label style={{ display: 'block', textAlign: 'center', marginBottom: 10, color: T.faint }}>
-        {previews ? 'How well did you know it? — sets when it comes back' : 'How well did you know it?'}
-      </Label>
+      <Sub style={{ textAlign: 'center', marginBottom: 12 }}>
+        {previews ? 'How well did you know it?' : 'How well did you know it?'}
+      </Sub>
       <div className="grid grid-cols-4 gap-2 sf-stagger">
-        {items.map(([q, label, meaning, kind]) => (
-          <Btn key={q} kind={kind} onClick={() => grade(q)} style={{ padding: '11px 3px', lineHeight: 1.2 }}>
-            <span style={{ display: 'block', fontSize: 12 }}>{label}</span>
-            <span style={{ display: 'block', fontFamily: SANS, fontSize: 9.5, letterSpacing: 0,
-              opacity: 0.6, marginTop: 4, textTransform: 'none', fontWeight: 400 }}>
+        {items.map(([q, label, meaning, c]) => (
+          <button key={q} className="sf-btn" onClick={() => grade(q)}
+            style={{ background: rgba(c, 0.1), border: '1px solid transparent', borderRadius: R.well,
+              padding: '12px 4px', cursor: 'pointer', fontFamily: SANS }}>
+            <span style={{ display: 'block', fontSize: 14, fontWeight: 700, color: c }}>{label}</span>
+            <span style={{ display: 'block', fontSize: 10.5, color: T.faint, marginTop: 3, fontWeight: 500 }}>
               {previews ? previews[q] : meaning}
             </span>
-          </Btn>
+          </button>
         ))}
       </div>
     </div>
   );
 }
 
-const QUESTION = { fontFamily: SERIF, fontSize: 23, lineHeight: 1.42, color: T.bone, letterSpacing: '-0.005em' };
-const ANSWER   = { fontFamily: SANS, fontSize: 16.5, lineHeight: 1.6, color: rgba('#E8E4DA', 0.92) };
-const HAIRLINE = (extra) => ({ marginTop: 20, paddingTop: 18,
-  borderTop: `1px solid ${rgba('#22303A', 0.9)}`, animation: 'sf-reveal 260ms cubic-bezier(.2,.7,.3,1)', ...extra });
+const QUESTION = { fontFamily: SANS, fontSize: 21, fontWeight: 600, lineHeight: 1.4, color: T.ink, letterSpacing: '-0.015em' };
+const ANSWER   = { fontFamily: SANS, fontSize: 16, lineHeight: 1.6, color: T.muted };
+const REVEAL   = { marginTop: 18, paddingTop: 18, borderTop: `1px solid ${T.border}`, animation: 'sf-reveal 280ms cubic-bezier(.2,.8,.3,1)' };
+const PANEL    = { background: T.well, borderRadius: R.well, padding: '13px 15px' };
 
 function FlipFace({ card, phase }){
   return (
     <div>
       <div style={QUESTION}>{card.front}</div>
-      {phase === 'reveal' && <div style={{ ...HAIRLINE(), ...ANSWER }}>{card.back}</div>}
+      {phase === 'reveal' && <div style={{ ...REVEAL, ...ANSWER }}>{card.back}</div>}
     </div>
   );
 }
@@ -706,9 +702,9 @@ function ShortFace({ card, phase }){
     <div>
       <div style={QUESTION}>{card.front}</div>
       {phase === 'reveal' && (
-        <div style={HAIRLINE()}>
-          <Label style={{ color: T.faint }}>Model answer</Label>
-          <div style={{ ...ANSWER, marginTop: 8 }}>{card.back}</div>
+        <div style={REVEAL}>
+          <Chip colour={T.green} style={{ marginBottom: 8 }}>Model answer</Chip>
+          <div style={ANSWER}>{card.back}</div>
         </div>
       )}
     </div>
@@ -717,48 +713,48 @@ function ShortFace({ card, phase }){
 
 function McqFace({ card, phase, pick, onPick }){
   const letters = ['A','B','C','D','E','F'];
+  const revealed = phase === 'reveal';
   return (
     <div>
-      <div style={{ fontFamily: SERIF, fontSize: 21, lineHeight: 1.4, color: T.bone, marginBottom: 14 }}>{card.front}</div>
+      <div style={{ ...QUESTION, marginBottom: 16 }}>{card.front}</div>
       <div className="flex flex-col gap-2">
         {(card.options || []).map((opt, i) => {
-          const revealed = phase === 'reveal';
           const isAnswer = i === card.answer;
           const isPick = pick === i;
-          let border = T.rule, col = T.bone, bg = SURFACE.raised, weight = 400, dim = 1;
-          if (revealed && isAnswer){ border = rgba(T.bone, 0.55); weight = 600; bg = rgba(T.bone, 0.07); }
-          if (revealed && isPick && !isAnswer){ border = rgba(T.red, 0.55); col = T.red; bg = rgba(T.red, 0.07); }
-          if (revealed && !isAnswer && !isPick) dim = 0.45;
+          let bg = T.surface, border = T.border, col = T.ink, dim = 1;
+          if (revealed && isAnswer){ bg = rgba(T.green, 0.1); border = rgba(T.green, 0.5); col = T.ink; }
+          else if (revealed && isPick){ bg = rgba(T.red, 0.1); border = rgba(T.red, 0.5); col = T.ink; }
+          else if (revealed){ dim = 0.5; }
           return (
             <button key={i} className="sf-tap" disabled={revealed} onClick={() => onPick(i)}
-              style={{ display: 'flex', gap: 11, alignItems: 'flex-start', textAlign: 'left',
-                background: bg, border: `1px solid ${border}`, borderRadius: 12, padding: '13px 14px',
+              style={{ display: 'flex', gap: 12, alignItems: 'center', textAlign: 'left',
+                background: bg, border: `1.5px solid ${border}`, borderRadius: R.well, padding: '13px 14px',
                 cursor: revealed ? 'default' : 'pointer', color: col, opacity: dim,
-                boxShadow: revealed ? 'none' : `${SHADOW.btn}, inset 0 1px 0 ${rgba('#FFFFFF', 0.04)}`,
-                transition: 'border-color 160ms, opacity 200ms, background 160ms' }}>
-              <span style={{ fontFamily: MONO, fontSize: 11, color: T.faint, marginTop: 3, letterSpacing: '0.06em' }}>{letters[i]}</span>
-              <span style={{ fontFamily: SANS, fontSize: 15.5, lineHeight: 1.45, flex: 1, fontWeight: weight }}>{opt}</span>
-              {revealed && isAnswer && <span style={{ color: T.bone, fontSize: 14 }}>✓</span>}
-              {revealed && isPick && !isAnswer && <span style={{ color: T.red, fontSize: 14 }}>✕</span>}
+                transition: 'border-color 160ms, background 160ms, opacity 200ms' }}>
+              <span style={{ width: 24, height: 24, borderRadius: 12, background: T.well, flexShrink: 0,
+                display: 'flex', alignItems: 'center', justifyContent: 'center',
+                fontFamily: SANS, fontSize: 12, fontWeight: 700, color: T.muted }}>{letters[i]}</span>
+              <span style={{ fontFamily: SANS, fontSize: 15.5, lineHeight: 1.45, flex: 1, fontWeight: 500 }}>{opt}</span>
+              {revealed && isAnswer && <span style={{ color: T.green, fontSize: 16, fontWeight: 700 }}>✓</span>}
+              {revealed && isPick && !isAnswer && <span style={{ color: T.red, fontSize: 16, fontWeight: 700 }}>✕</span>}
             </button>
           );
         })}
       </div>
-      {phase === 'reveal' && card.why && (
-        <div style={{ marginTop: 14, paddingTop: 14, borderTop: `1px solid ${T.rule}`,
-          fontFamily: SANS, fontSize: 14, lineHeight: 1.5, color: T.bone, animation: 'sf-in 200ms ease-out' }}>
-          {card.why}
+      {revealed && card.why && (
+        <div style={{ ...REVEAL }}>
+          <div style={{ ...PANEL, ...ANSWER, fontSize: 14.5 }}>{card.why}</div>
         </div>
       )}
     </div>
   );
 }
 
-function Rung({ tier, text }){
+function Rung({ tier, text, colour }){
   return (
-    <div style={{ marginBottom: 14 }}>
-      <Label style={{ color: tier === 'Excellence' ? T.bone : T.faint }}>{tier}</Label>
-      <div style={{ fontFamily: SANS, fontSize: 15, lineHeight: 1.5, color: T.bone, marginTop: 4 }}>
+    <div style={{ marginBottom: 12 }}>
+      <Chip colour={colour} style={{ marginBottom: 6 }}>{tier}</Chip>
+      <div style={{ fontFamily: SANS, fontSize: 15, lineHeight: 1.55, color: T.muted }}>
         {text || <span style={{ color: T.faint }}>—</span>}
       </div>
     </div>
@@ -785,31 +781,33 @@ function ExtendedFace({ card, phase, deck }){
 
   return (
     <div>
-      <div className="flex items-center gap-2" style={{ marginBottom: 10, flexWrap: 'wrap' }}>
-        <span style={{ fontFamily: MONO, fontSize: 12, letterSpacing: '0.1em', textTransform: 'uppercase',
-          color: T.ink, background: T.bone, padding: '3px 8px', borderRadius: 6 }}>{card.verb}</span>
-        <Label style={{ color: T.faint }}>{card.marks} marks</Label>
+      <div className="flex items-center gap-2" style={{ marginBottom: 12, flexWrap: 'wrap' }}>
+        <Chip colour={T.accent} solid>{card.verb}</Chip>
+        <Chip colour={T.muted}>{card.marks} marks</Chip>
       </div>
 
-      <div style={{ fontFamily: SERIF, fontSize: 20, lineHeight: 1.45, color: T.bone }}>{card.prompt}</div>
+      <div style={QUESTION}>{card.prompt}</div>
 
       {phase === 'attempt' && (
         <div style={{ marginTop: 16 }}>
           {!marking && (
-            <button className="sf-tap" onClick={() => setMarking(true)} style={{ background: 'none', border: 'none', padding: 0, cursor: 'pointer' }}>
-              <Label style={{ color: T.muted, textDecoration: 'underline' }}>Mark my written answer</Label>
-            </button>
+            <Btn kind="soft" onClick={() => setMarking(true)} style={{ fontSize: 14, padding: '11px 16px' }}>
+              Mark my written answer
+            </Btn>
           )}
           {marking && (
             <div>
               <textarea value={answer} onChange={e => setAnswer(e.target.value)} placeholder="Write your full answer…" rows={5}
-                style={{ width: '100%', background: T.ink, color: T.bone, border: `1px solid ${T.rule}`, borderRadius: 12,
-                  padding: 12, fontFamily: SANS, fontSize: 15, lineHeight: 1.5, resize: 'vertical', outline: 'none' }} />
-              <div className="flex gap-2" style={{ marginTop: 8 }}>
-                <Btn onClick={doMark} disabled={busy || !answer.trim()}>{busy ? 'Marking…' : 'Mark it'}</Btn>
-                <Btn kind="ghost" onClick={() => { setMarking(false); setResult(null); setErr(''); }}>Close</Btn>
+                style={{ width: '100%', background: T.well, color: T.ink, border: `1px solid ${T.border}`,
+                  borderRadius: R.well, padding: 14, fontFamily: SANS, fontSize: 15, lineHeight: 1.55,
+                  resize: 'vertical', outline: 'none' }} />
+              <div className="flex gap-2" style={{ marginTop: 10 }}>
+                <Btn kind="primary" onClick={doMark} disabled={busy || !answer.trim()} style={{ fontSize: 14, padding: '11px 18px' }}>
+                  {busy ? 'Marking…' : 'Mark it'}
+                </Btn>
+                <Btn kind="ghost" onClick={() => { setMarking(false); setResult(null); setErr(''); }} style={{ fontSize: 14, padding: '11px 14px' }}>Close</Btn>
               </div>
-              {err && <div style={{ marginTop: 10, fontFamily: MONO, fontSize: 12, color: T.red }}>{err}</div>}
+              {err && <Sub style={{ marginTop: 10, color: T.red }}>{err}</Sub>}
               {result && <MarkResult r={result} />}
             </div>
           )}
@@ -817,20 +815,20 @@ function ExtendedFace({ card, phase, deck }){
       )}
 
       {phase === 'reveal' && (
-        <div style={{ marginTop: 18, paddingTop: 16, borderTop: `1px solid ${T.rule}`, animation: 'sf-in 200ms ease-out' }}>
-          <Rung tier="Achieved" text={card.achieved} />
-          <Rung tier="Merit" text={card.merit} />
-          <Rung tier="Excellence" text={card.excellence} />
+        <div style={REVEAL}>
+          <Rung tier="Achieved" text={card.achieved} colour={T.muted} />
+          <Rung tier="Merit" text={card.merit} colour={T.accent} />
+          <Rung tier="Excellence" text={card.excellence} colour={T.green} />
           {card.skeleton && (
-            <div style={{ marginTop: 12, padding: '10px 12px', background: T.ink, borderRadius: 10, border: `1px solid ${T.rule}` }}>
-              <Label style={{ color: T.faint }}>Structure that earns it</Label>
-              <div style={{ fontFamily: MONO, fontSize: 13, color: T.bone, marginTop: 4 }}>{card.skeleton}</div>
+            <div style={{ ...PANEL, marginTop: 14 }}>
+              <Chip colour={T.accent} style={{ marginBottom: 6 }}>Structure that earns it</Chip>
+              <div style={{ fontFamily: SANS, fontSize: 14.5, color: T.ink, fontWeight: 500, lineHeight: 1.5 }}>{card.skeleton}</div>
             </div>
           )}
           {card.pitfall && (
-            <div style={{ marginTop: 10 }}>
-              <Label style={{ color: T.red }}>What loses marks here</Label>
-              <div style={{ fontFamily: SANS, fontSize: 14, color: T.bone, marginTop: 4, lineHeight: 1.5 }}>{card.pitfall}</div>
+            <div style={{ ...PANEL, marginTop: 10, background: rgba(T.red, 0.07) }}>
+              <Chip colour={T.red} style={{ marginBottom: 6 }}>What loses marks here</Chip>
+              <div style={{ fontFamily: SANS, fontSize: 14.5, color: T.muted, lineHeight: 1.5 }}>{card.pitfall}</div>
             </div>
           )}
         </div>
@@ -840,33 +838,33 @@ function ExtendedFace({ card, phase, deck }){
 }
 
 function MarkResult({ r }){
-  const gc = r.grade === 'Excellence' || r.grade === 'Merit' ? T.bone : r.grade === 'Achieved' ? T.muted : T.red;
+  const gc = r.grade === 'Excellence' ? T.green : r.grade === 'Merit' ? T.accent : r.grade === 'Achieved' ? T.muted : T.red;
   return (
-    <div style={{ marginTop: 12, padding: '12px 14px', background: T.ink, borderRadius: 12, border: `1px solid ${T.rule}`, animation: 'sf-in 200ms ease-out' }}>
-      <Label style={{ color: gc }}>Marked: {r.grade}</Label>
+    <div style={{ ...PANEL, marginTop: 12, animation: 'sf-reveal 260ms cubic-bezier(.2,.8,.3,1)' }}>
+      <Chip colour={gc} solid>{r.grade}</Chip>
       {Array.isArray(r.hit) && r.hit.length > 0 && (
-        <div style={{ marginTop: 8 }}>
-          <Label style={{ color: T.faint }}>Credit for</Label>
-          <ul style={{ margin: '4px 0 0', paddingLeft: 16, fontFamily: SANS, fontSize: 14, color: T.bone, lineHeight: 1.5 }}>
+        <div style={{ marginTop: 10 }}>
+          <Sub style={{ fontWeight: 700, color: T.ink }}>What earned credit</Sub>
+          <ul style={{ margin: '6px 0 0', paddingLeft: 18, fontFamily: SANS, fontSize: 14.5, color: T.muted, lineHeight: 1.55 }}>
             {r.hit.map((h, i) => <li key={i}>{h}</li>)}
           </ul>
         </div>
       )}
       {Array.isArray(r.missing) && r.missing.length > 0 && (
-        <div style={{ marginTop: 8 }}>
-          <Label style={{ color: T.faint }}>To reach the next grade</Label>
-          <ul style={{ margin: '4px 0 0', paddingLeft: 16, fontFamily: SANS, fontSize: 14, color: T.bone, lineHeight: 1.5 }}>
+        <div style={{ marginTop: 10 }}>
+          <Sub style={{ fontWeight: 700, color: T.ink }}>To reach the next grade</Sub>
+          <ul style={{ margin: '6px 0 0', paddingLeft: 18, fontFamily: SANS, fontSize: 14.5, color: T.muted, lineHeight: 1.55 }}>
             {r.missing.map((m, i) => <li key={i}>{m}</li>)}
           </ul>
         </div>
       )}
-      {r.lift && <div style={{ marginTop: 8, fontFamily: SERIF, fontSize: 15, color: T.bone, lineHeight: 1.5 }}>{r.lift}</div>}
+      {r.lift && <div style={{ marginTop: 10, fontFamily: SANS, fontSize: 15, fontWeight: 600, color: T.ink, lineHeight: 1.5 }}>{r.lift}</div>}
     </div>
   );
 }
 
 /* ==========================================================================
-   FEED  —  scheduled cards first, then rolls straight on. Never stops.
+   FEED
    ========================================================================== */
 const perDay = (s) => (s && s.newPerDay != null) ? s.newPerDay : 12;
 
@@ -899,7 +897,7 @@ function buildQueue(decks, progress, settings, stats){
     const lanes = Object.values(bySub);
     if (lanes.length > 1){
       const out = [];
-      const cap = items.length * lanes.length + lanes.length;   // explicit bound; no n % 0
+      const cap = items.length * lanes.length + lanes.length;
       let n = 0;
       while (out.length < items.length && n < cap){
         const lane = lanes[n % lanes.length];
@@ -921,13 +919,12 @@ function Feed({ decks, progress, settings, stats, onGrade, reduceMotion }){
 
   const [queue, setQueue] = useState(() => buildQueue(decks, progress, settings, stats));
   const [reviewed, setReviewed] = useState(0);
-  const [pool, setPool] = useState([]);     // shuffled practice pool, refilled forever
+  const [pool, setPool] = useState([]);
   const [pIdx, setPIdx] = useState(0);
 
   const scheduledLeft = queue.length;
   const inPractice = scheduledLeft === 0;
 
-  // once the scheduled cards run out, roll straight on — no wall, no prompt
   useEffect(() => {
     if (inPractice && pool.length === 0 && allItems.length > 0){
       setPool(shuffle(allItems));
@@ -943,28 +940,28 @@ function Feed({ decks, progress, settings, stats, onGrade, reduceMotion }){
     setReviewed(r => r + 1);
     if (reinsert){
       const nq = rest.slice();
-      nq.splice(Math.min(rest.length, 5), 0, head);   // ~5 later, same session
+      nq.splice(Math.min(rest.length, 5), 0, head);
       setQueue(nq);
     } else setQueue(rest);
   };
 
-  // extra practice does NOT write the scheduler — it must not push real intervals out
   const gradePractice = (q, sure) => {
     const it = pool[pIdx];
     if (!it) return;
     onGrade(it.card, it.deck, q, sure, true);
     setReviewed(r => r + 1);
-    const next = pIdx + 1;                 // computed before any setter runs
+    const next = pIdx + 1;
     if (next >= pool.length){ setPool(shuffle(allItems)); setPIdx(0); }
     else setPIdx(next);
   };
 
   if (allItems.length === 0){
     return (
-      <div className="flex flex-col items-center justify-center" style={{ minHeight: 420, textAlign: 'center', padding: 24 }}>
-        <div style={{ fontFamily: SERIF, fontSize: 20, color: T.bone }}>No cards yet.</div>
-        <Label style={{ color: T.faint, display: 'block', marginTop: 8 }}>Make some on the New tab.</Label>
-      </div>
+      <Card style={{ padding: '44px 24px', textAlign: 'center' }}>
+        <div style={{ fontSize: 40, marginBottom: 12 }}>🗂️</div>
+        <Title>No cards yet</Title>
+        <Sub style={{ marginTop: 6 }}>Head to <b>Create</b> to make your first deck.</Sub>
+      </Card>
     );
   }
 
@@ -973,9 +970,9 @@ function Feed({ decks, progress, settings, stats, onGrade, reduceMotion }){
     if (!it) return <div style={{ minHeight: 420 }} />;
     return (
       <div>
-        <div className="flex items-center justify-between" style={{ marginBottom: 14 }}>
-          <Label style={{ color: T.faint }}>Extra practice · not scheduled</Label>
-          {reviewed > 0 && <Label style={{ color: T.faint }}>{reviewed} today</Label>}
+        <div className="flex items-center justify-between" style={{ marginBottom: 12, padding: '0 4px' }}>
+          <Chip colour={T.green}>Extra practice</Chip>
+          <Sub style={{ fontSize: 12.5 }}>{reviewed} done today</Sub>
         </div>
         <StudyCard key={it.card.id + ':' + pIdx} card={it.card} deck={it.deck} onGrade={gradePractice}
           reduceMotion={reduceMotion} prog={progress[it.card.id]} practice={true} />
@@ -984,18 +981,15 @@ function Feed({ decks, progress, settings, stats, onGrade, reduceMotion }){
   }
 
   const done = reviewed;
+  const pct = (done + scheduledLeft) ? (done / (done + scheduledLeft)) * 100 : 0;
   return (
     <div>
-      <div className="flex items-center gap-3" style={{ marginBottom: 14 }}>
-        <div style={{ flex: 1, height: 3, background: rgba('#22303A', 0.9), borderRadius: 3, overflow: 'hidden' }}>
-          <div style={{ height: '100%', width: `${done + scheduledLeft ? (done / (done + scheduledLeft)) * 100 : 0}%`,
-            background: `linear-gradient(90deg, ${rgba(T.bone, 0.55)}, ${T.bone})`,
-            boxShadow: `0 0 10px ${rgba(T.bone, 0.35)}`,
-            transition: reduceMotion ? 'none' : 'width 320ms cubic-bezier(.2,.7,.3,1)' }} />
+      <div className="flex items-center gap-3" style={{ marginBottom: 12, padding: '0 4px' }}>
+        <div style={{ flex: 1, height: 8, background: T.well, borderRadius: R.pill, overflow: 'hidden' }}>
+          <div style={{ height: '100%', width: `${pct}%`, background: T.green, borderRadius: R.pill,
+            transition: reduceMotion ? 'none' : 'width 340ms cubic-bezier(.2,.8,.3,1)' }} />
         </div>
-        <span style={{ fontFamily: MONO, fontSize: 9.5, letterSpacing: '0.12em', color: T.faint }}>
-          {scheduledLeft} LEFT
-        </span>
+        <Sub style={{ fontSize: 12.5, fontWeight: 600 }}>{scheduledLeft} left</Sub>
       </div>
       <StudyCard key={queue[0].card.id} card={queue[0].card} deck={queue[0].deck} onGrade={gradeScheduled}
         reduceMotion={reduceMotion} prog={progress[queue[0].card.id]} practice={false} />
@@ -1006,9 +1000,12 @@ function Feed({ decks, progress, settings, stats, onGrade, reduceMotion }){
 /* ==========================================================================
    CREATE
    ========================================================================== */
+const INPUT = { width: '100%', background: T.well, color: T.ink, border: `1px solid ${T.border}`,
+  borderRadius: R.well, padding: '13px 14px', fontFamily: SANS, lineHeight: 1.55, outline: 'none' };
+
 function Create({ onSave, settings }){
-  const [mode, setMode] = useState('generate');   // generate | manual
-  const [cardType, setCardType] = useState('mix'); // mix | extended | flip
+  const [mode, setMode] = useState('generate');
+  const [cardType, setCardType] = useState('mix');
   const [source, setSource] = useState('');
   const [level, setLevel] = useState('NCEA Level 1');
   const [busy, setBusy] = useState(false);
@@ -1042,7 +1039,7 @@ function Create({ onSave, settings }){
   };
 
   const run = async () => {
-    const lvl = level.trim() || 'NCEA Level 1';   // "Something else…" left blank
+    const lvl = level.trim() || 'NCEA Level 1';
     if (mode === 'manual'){
       const cards = parseManual(source);
       if (!cards.length){ setErr('Use “question | answer”, one per line.'); return; }
@@ -1067,9 +1064,8 @@ function Create({ onSave, settings }){
       }
       cards = dedupeCards(cards);
       if (!cards.length){
-        setErr(lastApiError
-          ? `Nothing came back — ${lastApiError}.`
-          : 'Nothing came back. Try clearer notes, a narrower topic, or a sharper photo.');
+        setErr(lastApiError ? `Nothing came back — ${lastApiError}.`
+                            : 'Nothing came back. Try clearer notes, a narrower topic, or a sharper photo.');
         setBusy(false); return;
       }
       setMeta({ subject: guessSubject(source), topic: guessTopic(source), standard: lvl });
@@ -1086,79 +1082,76 @@ function Create({ onSave, settings }){
 
   const progText = !prog ? 'Working…'
     : prog.phase === 'prep' ? 'Preparing images…'
-    : prog.n > 0 ? `${prog.phase === 'images' ? 'Reading images' : 'Reading notes'} · batch ${prog.i} of ${prog.n}`
+    : prog.n > 0 ? `${prog.phase === 'images' ? 'Reading images' : 'Reading notes'} · ${prog.i} of ${prog.n}`
     : 'Working…';
 
   return (
-    <div style={{ padding: '4px 2px' }}>
-      <Label style={{ color: T.faint }}>New cards</Label>
+    <div>
+      <Title style={{ marginBottom: 14 }}>Make cards</Title>
 
-      <div style={{ margin: '12px 0' }}>
-        <Segmented value={mode} onChange={setMode} options={[{ v: 'generate', label: 'Generate' }, { v: 'manual', label: 'Manual' }]} />
-      </div>
+      <Segmented value={mode} onChange={setMode}
+        options={[{ v: 'generate', label: 'Generate' }, { v: 'manual', label: 'Type them' }]} />
 
       {mode === 'generate' && (
-        <div style={{ marginBottom: 12 }}>
+        <div style={{ marginTop: 10 }}>
           <Segmented value={cardType} onChange={setCardType}
-            options={[{ v: 'mix', label: 'Mixed' }, { v: 'extended', label: 'Extended' }, { v: 'flip', label: 'Flip' }]} />
+            options={[{ v: 'mix', label: 'Mixed' }, { v: 'extended', label: 'Long' }, { v: 'flip', label: 'Quick' }]} />
         </div>
       )}
 
       {mode === 'generate' && (
-        <div style={{ marginBottom: 12 }}>
+        <Card style={{ padding: 14, marginTop: 14, boxShadow: SH.raised }}>
           <input ref={fileRef} type="file" accept="image/*,.docx,.pptx,.txt" multiple onChange={onFiles} style={{ display: 'none' }} />
-          <Btn full kind="ghost" onClick={() => fileRef.current && fileRef.current.click()}>Attach photo / Word / PowerPoint</Btn>
-          {attaching && <Label style={{ color: T.muted, display: 'block', marginTop: 8 }}>{attaching}</Label>}
+          <Btn full kind="soft" onClick={() => fileRef.current && fileRef.current.click()}>
+            📎  Add photo, Word or PowerPoint
+          </Btn>
+          {attaching && <Sub style={{ marginTop: 10, textAlign: 'center' }}>{attaching}</Sub>}
           {!attaching && images.length > 0 && (
-            <div className="flex items-center justify-between" style={{ marginTop: 8 }}>
-              <Label style={{ color: T.muted }}>{images.length} image{images.length > 1 ? 's' : ''} attached{images.length > 12 ? ' (first 12 used)' : ''}</Label>
-              <button className="sf-tap" onClick={() => setImages([])} style={{ background: 'none', border: 'none', cursor: 'pointer', padding: 0 }}>
-                <Label style={{ color: T.red }}>Clear</Label>
-              </button>
+            <div className="flex items-center justify-between" style={{ marginTop: 10 }}>
+              <Chip colour={T.green}>{images.length} image{images.length > 1 ? 's' : ''} added{images.length > 12 ? ' (first 12 used)' : ''}</Chip>
+              <button className="sf-tap" onClick={() => setImages([])}
+                style={{ background: 'none', border: 'none', cursor: 'pointer', fontFamily: SANS, fontSize: 13, fontWeight: 600, color: T.red }}>Clear</button>
             </div>
           )}
           {!attaching && images.length === 0 && (
-            <Label style={{ color: T.faint, display: 'block', marginTop: 8 }}>Photos, or the text and pictures inside a file — any size.</Label>
+            <Sub style={{ marginTop: 10, textAlign: 'center', fontSize: 12.5 }}>Any size — it only sends what's readable</Sub>
           )}
-        </div>
+        </Card>
       )}
 
       <textarea value={source} onChange={e => setSource(e.target.value)}
-        placeholder={mode === 'manual' ? 'question | answer\nquestion | answer' : 'Paste your notes, or type a topic like “rates of reaction”…'}
-        rows={8}
-        style={{ width: '100%', background: T.paper, color: T.bone, border: `1px solid ${T.rule}`, borderRadius: 12,
-          padding: 14, fontFamily: mode === 'manual' ? MONO : SANS, fontSize: 15, lineHeight: 1.5, resize: 'vertical', outline: 'none' }} />
+        placeholder={mode === 'manual' ? 'question | answer\nquestion | answer' : 'Paste your notes, or just type a topic like “rates of reaction”…'}
+        rows={7}
+        style={{ ...INPUT, marginTop: 14, fontSize: 15, resize: 'vertical' }} />
 
       {mode === 'generate' && (
-        <div style={{ marginTop: 12 }}>
-          <Label style={{ color: T.faint }}>Pitch the questions at</Label>
-          <Label style={{ color: T.faint, display: 'block', marginTop: 3, textTransform: 'none', letterSpacing: 0, fontFamily: SANS, fontSize: 12 }}>
-            Sets how hard the questions are and what the marking expects.
-          </Label>
-          <div style={{ position: 'relative', marginTop: 6 }}>
+        <div style={{ marginTop: 14 }}>
+          <div style={{ fontFamily: SANS, fontSize: 14, fontWeight: 700, color: T.ink }}>Pitch the questions at</div>
+          <Sub style={{ marginTop: 2, fontSize: 12.5 }}>Sets how hard they are and what the marking expects.</Sub>
+          <div style={{ position: 'relative', marginTop: 8 }}>
             <select value={LEVEL_PRESETS.includes(level) ? level : '__other'}
               onChange={e => setLevel(e.target.value === '__other' ? '' : e.target.value)}
-              style={{ width: '100%', background: T.paper, color: T.bone, border: `1px solid ${T.rule}`,
-                borderRadius: 10, padding: '11px 34px 11px 12px', fontFamily: MONO, outline: 'none',
-                appearance: 'none', WebkitAppearance: 'none' }}>
-              {LEVEL_PRESETS.map(p => <option key={p} value={p} style={{ background: T.paper }}>{p}</option>)}
-              <option value="__other" style={{ background: T.paper }}>Something else…</option>
+              style={{ ...INPUT, paddingRight: 38, fontWeight: 500, appearance: 'none', WebkitAppearance: 'none' }}>
+              {LEVEL_PRESETS.map(p => <option key={p} value={p}>{p}</option>)}
+              <option value="__other">Something else…</option>
             </select>
-            {/* appearance:none removes the native arrow — put one back, or it reads as a dead text box */}
-            <span style={{ position: 'absolute', right: 13, top: '50%', transform: 'translateY(-50%)',
-              color: T.muted, fontSize: 11, pointerEvents: 'none' }}>▼</span>
+            <span style={{ position: 'absolute', right: 15, top: '50%', transform: 'translateY(-50%)',
+              color: T.faint, fontSize: 11, pointerEvents: 'none' }}>▼</span>
           </div>
           {!LEVEL_PRESETS.includes(level) && (
             <input value={level} onChange={e => setLevel(e.target.value)} autoFocus
-              placeholder="e.g. IB Diploma, Year 12 Physics, first-year uni"
-              style={{ width: '100%', marginTop: 6, background: T.paper, color: T.bone, border: `1px solid ${T.rule}`,
-                borderRadius: 10, padding: '10px 12px', fontFamily: SANS, fontSize: 14, outline: 'none' }} />
+              placeholder="e.g. IB Diploma, Year 12 Physics"
+              style={{ ...INPUT, marginTop: 8, fontSize: 15 }} />
           )}
         </div>
       )}
 
-      {err && <div style={{ marginTop: 12, fontFamily: MONO, fontSize: 12, color: T.red }}>{err}</div>}
-      {busy && <div style={{ marginTop: 12 }}><Label style={{ color: T.muted }}>{progText}</Label></div>}
+      {err && (
+        <div style={{ marginTop: 14, padding: '12px 14px', borderRadius: R.well, background: rgba(T.red, 0.09) }}>
+          <Sub style={{ color: T.red, fontWeight: 500 }}>{err}</Sub>
+        </div>
+      )}
+      {busy && <Sub style={{ marginTop: 14, textAlign: 'center', fontWeight: 600 }}>{progText}</Sub>}
 
       <div style={{ marginTop: 16 }}>
         <Btn full kind="primary" onClick={run} disabled={busy}>
@@ -1183,56 +1176,61 @@ function guessTopic(text){
 }
 
 function draftPreview(d){
-  if (d.type === 'extended') return { tag: `${d.verb} · ${d.marks}m`, main: d.prompt, sub: 'A: ' + d.achieved };
+  if (d.type === 'extended') return { tag: `${d.verb} · ${d.marks} marks`, main: d.prompt, sub: d.achieved };
   if (d.type === 'mcq') return { tag: 'Multiple choice', main: d.front, sub: '✓ ' + (d.options[d.answer] || '') };
   if (d.type === 'short') return { tag: 'Short answer', main: d.front, sub: d.back };
-  if (d.type === 'cloze') return { tag: 'Cloze', main: d.front, sub: d.back };
+  if (d.type === 'cloze') return { tag: 'Fill the blank', main: d.front, sub: d.back };
   return { tag: 'Flip', main: d.front, sub: d.back };
 }
 
 function DraftReview({ drafts, setDrafts, meta, setMeta, onSave, onCancel }){
   const kept = drafts.filter(d => d.keep).length;
   const toggle = (id) => setDrafts(drafts.map(d => d.id === id ? { ...d, keep: !d.keep } : d));
+  const colour = subjectColour(meta.subject);
 
   return (
-    <div style={{ padding: '4px 2px' }}>
-      <div className="flex items-center justify-between" style={{ marginBottom: 12 }}>
-        <Label style={{ color: T.faint }}>Review · {kept} of {drafts.length} kept</Label>
-        <button className="sf-tap" onClick={onCancel} style={{ background: 'none', border: 'none', cursor: 'pointer' }}>
-          <Label style={{ color: T.muted }}>Discard all</Label>
+    <div>
+      <div className="flex items-center justify-between" style={{ marginBottom: 14 }}>
+        <Title>Check them over</Title>
+        <button className="sf-tap" onClick={onCancel}
+          style={{ background: 'none', border: 'none', cursor: 'pointer', fontFamily: SANS, fontSize: 14, fontWeight: 600, color: T.red }}>
+          Discard
         </button>
       </div>
+      <Sub style={{ marginBottom: 14 }}>Tap a card to drop it. {kept} of {drafts.length} kept.</Sub>
 
-      <div className="grid grid-cols-3 gap-2" style={{ marginBottom: 14 }}>
-        {['subject','topic','standard'].map(k => (
-          <div key={k}>
-            <Label style={{ color: T.faint }}>{k}</Label>
-            <input value={meta[k]} onChange={e => setMeta({ ...meta, [k]: e.target.value })}
-              style={{ width: '100%', marginTop: 4, background: T.paper, color: T.bone, border: `1px solid ${T.rule}`,
-                borderRadius: 8, padding: '8px 10px', fontFamily: MONO, fontSize: 12, outline: 'none' }} />
-          </div>
-        ))}
-      </div>
+      <Card style={{ padding: 14, marginBottom: 14, boxShadow: SH.raised }}>
+        <div className="grid grid-cols-3 gap-2">
+          {['subject','topic','standard'].map(k => (
+            <div key={k}>
+              <div style={{ fontFamily: SANS, fontSize: 12, fontWeight: 700, color: T.muted, textTransform: 'capitalize', marginBottom: 5 }}>{k}</div>
+              <input value={meta[k]} onChange={e => setMeta({ ...meta, [k]: e.target.value })}
+                style={{ ...INPUT, padding: '9px 10px', fontSize: 13 }} />
+            </div>
+          ))}
+        </div>
+      </Card>
 
       <div className="flex flex-col gap-2" style={{ marginBottom: 16 }}>
         {drafts.map(d => {
           const p = draftPreview(d);
           return (
             <button key={d.id} className="sf-tap" onClick={() => toggle(d.id)}
-              style={{ textAlign: 'left', position: 'relative', background: T.paper,
-                border: `1px solid ${d.keep ? T.rule : 'transparent'}`, borderRadius: 12,
-                padding: '14px 14px 14px 30px', opacity: d.keep ? 1 : 0.4, cursor: 'pointer' }}>
-              <Margin colour={subjectColour(meta.subject)} />
-              <Label style={{ color: T.faint }}>{p.tag}</Label>
-              <div style={{ fontFamily: SERIF, fontSize: 16, color: T.bone, marginTop: 4, lineHeight: 1.4 }}>{p.main}</div>
-              {p.sub && <div style={{ fontFamily: SANS, fontSize: 13, color: T.muted, marginTop: 6, lineHeight: 1.45 }}>{p.sub}</div>}
-              {!d.keep && <Label style={{ color: T.red, position: 'absolute', top: 12, right: 12 }}>dropped</Label>}
+              style={{ textAlign: 'left', background: T.surface, border: `1.5px solid ${d.keep ? T.border : 'transparent'}`,
+                borderRadius: R.card, padding: 14, opacity: d.keep ? 1 : 0.42, cursor: 'pointer',
+                boxShadow: d.keep ? SH.raised : 'none' }}>
+              <div className="flex items-center justify-between" style={{ marginBottom: 7 }}>
+                <Chip colour={colour}>{p.tag}</Chip>
+                {!d.keep && <Chip colour={T.red}>removed</Chip>}
+              </div>
+              <div style={{ fontFamily: SANS, fontSize: 15.5, fontWeight: 600, color: T.ink, lineHeight: 1.4 }}>{p.main}</div>
+              {p.sub && <Sub style={{ marginTop: 5, fontSize: 13.5 }}>{p.sub}</Sub>}
             </button>
           );
         })}
       </div>
 
-      <Btn full kind="primary" onClick={onSave} disabled={!kept}>Save deck · {kept} cards</Btn>
+      <Btn full kind="primary" onClick={onSave} disabled={!kept}>Save {kept} cards</Btn>
     </div>
   );
 }
@@ -1251,34 +1249,41 @@ function Decks({ decks, progress, onEditCard, onDeleteCard, onDeleteDeck }){
   }
 
   if (!decks.length){
-    return <div style={{ padding: 24, textAlign: 'center' }}>
-      <div style={{ fontFamily: SERIF, fontSize: 20, color: T.bone }}>No decks yet.</div>
-      <Label style={{ color: T.faint, display: 'block', marginTop: 8 }}>Make some cards to begin.</Label>
-    </div>;
+    return (
+      <Card style={{ padding: '44px 24px', textAlign: 'center' }}>
+        <div style={{ fontSize: 40, marginBottom: 12 }}>📚</div>
+        <Title>No decks yet</Title>
+        <Sub style={{ marginTop: 6 }}>Make some cards and they'll show up here.</Sub>
+      </Card>
+    );
   }
 
   return (
-    <div className="flex flex-col gap-2" style={{ padding: '4px 2px' }}>
-      <Label style={{ color: T.faint }}>Decks</Label>
-      {decks.map(d => {
-        const dueN = d.cards.filter(c => { const p = progress[c.id]; return p && p.seen && p.due <= TODAY(); }).length;
-        const flagN = d.cards.filter(c => { const p = progress[c.id]; return p && p.flagged; }).length;
-        return (
-          <button key={d.id} className="sf-tap" onClick={() => setOpenId(d.id)}
-            style={{ position: 'relative', textAlign: 'left', background: SURFACE.card, border: `1px solid ${T.rule}`,
-              borderRadius: 14, padding: '15px 14px 15px 32px', cursor: 'pointer',
-              boxShadow: `${SHADOW.btn}, inset 0 1px 0 ${rgba('#FFFFFF', 0.04)}` }}>
-            <Margin colour={subjectColour(d.subject)} />
-            <Label style={{ color: subjectColour(d.subject) }}>{d.subject || 'Untitled'}</Label>
-            <div style={{ fontFamily: SERIF, fontSize: 17, color: T.bone, marginTop: 2 }}>{d.topic}</div>
-            <div className="flex gap-3" style={{ marginTop: 6 }}>
-              <Label style={{ color: T.faint }}>{d.cards.length} cards</Label>
-              {dueN > 0 && <Label style={{ color: T.red }}>{dueN} due</Label>}
-              {flagN > 0 && <Label style={{ color: T.red }}>{flagN} misconception</Label>}
-            </div>
-          </button>
-        );
-      })}
+    <div>
+      <Title style={{ marginBottom: 14 }}>Your decks</Title>
+      <div className="flex flex-col gap-2">
+        {decks.map(d => {
+          const colour = subjectColour(d.subject);
+          const dueN = d.cards.filter(c => { const p = progress[c.id]; return p && p.seen && p.due <= TODAY(); }).length;
+          const flagN = d.cards.filter(c => { const p = progress[c.id]; return p && p.flagged; }).length;
+          return (
+            <button key={d.id} className="sf-tap" onClick={() => setOpenId(d.id)}
+              style={{ display: 'flex', gap: 13, alignItems: 'center', textAlign: 'left', background: T.surface,
+                border: `1px solid ${T.border}`, borderRadius: R.card, padding: 14, cursor: 'pointer', boxShadow: SH.raised }}>
+              <Tile colour={colour} glyph={(d.subject || '?').trim().charAt(0).toUpperCase()} />
+              <div style={{ flex: 1, minWidth: 0 }}>
+                <div style={{ fontFamily: SANS, fontSize: 15.5, fontWeight: 700, color: T.ink,
+                  overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{d.topic || d.subject || 'Untitled'}</div>
+                <Sub style={{ fontSize: 13 }}>{d.cards.length} cards · {d.subject || 'Untitled'}</Sub>
+              </div>
+              <div className="flex flex-col items-end gap-1">
+                {dueN > 0 && <Chip colour={T.red}>{dueN} due</Chip>}
+                {flagN > 0 && <Chip colour={T.amber}>{flagN} tricky</Chip>}
+              </div>
+            </button>
+          );
+        })}
+      </div>
     </div>
   );
 }
@@ -1286,21 +1291,25 @@ function Decks({ decks, progress, onEditCard, onDeleteCard, onDeleteDeck }){
 function DeckEditor({ deck, progress, onBack, onEditCard, onDeleteCard, onDeleteDeck }){
   const [confirmDeck, setConfirmDeck] = useState(false);
   const [editId, setEditId] = useState(null);
+  const colour = subjectColour(deck.subject);
 
   return (
-    <div style={{ padding: '4px 2px' }}>
-      <div className="flex items-center justify-between" style={{ marginBottom: 12 }}>
-        <button className="sf-tap" onClick={onBack} style={{ background: 'none', border: 'none', cursor: 'pointer' }}>
-          <Label style={{ color: T.muted }}>‹ Back</Label>
-        </button>
-        <Label style={{ color: subjectColour(deck.subject) }}>{deck.subject} · {deck.topic}</Label>
+    <div>
+      <div className="flex items-center gap-3" style={{ marginBottom: 16 }}>
+        <button className="sf-tap" onClick={onBack}
+          style={{ width: 38, height: 38, borderRadius: R.pill, background: T.surface, border: `1px solid ${T.border}`,
+            cursor: 'pointer', fontSize: 17, color: T.ink, boxShadow: SH.raised, flexShrink: 0 }}>‹</button>
+        <div style={{ minWidth: 0 }}>
+          <Title style={{ fontSize: 18, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{deck.topic || 'Deck'}</Title>
+          <Sub style={{ fontSize: 13 }}>{deck.subject} · {deck.cards.length} cards</Sub>
+        </div>
       </div>
 
       <div className="flex flex-col gap-2">
         {deck.cards.map(c => {
           const p = progress[c.id];
           const label = stateLabel(p);
-          const isMis = label === 'MISCONCEPTION';
+          const tricky = label === 'Keeps tripping you up';
           if (editId === c.id){
             return <CardEditRow key={c.id} card={c}
               onSave={(patch) => { onEditCard(deck.id, c.id, patch); setEditId(null); }}
@@ -1308,34 +1317,30 @@ function DeckEditor({ deck, progress, onBack, onEditCard, onDeleteCard, onDelete
           }
           const prev = draftPreview(c);
           return (
-            <div key={c.id} style={{ position: 'relative', background: T.paper, border: `1px solid ${T.rule}`,
-              borderRadius: 12, padding: '12px 12px 12px 28px' }}>
-              <Margin colour={subjectColour(deck.subject)} />
-              <div className="flex items-center justify-between" style={{ marginBottom: 4 }}>
-                <Label style={{ color: T.faint }}>{prev.tag}</Label>
-                <Label style={{ color: isMis ? T.red : T.faint }}>{label}</Label>
+            <Card key={c.id} style={{ padding: 14, boxShadow: SH.raised }}>
+              <div className="flex items-center justify-between" style={{ marginBottom: 7 }}>
+                <Chip colour={colour}>{prev.tag}</Chip>
+                <Chip colour={tricky ? T.amber : T.faint}>{label}</Chip>
               </div>
-              <div style={{ fontFamily: SERIF, fontSize: 15, color: T.bone, lineHeight: 1.4 }}>{prev.main}</div>
-              <div className="flex gap-3" style={{ marginTop: 8 }}>
-                <button className="sf-tap" onClick={() => setEditId(c.id)} style={{ background: 'none', border: 'none', cursor: 'pointer', padding: 0 }}>
-                  <Label style={{ color: T.muted }}>Edit</Label>
-                </button>
-                <button className="sf-tap" onClick={() => onDeleteCard(deck.id, c.id)} style={{ background: 'none', border: 'none', cursor: 'pointer', padding: 0 }}>
-                  <Label style={{ color: T.red }}>Delete</Label>
-                </button>
+              <div style={{ fontFamily: SANS, fontSize: 15, fontWeight: 600, color: T.ink, lineHeight: 1.4 }}>{prev.main}</div>
+              <div className="flex gap-2" style={{ marginTop: 11 }}>
+                <Btn kind="soft" onClick={() => setEditId(c.id)} style={{ fontSize: 13, padding: '8px 16px' }}>Edit</Btn>
+                <Btn kind="danger" onClick={() => onDeleteCard(deck.id, c.id)} style={{ fontSize: 13, padding: '8px 16px' }}>Delete</Btn>
               </div>
-            </div>
+            </Card>
           );
         })}
       </div>
 
-      <div style={{ marginTop: 20 }}>
+      <div style={{ marginTop: 22 }}>
         {!confirmDeck ? (
           <Btn full kind="danger" onClick={() => setConfirmDeck(true)}>Delete this deck</Btn>
         ) : (
           <div className="flex gap-2">
-            <Btn full kind="danger" onClick={onDeleteDeck}>Delete {deck.cards.length} cards — sure</Btn>
-            <Btn full kind="ghost" onClick={() => setConfirmDeck(false)}>Keep</Btn>
+            <Btn full kind="danger" onClick={onDeleteDeck} style={{ background: T.red, color: '#fff' }}>
+              Delete {deck.cards.length} cards
+            </Btn>
+            <Btn full kind="soft" onClick={() => setConfirmDeck(false)}>Keep</Btn>
           </div>
         )}
       </div>
@@ -1343,20 +1348,17 @@ function DeckEditor({ deck, progress, onBack, onEditCard, onDeleteCard, onDelete
   );
 }
 
-/* only substitute for null/undefined — `|| ''` would blank a legitimate 0 */
 const fieldVal = (v) => (v === null || v === undefined) ? '' : v;
 
 function CardEditRow({ card, onSave, onCancel }){
   const [f, setF] = useState(() => card.type === 'mcq'
     ? { ...card, _opts: (card.options || []).join('\n'), answer: String(card.answer == null ? 0 : card.answer) }
     : { ...card });
-  const inp = { width: '100%', marginTop: 4, background: T.ink, color: T.bone, border: `1px solid ${T.rule}`,
-    borderRadius: 8, padding: '8px 10px', fontFamily: SANS, fontSize: 14, outline: 'none', resize: 'vertical' };
   const field = (k, label, area) => (
-    <div style={{ marginBottom: 8 }}>
-      <Label style={{ color: T.faint }}>{label}</Label>
-      {area ? <textarea value={fieldVal(f[k])} onChange={e => setF({ ...f, [k]: e.target.value })} rows={2} style={inp} />
-            : <input value={fieldVal(f[k])} onChange={e => setF({ ...f, [k]: e.target.value })} style={inp} />}
+    <div style={{ marginBottom: 10 }}>
+      <div style={{ fontFamily: SANS, fontSize: 12.5, fontWeight: 700, color: T.muted, marginBottom: 5 }}>{label}</div>
+      {area ? <textarea value={fieldVal(f[k])} onChange={e => setF({ ...f, [k]: e.target.value })} rows={2} style={{ ...INPUT, fontSize: 14.5, resize: 'vertical' }} />
+            : <input value={fieldVal(f[k])} onChange={e => setF({ ...f, [k]: e.target.value })} style={{ ...INPUT, fontSize: 14.5 }} />}
     </div>
   );
 
@@ -1371,10 +1373,10 @@ function CardEditRow({ card, onSave, onCancel }){
   };
 
   return (
-    <div style={{ background: T.paper, border: `1px solid ${T.bone}`, borderRadius: 12, padding: 14 }}>
+    <Card style={{ padding: 16, borderColor: T.accent, borderWidth: 1.5 }}>
       {f.type === 'extended' ? (
         <>
-          {field('verb', 'Verb')}{field('prompt', 'Question', true)}
+          {field('verb', 'Command verb')}{field('prompt', 'Question', true)}
           {field('achieved', 'Achieved', true)}{field('merit', 'Merit', true)}{field('excellence', 'Excellence', true)}
           {field('skeleton', 'Structure')}{field('pitfall', 'What loses marks', true)}
         </>
@@ -1392,15 +1394,15 @@ function CardEditRow({ card, onSave, onCancel }){
         </>
       )}
       <div className="flex gap-2" style={{ marginTop: 6 }}>
-        <Btn kind="primary" onClick={doSave}>Save</Btn>
-        <Btn kind="ghost" onClick={onCancel}>Cancel</Btn>
+        <Btn kind="primary" onClick={doSave} style={{ fontSize: 14, padding: '11px 20px' }}>Save</Btn>
+        <Btn kind="ghost" onClick={onCancel} style={{ fontSize: 14, padding: '11px 16px' }}>Cancel</Btn>
       </div>
-    </div>
+    </Card>
   );
 }
 
 /* ==========================================================================
-   STATS  —  kept light. No badges, no notifications.
+   STATS  —  kept light on purpose. No badges, no notifications.
    ========================================================================== */
 function Stats({ decks, progress, stats }){
   const today = TODAY();
@@ -1425,49 +1427,47 @@ function Stats({ decks, progress, stats }){
   }
 
   return (
-    <div style={{ padding: '4px 2px' }}>
-      <Label style={{ color: T.faint }}>Today</Label>
-      <div className="grid grid-cols-3 gap-2" style={{ margin: '10px 0 8px' }}>
-        <Stat n={stats.streak || 0} k="day streak" />
-        <Stat n={reviewedToday} k="reviewed" />
-        <Stat n={dueTotal} k="due now" red={dueTotal > 0} />
+    <div>
+      <Title style={{ marginBottom: 14 }}>Today</Title>
+      <div className="grid grid-cols-3 gap-2">
+        <Stat n={stats.streak || 0} k="day streak" colour={T.amber} />
+        <Stat n={reviewedToday} k="reviewed" colour={T.green} />
+        <Stat n={dueTotal} k="still due" colour={dueTotal > 0 ? T.red : T.faint} />
       </div>
-      <Label style={{ color: T.faint, display: 'block', marginBottom: 20 }}>
-        {practiceToday > 0 ? `plus ${practiceToday} extra practice (not scheduled)` : 'reviewed counts scheduled revision only'}
-      </Label>
+      <Sub style={{ marginTop: 10, fontSize: 12.5 }}>
+        {practiceToday > 0 ? `Plus ${practiceToday} extra practice (doesn't affect your schedule).` : 'Reviewed counts scheduled revision only.'}
+      </Sub>
 
-      <Label style={{ color: T.faint }}>Mastery by subject</Label>
-      <div className="flex flex-col gap-3" style={{ marginTop: 10 }}>
-        {Object.keys(subjects).length === 0 && <Label style={{ color: T.faint }}>No cards yet.</Label>}
+      <Title style={{ margin: '26px 0 12px' }}>How well you know it</Title>
+      <div className="flex flex-col gap-3">
+        {Object.keys(subjects).length === 0 && <Sub>No cards yet.</Sub>}
         {Object.entries(subjects).map(([s, v]) => {
           const pct = v.total ? Math.round((v.mastered / v.total) * 100) : 0;
+          const c = subjectColour(s);
           return (
-            <div key={s}>
-              <div className="flex items-center justify-between" style={{ marginBottom: 4 }}>
-                <Label style={{ color: subjectColour(s) }}>{s}</Label>
-                <Label style={{ color: T.muted }}>{pct}%</Label>
+            <Card key={s} style={{ padding: 14, boxShadow: SH.raised }}>
+              <div className="flex items-center gap-3" style={{ marginBottom: 10 }}>
+                <Tile colour={c} glyph={s.trim().charAt(0).toUpperCase()} size={32} />
+                <div style={{ flex: 1, fontFamily: SANS, fontSize: 15, fontWeight: 700, color: T.ink }}>{s}</div>
+                <div style={{ fontFamily: SANS, fontSize: 15, fontWeight: 700, color: c }}>{pct}%</div>
               </div>
-              <div style={{ height: 4, background: T.rule, borderRadius: 2, overflow: 'hidden' }}>
-                <div style={{ height: '100%', width: `${pct}%`, background: subjectColour(s) }} />
+              <div style={{ height: 8, background: T.well, borderRadius: R.pill, overflow: 'hidden' }}>
+                <div style={{ height: '100%', width: `${pct}%`, background: c, borderRadius: R.pill, transition: 'width 400ms' }} />
               </div>
-            </div>
+            </Card>
           );
         })}
       </div>
-      <Label style={{ color: T.faint, display: 'block', marginTop: 20 }}>{totalCards} cards across {decks.length} decks</Label>
+      <Sub style={{ marginTop: 18, textAlign: 'center' }}>{totalCards} cards across {decks.length} decks</Sub>
     </div>
   );
 }
-function Stat({ n, k, red }){
+function Stat({ n, k, colour }){
   return (
-    <div style={{ background: SURFACE.card, border: `1px solid ${T.rule}`, borderRadius: 14,
-      padding: '16px 8px 13px', textAlign: 'center',
-      boxShadow: `${SHADOW.btn}, inset 0 1px 0 ${rgba('#FFFFFF', 0.05)}` }}>
-      <div style={{ fontFamily: SERIF, fontSize: 32, lineHeight: 1, color: red ? T.red : T.bone,
-        letterSpacing: '-0.02em' }}>{n}</div>
-      <span style={{ display: 'block', fontFamily: MONO, fontSize: 9.5, letterSpacing: '0.13em',
-        textTransform: 'uppercase', color: T.faint, marginTop: 7 }}>{k}</span>
-    </div>
+    <Card style={{ padding: '16px 8px 13px', textAlign: 'center', boxShadow: SH.raised }}>
+      <div style={{ fontFamily: SANS, fontSize: 30, fontWeight: 800, lineHeight: 1, color: colour, letterSpacing: '-0.03em' }}>{n}</div>
+      <div style={{ fontFamily: SANS, fontSize: 12, fontWeight: 600, color: T.faint, marginTop: 7 }}>{k}</div>
+    </Card>
   );
 }
 
@@ -1477,35 +1477,35 @@ function Stat({ n, k, red }){
 function Toggle({ on, onClick }){
   return (
     <button className="sf-tap" onClick={onClick}
-      style={{ width: 48, height: 28, borderRadius: 14, border: `1px solid ${T.rule}`,
-        background: on ? T.bone : T.raised, position: 'relative', cursor: 'pointer', flexShrink: 0 }}>
-      <span style={{ position: 'absolute', top: 3, left: on ? 23 : 3, width: 20, height: 20,
-        borderRadius: 10, background: on ? T.ink : T.faint, transition: 'left 150ms' }} />
+      style={{ width: 50, height: 30, borderRadius: R.pill, border: 'none', flexShrink: 0, cursor: 'pointer',
+        background: on ? T.green : '#D5D9E4', position: 'relative', transition: 'background 200ms' }}>
+      <span style={{ position: 'absolute', top: 3, left: on ? 23 : 3, width: 24, height: 24, borderRadius: R.pill,
+        background: '#fff', boxShadow: SH.pop, transition: 'left 200ms cubic-bezier(.2,.8,.3,1)' }} />
     </button>
   );
 }
 
 function SettingRow({ title, note, children }){
   return (
-    <div className="flex items-center justify-between" style={{ marginBottom: 16, padding: 14,
-      background: T.paper, border: `1px solid ${T.rule}`, borderRadius: 12 }}>
-      <div style={{ paddingRight: 12 }}>
-        <div style={{ fontFamily: SANS, fontSize: 15, color: T.bone }}>{title}</div>
-        <Label style={{ color: T.faint }}>{note}</Label>
+    <Card style={{ padding: 15, marginBottom: 10, boxShadow: SH.raised }}>
+      <div className="flex items-center justify-between">
+        <div style={{ paddingRight: 12 }}>
+          <div style={{ fontFamily: SANS, fontSize: 15, fontWeight: 700, color: T.ink }}>{title}</div>
+          <Sub style={{ fontSize: 12.5, marginTop: 2 }}>{note}</Sub>
+        </div>
+        {children}
       </div>
-      {children}
-    </div>
+    </Card>
   );
 }
 
 function Settings({ settings, onChange }){
   const set = (patch) => onChange({ ...settings, ...patch });
   return (
-    <div style={{ padding: '4px 2px' }}>
-      <Label style={{ color: T.faint }}>Settings</Label>
-      <div style={{ height: 16 }} />
+    <div>
+      <Title style={{ marginBottom: 14 }}>Settings</Title>
 
-      <SettingRow title="Interleave subjects" note="Round-robin so no topic blocks together">
+      <SettingRow title="Mix subjects up" note="Rotates subjects so you don't do one topic in a block">
         <Toggle on={settings.interleave} onClick={() => set({ interleave: !settings.interleave })} />
       </SettingRow>
 
@@ -1513,22 +1513,22 @@ function Settings({ settings, onChange }){
         <Toggle on={settings.saveUsage} onClick={() => set({ saveUsage: !settings.saveUsage })} />
       </SettingRow>
 
-      <div style={{ padding: 14, background: T.paper, border: `1px solid ${T.rule}`, borderRadius: 12 }}>
+      <Card style={{ padding: 15, boxShadow: SH.raised }}>
         <div className="flex items-center justify-between">
           <div style={{ paddingRight: 12 }}>
-            <div style={{ fontFamily: SANS, fontSize: 15, color: T.bone }}>Limit new cards per day</div>
-            <Label style={{ color: T.faint }}>Off means every new card is available straight away</Label>
+            <div style={{ fontFamily: SANS, fontSize: 15, fontWeight: 700, color: T.ink }}>Limit new cards a day</div>
+            <Sub style={{ fontSize: 12.5, marginTop: 2 }}>Off means every new card is ready straight away</Sub>
           </div>
           <Toggle on={settings.capNew} onClick={() => set({ capNew: !settings.capNew })} />
         </div>
         {settings.capNew && (
-          <div className="flex items-center gap-3" style={{ marginTop: 12 }}>
-            <Btn kind="ghost" onClick={() => set({ newPerDay: Math.max(0, perDay(settings) - 2) })}>−</Btn>
-            <div style={{ fontFamily: SERIF, fontSize: 24, color: T.bone, minWidth: 40, textAlign: 'center' }}>{perDay(settings)}</div>
-            <Btn kind="ghost" onClick={() => set({ newPerDay: perDay(settings) + 2 })}>+</Btn>
+          <div className="flex items-center justify-center gap-4" style={{ marginTop: 14 }}>
+            <Btn kind="soft" onClick={() => set({ newPerDay: Math.max(0, perDay(settings) - 2) })} style={{ padding: '10px 22px' }}>−</Btn>
+            <div style={{ fontFamily: SANS, fontSize: 26, fontWeight: 800, color: T.ink, minWidth: 46, textAlign: 'center' }}>{perDay(settings)}</div>
+            <Btn kind="soft" onClick={() => set({ newPerDay: perDay(settings) + 2 })} style={{ padding: '10px 22px' }}>+</Btn>
           </div>
         )}
-      </div>
+      </Card>
     </div>
   );
 }
@@ -1579,8 +1579,7 @@ export default function App(){
     setTab('feed');
   };
 
-  /* practice=true means extra practice: count the review, but do NOT touch the
-     scheduler, or answering a card again today would push its interval out. */
+  /* practice=true: count the review, but never touch the scheduler */
   const gradeCard = (card, deck, q, confidentSure, practice) => {
     const today = TODAY();
     let reinsert = false;
@@ -1631,11 +1630,11 @@ export default function App(){
     return n;
   }, [ready, library, progress, settings, stats]);
 
-  if (!ready) return <Shell><div style={{ padding: 40, textAlign: 'center' }}><Label style={{ color: T.faint }}>Loading…</Label></div></Shell>;
+  if (!ready) return <Shell><Sub style={{ padding: 40, textAlign: 'center' }}>Loading…</Sub></Shell>;
 
   return (
     <Shell>
-      <Masthead due={dueCount} />
+      <Masthead due={dueCount} streak={stats.streak || 0} />
       <div style={{ minHeight: 440 }}>
         {tab === 'feed' && <Feed key={'feed-' + cardCount} decks={library.decks} progress={progress} settings={settings}
           stats={stats} onGrade={gradeCard} reduceMotion={reduceMotion.current} />}
@@ -1651,94 +1650,77 @@ export default function App(){
 
 function Shell({ children }){
   return (
-    <div style={{ background: T.ink, minHeight: '100vh', color: T.bone, display: 'flex', justifyContent: 'center' }}>
+    <div style={{ background: T.bg, minHeight: '100vh', color: T.ink, display: 'flex', justifyContent: 'center' }}>
       <style>{`
-        @keyframes sf-in {
-          from { opacity: 0; transform: translateY(10px) scale(0.994); }
-          to   { opacity: 1; transform: none; }
-        }
-        @keyframes sf-reveal {
-          from { opacity: 0; transform: translateY(-4px); clip-path: inset(0 0 100% 0); }
-          to   { opacity: 1; transform: none; clip-path: inset(0 0 0 0); }
-        }
-        @keyframes sf-rise { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: none; } }
+        @keyframes sf-in { from { opacity: 0; transform: translateY(12px) scale(0.985); } to { opacity: 1; transform: none; } }
+        @keyframes sf-reveal { from { opacity: 0; transform: translateY(-6px); } to { opacity: 1; transform: none; } }
+        @keyframes sf-rise { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: none; } }
 
         * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
         body { overscroll-behavior-y: none; }
-        textarea, input, select { font-size: 16px; }  /* stops iOS zooming on tap */
+        textarea, input, select { font-size: 16px; font-family: ${SANS}; }
         ::placeholder { color: ${T.faint}; }
-        ::selection { background: ${rgba(T.bone, 0.18)}; }
+        ::selection { background: ${rgba(T.accent, 0.18)}; }
 
-        /* buttons feel pressed, not just recoloured */
-        .sf-btn {
-          transition: transform 90ms cubic-bezier(.3,.7,.4,1), filter 160ms, border-color 160ms, opacity 160ms;
-          -webkit-user-select: none; user-select: none;
-        }
-        .sf-btn:active:not(:disabled) { transform: translateY(1px) scale(0.985); filter: brightness(0.94); }
-        .sf-tap { transition: transform 90ms cubic-bezier(.3,.7,.4,1), border-color 160ms, background 160ms; }
-        .sf-tap:active { transform: translateY(1px) scale(0.99); }
+        .sf-btn { transition: transform 110ms cubic-bezier(.3,.8,.4,1), filter 180ms, box-shadow 180ms; -webkit-user-select: none; user-select: none; }
+        .sf-btn:active:not(:disabled) { transform: scale(0.96); filter: brightness(0.97); }
+        .sf-tap { transition: transform 110ms cubic-bezier(.3,.8,.4,1), border-color 180ms, background 180ms; }
+        .sf-tap:active { transform: scale(0.985); }
         @media (hover: hover) {
-          .sf-btn:hover:not(:disabled) { border-color: ${rgba(T.bone, 0.3)}; }
-          .sf-tap:hover { border-color: ${rgba(T.bone, 0.22)}; }
+          .sf-btn:hover:not(:disabled) { filter: brightness(0.98); }
+          .sf-tap:hover { border-color: ${rgba(T.accent, 0.35)}; }
         }
-        :focus-visible { outline: 2px solid ${rgba(T.bone, 0.5)}; outline-offset: 2px; }
+        :focus-visible { outline: 2.5px solid ${rgba(T.accent, 0.5)}; outline-offset: 2px; }
 
-        .sf-stagger > * { animation: sf-rise 260ms cubic-bezier(.2,.7,.3,1) backwards; }
+        .sf-stagger > * { animation: sf-rise 280ms cubic-bezier(.2,.8,.3,1) backwards; }
         .sf-stagger > *:nth-child(1) { animation-delay: 0ms; }
-        .sf-stagger > *:nth-child(2) { animation-delay: 35ms; }
-        .sf-stagger > *:nth-child(3) { animation-delay: 70ms; }
-        .sf-stagger > *:nth-child(4) { animation-delay: 105ms; }
+        .sf-stagger > *:nth-child(2) { animation-delay: 40ms; }
+        .sf-stagger > *:nth-child(3) { animation-delay: 80ms; }
+        .sf-stagger > *:nth-child(4) { animation-delay: 120ms; }
 
         @media (prefers-reduced-motion: reduce) { * { animation: none !important; transition: none !important; } }
       `}</style>
-      {/* lamplight from above — stops the flat-black look */}
-      <div style={{ position: 'fixed', inset: 0, pointerEvents: 'none',
-        background: `radial-gradient(120% 70% at 50% -12%, ${rgba('#2A3A47', 0.5)} 0%, transparent 62%)` }} />
-      <div style={{ width: '100%', maxWidth: 460, padding: '10px 16px 100px', position: 'relative' }}>
+      <div style={{ width: '100%', maxWidth: 460, padding: '10px 16px 104px', position: 'relative' }}>
         {children}
       </div>
     </div>
   );
 }
 
-function Masthead({ due }){
+function Masthead({ due, streak }){
   return (
-    <div className="flex items-center justify-between" style={{ padding: '8px 2px 16px' }}>
-      <span style={{ fontFamily: MONO, fontSize: 11, letterSpacing: '0.28em', textTransform: 'uppercase',
-        color: T.muted, fontWeight: 600 }}>Study&nbsp;Feed</span>
-      {due > 0 && (
-        <span style={{ fontFamily: MONO, fontSize: 10, letterSpacing: '0.12em', textTransform: 'uppercase',
-          color: T.red, border: `1px solid ${rgba(T.red, 0.4)}`, background: rgba(T.red, 0.08),
-          borderRadius: 20, padding: '4px 10px' }}>{due} due</span>
-      )}
+    <div className="flex items-center justify-between" style={{ padding: '10px 2px 18px' }}>
+      <div style={{ fontFamily: SANS, fontSize: 24, fontWeight: 800, color: T.ink, letterSpacing: '-0.03em' }}>
+        Study Feed
+      </div>
+      <div className="flex items-center gap-2">
+        {streak > 0 && <Chip colour={T.amber}>🔥 {streak}</Chip>}
+        {due > 0 && <Chip colour={T.red} solid>{due} due</Chip>}
+      </div>
     </div>
   );
 }
 
 function Nav({ tab, setTab, due }){
-  const items = [['feed','Feed'],['create','New'],['decks','Decks'],['stats','Stats'],['settings','Set']];
+  const items = [['feed','Study'],['create','Create'],['decks','Decks'],['stats','Stats'],['settings','You']];
   return (
-    <div style={{ position: 'fixed', bottom: 0, left: 0, right: 0, display: 'flex', justifyContent: 'center',
-      background: `linear-gradient(to top, ${T.ink} 55%, transparent)`, paddingTop: 18, pointerEvents: 'none' }}>
+    <div style={{ position: 'fixed', bottom: 0, left: 0, right: 0, display: 'flex', justifyContent: 'center', pointerEvents: 'none' }}>
       <div style={{ width: '100%', maxWidth: 460, pointerEvents: 'auto',
-        background: rgba('#141C23', 0.86), backdropFilter: 'blur(14px)', WebkitBackdropFilter: 'blur(14px)',
-        borderTop: `1px solid ${rgba(T.bone, 0.07)}`, display: 'flex',
-        padding: '4px 6px calc(6px + env(safe-area-inset-bottom))' }}>
+        background: rgba('#FFFFFF', 0.92), backdropFilter: 'blur(16px)', WebkitBackdropFilter: 'blur(16px)',
+        borderTop: `1px solid ${T.border}`, display: 'flex',
+        padding: '8px 6px calc(8px + env(safe-area-inset-bottom))' }}>
         {items.map(([k, label]) => {
           const active = tab === k;
           return (
-            <button key={k} onClick={() => setTab(k)}
-              style={{ flex: 1, background: 'none', border: 'none', cursor: 'pointer',
-                padding: '11px 0 9px', position: 'relative',
-                transition: 'opacity 160ms', opacity: active ? 1 : 0.72 }}>
-              <span style={{ position: 'absolute', top: 2, left: '50%', transform: 'translateX(-50%)',
-                width: active ? 22 : 0, height: 2, borderRadius: 2, background: T.bone,
-                transition: 'width 200ms cubic-bezier(.2,.7,.3,1)' }} />
-              <span style={{ fontFamily: MONO, fontSize: 10, letterSpacing: '0.14em', textTransform: 'uppercase',
-                color: active ? T.bone : T.faint, fontWeight: active ? 600 : 400, transition: 'color 160ms' }}>{label}</span>
+            <button key={k} className="sf-tap" onClick={() => setTab(k)}
+              style={{ flex: 1, background: 'none', border: 'none', cursor: 'pointer', padding: '4px 0',
+                display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 3, position: 'relative' }}>
+              <Icon name={k} active={active} />
+              <span style={{ fontFamily: SANS, fontSize: 10.5, fontWeight: active ? 700 : 500,
+                color: active ? T.accent : T.faint, transition: 'color 160ms' }}>{label}</span>
               {k === 'feed' && due > 0 && (
-                <span style={{ position: 'absolute', top: 6, right: '50%', marginRight: -26, width: 5, height: 5,
-                  borderRadius: 5, background: T.red }} />
+                <span style={{ position: 'absolute', top: 2, right: '50%', marginRight: -16, width: 8, height: 8,
+                  borderRadius: 8, background: T.red, border: `1.5px solid ${T.surface}` }} />
               )}
             </button>
           );
