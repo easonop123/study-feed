@@ -1101,7 +1101,7 @@ function Feed({ decks, progress, settings, stats, onGrade, reduceMotion }){
 const INPUT = { width: '100%', background: T.well, color: T.ink, border: `1px solid ${T.border}`,
   borderRadius: R.well, padding: '13px 14px', fontFamily: SANS, lineHeight: 1.55, outline: 'none' };
 
-function Create({ onSave, settings, onSettings }){
+function Create({ onSave, settings, onSettings, onPending }){
   const [mode, setMode] = useState('generate');
   const [cardType, setCardType] = useState('mix');
   const [source, setSource] = useState('');
@@ -1114,6 +1114,11 @@ function Create({ onSave, settings, onSettings }){
   const [attaching, setAttaching] = useState('');
   const [images, setImages] = useState([]);
   const fileRef = useRef(null);
+
+  // let the nav badge the Create tab while cards are sitting unsaved
+  useEffect(() => {
+    if (onPending) onPending(drafts ? drafts.filter(d => d.keep).length : 0);
+  }, [drafts, onPending]);
 
   const onFiles = async (e) => {
     const files = Array.from(e.target.files || []);
@@ -1301,6 +1306,11 @@ function DraftReview({ drafts, setDrafts, meta, setMeta, onSave, onCancel }){
           style={{ background: 'none', border: 'none', cursor: 'pointer', fontFamily: SANS, fontSize: 14, fontWeight: 600, color: T.red }}>
           Discard
         </button>
+      </div>
+      <div style={{ background: rgba(T.amber, 0.13), borderRadius: R.well, padding: '11px 14px', marginBottom: 14 }}>
+        <Sub style={{ color: '#8A5A00', fontWeight: 600, fontSize: 13 }}>
+          ⚠︎ Not saved yet — tap <b>Save</b> at the bottom or these are lost.
+        </Sub>
       </div>
       <Sub style={{ marginBottom: 14 }}>Tap a card to drop it. {kept} of {drafts.length} kept.</Sub>
 
@@ -1656,6 +1666,7 @@ export default function App(){
   const [progress, setProgress] = useState({});
   const [stats, setStats] = useState(DEFAULT_STATS);
   const [settings, setSettings] = useState(DEFAULT_SETTINGS);
+  const [pendingCount, setPendingCount] = useState(0);   // unsaved drafts waiting on Create
   const reduceMotion = useRef(false);
 
   useEffect(() => {
@@ -1752,12 +1763,17 @@ export default function App(){
         {/* key includes the mix so moving the slider rebuilds the queue at the new ratio */}
         {tab === 'feed' && <Feed key={'feed-' + cardCount + '-' + longMixOf(settings)} decks={library.decks} progress={progress} settings={settings}
           stats={stats} onGrade={gradeCard} reduceMotion={reduceMotion.current} />}
-        {tab === 'create' && <Create onSave={saveDeck} settings={settings} onSettings={persistSettings} />}
+        {/* Create stays MOUNTED and is hidden instead — unmounting it threw away
+            unsaved drafts, pasted notes and attached photos the moment you
+            switched tabs, and those drafts cost real API usage to produce. */}
+        <div style={{ display: tab === 'create' ? 'block' : 'none' }}>
+          <Create onSave={saveDeck} settings={settings} onSettings={persistSettings} onPending={setPendingCount} />
+        </div>
         {tab === 'decks' && <Decks decks={library.decks} progress={progress} onEditCard={editCard} onDeleteCard={deleteCard} onDeleteDeck={deleteDeck} />}
         {tab === 'stats' && <Stats decks={library.decks} progress={progress} stats={stats} />}
         {tab === 'settings' && <Settings settings={settings} onChange={persistSettings} />}
       </div>
-      <Nav tab={tab} setTab={setTab} due={dueCount} />
+      <Nav tab={tab} setTab={setTab} due={dueCount} pending={pendingCount} />
     </Shell>
   );
 }
@@ -1824,7 +1840,7 @@ function Masthead({ due, streak }){
   );
 }
 
-function Nav({ tab, setTab, due }){
+function Nav({ tab, setTab, due, pending }){
   const items = [['feed','Study'],['create','Create'],['decks','Decks'],['stats','Stats'],['settings','You']];
   return (
     <div style={{ position: 'fixed', bottom: 0, left: 0, right: 0, display: 'flex', justifyContent: 'center', pointerEvents: 'none' }}>
@@ -1844,6 +1860,14 @@ function Nav({ tab, setTab, due }){
               {k === 'feed' && due > 0 && (
                 <span style={{ position: 'absolute', top: 2, right: '50%', marginRight: -16, width: 8, height: 8,
                   borderRadius: 8, background: T.red, border: `1.5px solid ${T.surface}` }} />
+              )}
+              {/* cards generated but not yet saved */}
+              {k === 'create' && pending > 0 && (
+                <span style={{ position: 'absolute', top: 0, right: '50%', marginRight: -22, minWidth: 17, height: 17,
+                  borderRadius: 17, background: T.amber, color: '#fff', border: `1.5px solid ${T.surface}`,
+                  fontFamily: SANS, fontSize: 10, fontWeight: 700, lineHeight: '14px', textAlign: 'center', padding: '0 4px' }}>
+                  {pending}
+                </span>
               )}
             </button>
           );
