@@ -193,6 +193,79 @@ function intervalWord(days){
 }
 
 const uid = () => Date.now().toString(36) + Math.random().toString(36).slice(2, 7);
+
+/* ---- import / export -----------------------------------------------------
+   Cards cost money to generate, so they should be movable: between the
+   Artifact and the website, between devices, or to a friend. Text transfer
+   is offered alongside file download because an Artifact iframe may block
+   downloads, and copy/paste always works. */
+function buildExport(decks, progress){
+  const ids = new Set();
+  for (const d of decks) for (const c of d.cards) ids.add(c.id);
+  const prog = {};
+  for (const k of Object.keys(progress || {})) if (ids.has(k)) prog[k] = progress[k];
+  return { kind: 'study-feed', version: 1, exportedAt: new Date().toISOString(), decks, progress: prog };
+}
+
+function downloadJson(obj, filename){
+  try {
+    const blob = new Blob([JSON.stringify(obj, null, 2)], { type: 'application/json' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url; a.download = filename;
+    document.body.appendChild(a);
+    a.click();
+    setTimeout(() => { URL.revokeObjectURL(url); a.remove(); }, 0);
+    return true;
+  } catch { return false; }
+}
+
+async function copyText(text){
+  try { await navigator.clipboard.writeText(text); return true; }
+  catch { return false; }
+}
+
+/* Merge an export into the current library. Anything whose id already exists
+   gets a fresh one, so importing a friend's deck can't overwrite yours — and
+   progress follows the remapped ids so your own backups keep their history. */
+function mergeImport(payload, library, progress){
+  if (!payload || !Array.isArray(payload.decks)) throw new Error('That file is not a Study Feed export.');
+  const existingDeckIds = new Set(library.decks.map(d => d.id));
+  const existingCardIds = new Set();
+  for (const d of library.decks) for (const c of d.cards) existingCardIds.add(c.id);
+
+  const incoming = [];
+  const nextProgress = { ...progress };
+  let cardCount = 0;
+
+  for (const d of payload.decks){
+    if (!d || !Array.isArray(d.cards)) continue;
+    const deckClash = existingDeckIds.has(d.id);
+    const idMap = {};
+    const cards = [];
+    for (const c of d.cards){
+      if (!c || !c.type) continue;
+      const fresh = (deckClash || existingCardIds.has(c.id) || !c.id) ? uid() : c.id;
+      idMap[c.id] = fresh;
+      existingCardIds.add(fresh);
+      cards.push({ ...c, id: fresh });
+    }
+    if (!cards.length) continue;
+    incoming.push({
+      id: deckClash ? uid() : d.id,
+      subject: String(d.subject || 'Untitled'),
+      topic: String(d.topic || ''),
+      standard: String(d.standard || 'NCEA Level 1'),
+      cards,
+    });
+    const p = payload.progress || {};
+    for (const oldId of Object.keys(idMap)) if (p[oldId]) nextProgress[idMap[oldId]] = p[oldId];
+    cardCount += cards.length;
+  }
+
+  if (!incoming.length) throw new Error('No decks found in that file.');
+  return { decks: library.decks.concat(incoming), progress: nextProgress, deckCount: incoming.length, cardCount };
+}
 function shuffle(a){
   const r = a.slice();
   for (let i = r.length - 1; i > 0; i--){ const j = Math.floor(Math.random() * (i + 1)); const t = r[i]; r[i] = r[j]; r[j] = t; }
@@ -1441,8 +1514,21 @@ function DeckEditor({ deck, progress, onBack, onEditCard, onDeleteCard, onDelete
   const [confirmDeck, setConfirmDeck] = useState(false);
   const [editId, setEditId] = useState(null);
   const [renaming, setRenaming] = useState(false);
+  const [shared, setShared] = useState('');
   const [draftMeta, setDraftMeta] = useState({ subject: deck.subject, topic: deck.topic, standard: deck.standard });
   const colour = subjectColour(deck.subject);
+
+  /* one deck on its own — the shareable unit. Progress is left out on purpose:
+     nobody wants to inherit someone else's revision schedule. */
+  const shareDeck = () => {
+    const payload = buildExport([deck], {});
+    copyText(JSON.stringify(payload)).then(ok => {
+      if (ok) setShared('Copied — they paste it under You → Import.');
+      else setShared(downloadJson(payload, `${(deck.topic || deck.subject || 'deck')}.json`)
+        ? 'Downloaded — send them the file.' : 'Could not share this deck.');
+      setTimeout(() => setShared(''), 6000);
+    });
+  };
 
   const startRename = () => {
     setDraftMeta({ subject: deck.subject, topic: deck.topic, standard: deck.standard });
@@ -1468,9 +1554,13 @@ function DeckEditor({ deck, progress, onBack, onEditCard, onDeleteCard, onDelete
           <Sub style={{ fontSize: 13 }}>{deck.subject} · {deck.cards.length} cards</Sub>
         </div>
         {!renaming && (
-          <Btn kind="soft" onClick={startRename} style={{ fontSize: 13, padding: '9px 15px', flexShrink: 0 }}>Rename</Btn>
+          <div className="flex gap-2" style={{ flexShrink: 0 }}>
+            <Btn kind="soft" onClick={startRename} style={{ fontSize: 13, padding: '9px 14px' }}>Rename</Btn>
+            <Btn kind="soft" onClick={shareDeck} style={{ fontSize: 13, padding: '9px 14px' }}>Share</Btn>
+          </div>
         )}
       </div>
+      {shared && <Sub style={{ color: T.green, fontWeight: 600, marginBottom: 12 }}>{shared}</Sub>}
 
       {renaming && (
         <Card style={{ padding: 15, marginBottom: 14, borderColor: T.accent, borderWidth: 1.5 }}>
@@ -1724,11 +1814,90 @@ function ApiKeyCard(){
   );
 }
 
-function Settings({ settings, onChange }){
+function TransferCard({ library, progress, onImport }){
+  const [pasting, setPasting] = useState(false);
+  const [text, setText] = useState('');
+  const [msg, setMsg] = useState('');
+  const [bad, setBad] = useState(false);
+  const fileRef = useRef(null);
+  const total = library.decks.reduce((s, d) => s + d.cards.length, 0);
+
+  const say = (m, isBad) => { setMsg(m); setBad(!!isBad); };
+
+  const doExport = (mode) => {
+    if (!library.decks.length) return say('Nothing to export yet.', true);
+    const payload = buildExport(library.decks, progress);
+    if (mode === 'file'){
+      const ok = downloadJson(payload, `study-feed-${TODAY()}.json`);
+      say(ok ? 'Downloaded.' : 'Download blocked here — use Copy instead.', !ok);
+    } else {
+      copyText(JSON.stringify(payload)).then(ok =>
+        say(ok ? 'Copied — paste it into the other version.' : 'Could not copy. Try the file instead.', !ok));
+    }
+  };
+
+  const applyImport = (raw) => {
+    try {
+      const res = mergeImport(JSON.parse(raw), library, progress);
+      onImport(res);
+      say(`Added ${res.deckCount} deck${res.deckCount > 1 ? 's' : ''} · ${res.cardCount} cards.`);
+      setText(''); setPasting(false);
+    } catch (e){ say(e.message || 'That did not look like an export.', true); }
+  };
+
+  const onFile = async (e) => {
+    const f = (e.target.files || [])[0];
+    if (e.target) e.target.value = '';
+    if (!f) return;
+    try { applyImport(await f.text()); } catch { say('Could not read that file.', true); }
+  };
+
+  return (
+    <Card style={{ padding: 15, marginBottom: 10, boxShadow: SH.raised }}>
+      <div style={{ fontFamily: SANS, fontSize: 15, fontWeight: 700, color: T.ink }}>Backup &amp; transfer</div>
+      <Sub style={{ fontSize: 12.5, marginTop: 2, marginBottom: 12 }}>
+        Move decks between the app and the website, or to a friend — without paying to generate them twice.
+      </Sub>
+
+      <Sub style={{ fontSize: 12.5, fontWeight: 700, color: T.ink, marginBottom: 7 }}>
+        Export {total > 0 ? `(${library.decks.length} deck${library.decks.length > 1 ? 's' : ''} · ${total} card${total > 1 ? 's' : ''})` : ''}
+      </Sub>
+      <div className="flex gap-2" style={{ marginBottom: 14 }}>
+        <Btn full kind="soft" onClick={() => doExport('copy')} style={{ fontSize: 14 }}>Copy as text</Btn>
+        <Btn full kind="soft" onClick={() => doExport('file')} style={{ fontSize: 14 }}>Download file</Btn>
+      </div>
+
+      <Sub style={{ fontSize: 12.5, fontWeight: 700, color: T.ink, marginBottom: 7 }}>Import</Sub>
+      <input ref={fileRef} type="file" accept=".json,application/json,text/plain" onChange={onFile} style={{ display: 'none' }} />
+      {!pasting ? (
+        <div className="flex gap-2">
+          <Btn full kind="soft" onClick={() => setPasting(true)} style={{ fontSize: 14 }}>Paste text</Btn>
+          <Btn full kind="soft" onClick={() => fileRef.current && fileRef.current.click()} style={{ fontSize: 14 }}>Choose file</Btn>
+        </div>
+      ) : (
+        <div>
+          <textarea value={text} onChange={e => setText(e.target.value)} rows={4}
+            placeholder="Paste the exported text here…"
+            style={{ ...INPUT, fontSize: 13, resize: 'vertical' }} />
+          <div className="flex gap-2" style={{ marginTop: 8 }}>
+            <Btn kind="primary" onClick={() => applyImport(text)} disabled={!text.trim()} style={{ fontSize: 14, padding: '11px 20px' }}>Import</Btn>
+            <Btn kind="ghost" onClick={() => { setPasting(false); setText(''); }} style={{ fontSize: 14, padding: '11px 16px' }}>Cancel</Btn>
+          </div>
+        </div>
+      )}
+      {msg && <Sub style={{ marginTop: 10, color: bad ? T.red : T.green, fontWeight: 600 }}>{msg}</Sub>}
+      <Sub style={{ fontSize: 12, marginTop: 10 }}>Importing only adds — it never overwrites decks you already have.</Sub>
+    </Card>
+  );
+}
+
+function Settings({ settings, onChange, library, progress, onImport }){
   const set = (patch) => onChange({ ...settings, ...patch });
   return (
     <div>
       <Title style={{ marginBottom: 14 }}>Settings</Title>
+
+      <TransferCard library={library} progress={progress} onImport={onImport} />
 
       {!IN_ARTIFACT && <ApiKeyCard />}
 
@@ -1854,6 +2023,10 @@ export default function App(){
   const renameDeck = (deckId, patch) => {
     persistLibrary({ decks: library.decks.map(d => d.id === deckId ? { ...d, ...patch } : d) });
   };
+  const importLibrary = ({ decks, progress: mergedProgress }) => {
+    persistLibrary({ decks });
+    persistProgress(mergedProgress);
+  };
 
   const cardCount = library.decks.reduce((s, d) => s + d.cards.length, 0);
   const dueCount = useMemo(() => {
@@ -1887,7 +2060,8 @@ export default function App(){
         {tab === 'decks' && <Decks decks={library.decks} progress={progress} onEditCard={editCard}
           onDeleteCard={deleteCard} onDeleteDeck={deleteDeck} onRenameDeck={renameDeck} />}
         {tab === 'stats' && <Stats decks={library.decks} progress={progress} stats={stats} />}
-        {tab === 'settings' && <Settings settings={settings} onChange={persistSettings} />}
+        {tab === 'settings' && <Settings settings={settings} onChange={persistSettings}
+          library={library} progress={progress} onImport={importLibrary} />}
       </div>
     </Shell>
   );
