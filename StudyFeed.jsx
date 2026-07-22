@@ -692,6 +692,16 @@ function StudyCard({ card, deck, onGrade, reduceMotion, prog, practice }){
         <Chip colour={T.muted}>{TYPE_LABEL[card.type] || 'Card'}</Chip>
       </div>
 
+      {/* the point of the "I've got it" tap: it catches the gaps you don't
+          know you have, and says so when the card comes back */}
+      {prog && prog.flagged && (
+        <div style={{ background: rgba(T.amber, 0.12), borderRadius: R.well, padding: '10px 13px', marginBottom: 14 }}>
+          <Sub style={{ color: '#8A5A00', fontWeight: 600, fontSize: 13 }}>
+            ⚠︎ You were sure about this one last time and got it wrong — read it properly.
+          </Sub>
+        </div>
+      )}
+
       {card.type === 'extended' ? <ExtendedFace card={card} phase={phase} deck={deck} />
         : isMcq ? <McqFace card={card} phase={phase} pick={pick} onPick={(i) => { setPick(i); setPhase('reveal'); }} />
         : card.type === 'short' ? <ShortFace card={card} phase={phase} />
@@ -702,29 +712,32 @@ function StudyCard({ card, deck, onGrade, reduceMotion, prog, practice }){
       <div style={{ marginTop: 18 }}>
         {isMcq ? (
           phase === 'reveal'
-            ? <GradeRow grade={grade} previews={previews} />
+            ? <GradeRow grade={grade} previews={previews} sure={pick === card.answer} />
             : <Sub style={{ textAlign: 'center' }}>Tap the answer you think is right</Sub>
-        ) : phase === 'attempt' && sure === null ? (
+        ) : phase === 'attempt' ? (
+          /* One tap: calls it AND reveals. Guessing before you look is the
+             whole point — and the guess is what catches "sure but wrong". */
           <div>
-            <Sub style={{ textAlign: 'center', marginBottom: 12 }}>Answer it in your head first</Sub>
+            <Sub style={{ textAlign: 'center', marginBottom: 4, fontWeight: 600, color: T.ink }}>
+              Answer it in your head first
+            </Sub>
+            <Sub style={{ textAlign: 'center', marginBottom: 12, fontSize: 12.5 }}>
+              Then call it — the answer shows either way.
+            </Sub>
             <div className="flex gap-3">
-              <Btn full kind="primary" onClick={() => setSure(true)}>I know it</Btn>
-              <Btn full kind="soft" onClick={() => setSure(false)}>Not sure</Btn>
+              <Btn full kind="primary" onClick={() => { setSure(true); setPhase('reveal'); }}>I've got it</Btn>
+              <Btn full kind="soft" onClick={() => { setSure(false); setPhase('reveal'); }}>No idea</Btn>
             </div>
           </div>
-        ) : phase === 'attempt' ? (
-          <Btn full kind="primary" onClick={() => setPhase('reveal')}>
-            {card.type === 'extended' ? 'Show model answers' : 'Show answer'}
-          </Btn>
         ) : (
-          <GradeRow grade={grade} previews={previews} />
+          <GradeRow grade={grade} previews={previews} sure={sure === true} />
         )}
       </div>
     </Card>
   );
 }
 
-function GradeRow({ grade, previews }){
+function GradeRow({ grade, previews, sure }){
   const items = [
     [Q.AGAIN, 'Again', 'got it wrong', T.red],
     [Q.HARD,  'Hard',  'only just',    T.amber],
@@ -733,8 +746,10 @@ function GradeRow({ grade, previews }){
   ];
   return (
     <div>
+      {/* deliberately a different question from the one before the reveal:
+          that was a prediction, this is what actually happened */}
       <Sub style={{ textAlign: 'center', marginBottom: 12 }}>
-        {previews ? 'How well did you know it?' : 'How well did you know it?'}
+        {sure ? 'You reckoned you had it — how did it actually go?' : 'Now you\'ve seen it — how did that go?'}
       </Sub>
       <div className="grid grid-cols-4 gap-2 sf-stagger">
         {items.map(([q, label, meaning, c]) => (
@@ -953,8 +968,13 @@ function buildQueue(decks, progress, settings, stats){
       else if (p.due <= today) due.push({ card: c, deck: d });
     }
   }
+  /* Shuffle before anything else. Without this the queue rebuilds in the exact
+     same order every time the feed remounts, so you meet the same cards again
+     after leaving and coming back. Order doesn't affect the scheduling. */
+  const shuffledDue = shuffle(due);
+  const shuffledFresh = shuffle(fresh);
   const budget = newBudgetFor(settings, stats);
-  let items = due.concat(budget === Infinity ? fresh : fresh.slice(0, budget));
+  let items = shuffledDue.concat(budget === Infinity ? shuffledFresh : shuffledFresh.slice(0, budget));
 
   // round-robin across subjects so no topic arrives in one block
   const interleaveSubjects = (list) => {
