@@ -1360,7 +1360,7 @@ function DraftReview({ drafts, setDrafts, meta, setMeta, onSave, onCancel }){
         </div>
       </Card>
 
-      <div className="flex flex-col gap-2" style={{ marginBottom: 16 }}>
+      <div className="sf-grid2" style={{ marginBottom: 16 }}>
         {drafts.map(d => {
           const p = draftPreview(d);
           return (
@@ -1410,7 +1410,7 @@ function Decks({ decks, progress, onEditCard, onDeleteCard, onDeleteDeck, onRena
   return (
     <div>
       <Title style={{ marginBottom: 14 }}>Your decks</Title>
-      <div className="flex flex-col gap-2">
+      <div className="sf-grid2">
         {decks.map(d => {
           const colour = subjectColour(d.subject);
           const dueN = d.cards.filter(c => { const p = progress[c.id]; return p && p.seen && p.due <= TODAY(); }).length;
@@ -1625,7 +1625,7 @@ function Stats({ decks, progress, stats }){
       </Sub>
 
       <Title style={{ margin: '26px 0 12px' }}>How well you know it</Title>
-      <div className="flex flex-col gap-3">
+      <div className="sf-grid2">
         {Object.keys(subjects).length === 0 && <Sub>No cards yet.</Sub>}
         {Object.entries(subjects).map(([s, v]) => {
           const pct = v.total ? Math.round((v.mastered / v.total) * 100) : 0;
@@ -1872,7 +1872,7 @@ export default function App(){
   if (!ready) return <Shell><Sub style={{ padding: 40, textAlign: 'center' }}>Loading…</Sub></Shell>;
 
   return (
-    <Shell>
+    <Shell tab={tab} setTab={setTab} due={dueCount} pending={pendingCount}>
       <Masthead due={dueCount} streak={stats.streak || 0} />
       <div style={{ minHeight: 440 }}>
         {/* key includes the mix so moving the slider rebuilds the queue at the new ratio */}
@@ -1889,14 +1889,13 @@ export default function App(){
         {tab === 'stats' && <Stats decks={library.decks} progress={progress} stats={stats} />}
         {tab === 'settings' && <Settings settings={settings} onChange={persistSettings} />}
       </div>
-      <Nav tab={tab} setTab={setTab} due={dueCount} pending={pendingCount} />
     </Shell>
   );
 }
 
-function Shell({ children }){
+function Shell({ children, tab, setTab, due, pending }){
   return (
-    <div style={{ background: T.bg, minHeight: '100vh', color: T.ink, display: 'flex', justifyContent: 'center' }}>
+    <div style={{ background: T.bg, minHeight: '100vh', color: T.ink }}>
       <style>{`
         @keyframes sf-in { from { opacity: 0; transform: translateY(12px) scale(0.985); } to { opacity: 1; transform: none; } }
         @keyframes sf-reveal { from { opacity: 0; transform: translateY(-6px); } to { opacity: 1; transform: none; } }
@@ -1933,10 +1932,79 @@ function Shell({ children }){
         .sf-stagger > *:nth-child(3) { animation-delay: 80ms; }
         .sf-stagger > *:nth-child(4) { animation-delay: 120ms; }
 
+        /* ---- responsive layout -------------------------------------------
+           Phone: single column, bottom nav. As the window grows the column
+           widens; past 1024px the nav becomes a sidebar and the content gets
+           the rest. Text still stops widening — long lines are hard to read,
+           so extra space goes to multi-column grids, not longer sentences. */
+        .sf-page { display: flex; justify-content: center; }
+        .sf-main { width: 100%; max-width: 520px; padding: 10px 16px 104px; position: relative; }
+        @media (min-width: 720px)  { .sf-main { max-width: 640px; padding-left: 22px; padding-right: 22px; } }
+        @media (min-width: 1024px) { .sf-main { max-width: 780px; padding-bottom: 52px; } }
+        @media (min-width: 1400px) { .sf-main { max-width: 880px; } }
+
+        .sf-navbottom { display: flex; }
+        .sf-navside   { display: none; }
+        @media (min-width: 1024px) {
+          .sf-navbottom { display: none; }
+          .sf-navside   { display: flex; }
+          .sf-page      { padding-left: 232px; }
+        }
+
+        /* one column on a phone, two once there's room */
+        .sf-grid2 { display: grid; grid-template-columns: 1fr; gap: 10px; }
+        @media (min-width: 720px) { .sf-grid2 { grid-template-columns: 1fr 1fr; } }
+
         @media (prefers-reduced-motion: reduce) { * { animation: none !important; transition: none !important; } }
       `}</style>
-      <div style={{ width: '100%', maxWidth: 460, padding: '10px 16px 104px', position: 'relative' }}>
-        {children}
+
+      <SideNav tab={tab} setTab={setTab} due={due} pending={pending} />
+      <div className="sf-page">
+        <div className="sf-main">{children}</div>
+      </div>
+      <Nav tab={tab} setTab={setTab} due={due} pending={pending} />
+    </div>
+  );
+}
+
+const NAV_ITEMS = [['feed','Study'],['create','Create'],['decks','Decks'],['stats','Stats'],['settings','You']];
+
+function NavBadge({ k, due, pending }){
+  if (k === 'feed' && due > 0){
+    return <span style={{ marginLeft: 'auto', fontFamily: SANS, fontSize: 11, fontWeight: 700, color: '#fff',
+      background: T.red, borderRadius: R.pill, padding: '2px 8px' }}>{due}</span>;
+  }
+  if (k === 'create' && pending > 0){
+    return <span style={{ marginLeft: 'auto', fontFamily: SANS, fontSize: 11, fontWeight: 700, color: '#fff',
+      background: T.amber, borderRadius: R.pill, padding: '2px 8px' }}>{pending}</span>;
+  }
+  return null;
+}
+
+/* desktop only — a real sidebar instead of a bottom bar stretched across 1400px */
+function SideNav({ tab, setTab, due, pending }){
+  return (
+    <div className="sf-navside" style={{ position: 'fixed', top: 0, left: 0, bottom: 0, width: 232,
+      flexDirection: 'column', padding: '26px 16px', background: T.surface,
+      borderRight: `1px solid ${T.border}`, zIndex: 5 }}>
+      <div style={{ fontFamily: SANS, fontSize: 21, fontWeight: 800, color: T.ink,
+        letterSpacing: '-0.03em', padding: '0 10px', marginBottom: 22 }}>Study Feed</div>
+      <div className="flex flex-col gap-1">
+        {NAV_ITEMS.map(([k, label]) => {
+          const active = tab === k;
+          return (
+            <button key={k} className="sf-tap" onClick={() => setTab(k)}
+              style={{ display: 'flex', alignItems: 'center', gap: 12, width: '100%', textAlign: 'left',
+                padding: '11px 12px', borderRadius: 14, border: 'none', cursor: 'pointer',
+                background: active ? rgba(T.accent, 0.1) : 'transparent',
+                transition: 'background 160ms' }}>
+              <Icon name={k} active={active} />
+              <span style={{ fontFamily: SANS, fontSize: 15, fontWeight: active ? 700 : 500,
+                color: active ? T.accent : T.muted }}>{label}</span>
+              <NavBadge k={k} due={due} pending={pending} />
+            </button>
+          );
+        })}
       </div>
     </div>
   );
@@ -1957,10 +2025,10 @@ function Masthead({ due, streak }){
 }
 
 function Nav({ tab, setTab, due, pending }){
-  const items = [['feed','Study'],['create','Create'],['decks','Decks'],['stats','Stats'],['settings','You']];
+  const items = NAV_ITEMS;
   return (
-    <div style={{ position: 'fixed', bottom: 0, left: 0, right: 0, display: 'flex', justifyContent: 'center', pointerEvents: 'none' }}>
-      <div style={{ width: '100%', maxWidth: 460, pointerEvents: 'auto',
+    <div className="sf-navbottom" style={{ position: 'fixed', bottom: 0, left: 0, right: 0, justifyContent: 'center', pointerEvents: 'none' }}>
+      <div style={{ width: '100%', maxWidth: 520, pointerEvents: 'auto',
         background: rgba('#FFFFFF', 0.92), backdropFilter: 'blur(16px)', WebkitBackdropFilter: 'blur(16px)',
         borderTop: `1px solid ${T.border}`, display: 'flex',
         padding: '8px 6px calc(8px + env(safe-area-inset-bottom))' }}>
