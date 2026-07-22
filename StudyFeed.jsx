@@ -87,7 +87,27 @@ async function save(key, value){
   catch (e){ console.error('storage.set failed', key, e); return false; }
 }
 
-const DEFAULT_SETTINGS = { interleave: true, newPerDay: 12, capNew: false, saveUsage: false };
+/* longMix = what % of your cards should be long (extended-response) answers.
+   Drives both what gets generated and how the feed is blended. */
+const DEFAULT_SETTINGS = { interleave: true, newPerDay: 12, capNew: false, saveUsage: false, longMix: 30 };
+const longMixOf = (s) => (s && s.longMix != null) ? s.longMix : 30;
+const isLongCard = (c) => c.type === 'extended';
+
+/* Interleave two lists so roughly pctLong% of the output comes from `long`.
+   Nothing is dropped — when one side runs out the rest is appended, so a due
+   card is never skipped just because of the mix. */
+function blendByRatio(long, quick, pctLong){
+  const out = [];
+  let li = 0, qi = 0;
+  while (li < long.length || qi < quick.length){
+    const total = li + qi;
+    const wantLong = total === 0 ? (pctLong >= 50) : ((li / total) * 100 < pctLong);
+    if (wantLong && li < long.length) out.push(long[li++]);
+    else if (qi < quick.length) out.push(quick[qi++]);
+    else if (li < long.length) out.push(long[li++]);
+  }
+  return out;
+}
 const DEFAULT_STATS = { streak: 0, lastDay: '', newByDate: {}, reviewsByDate: {}, practiceByDate: {}, bySubject: {} };
 
 /* ---- SM-2 scheduler ------------------------------------------------------ */
@@ -267,7 +287,26 @@ MATERIAL:
 ${source}`;
 }
 
-function mixedPrompt(source, level){
+/* turn the slider percentage into concrete per-reply counts */
+function mixTargets(pctLong){
+  const p = Math.max(0, Math.min(100, pctLong));
+  if (p <= 5)  return { long: 0, mcq: 2, quick: 11 };
+  if (p >= 95) return { long: 6, mcq: 1, quick: 0 };
+  return {
+    long:  Math.max(1, Math.round((p / 100) * 7)),
+    mcq:   2,
+    quick: Math.max(1, Math.round(((100 - p) / 100) * 11)),
+  };
+}
+
+function mixedPrompt(source, level, pctLong){
+  const t = mixTargets(pctLong);
+  const longRule = t.long === 0
+    ? 'Do NOT include any "extended" cards in this reply — the student has asked for short answers only.'
+    : `REQUIRED: exactly ${t.long} "extended" card${t.long > 1 ? 's' : ''} — never fewer. Emit them FIRST; your reply may be cut off at the end, so long cards must come before everything else.`;
+  const quickRule = t.quick === 0
+    ? 'Include at most one quick card; the student wants long-answer practice.'
+    : `Then about ${t.quick} quick cards (flip/cloze/short).`;
   return `You are an expert ${level} tutor. From the material below, make a MIXED set of study cards. Choose the best type for each idea — do NOT make everything the same type.
 
 Return ONLY a JSON array. Each card is one of:
@@ -277,13 +316,12 @@ Return ONLY a JSON array. Each card is one of:
 { "type":"mcq", "front": question, "options": [four options], "answer": index (0-based) of the correct option, "why": one line on why it is right and what the tempting wrong option gets wrong }
 { "type":"extended", "verb": one of ${COMMAND_VERBS.map(v => '"' + v + '"').join(', ')}, "prompt": full exam question, "marks": int, "achieved": the WHAT, "merit": the WHY/HOW with cause and effect, "excellence": links >=2 ideas + applies to the scenario + evaluates/justifies, "skeleton": the mark-earning sentence pattern, "pitfall": the specific error to avoid here }
 
-ORDER MATTERS. Emit the array in this order:
-  1. the "extended" cards FIRST,
-  2. then the "mcq" cards,
-  3. then the quick ones (flip/cloze/short).
-Your reply may be cut off at the end, so the long cards must come first or they are lost.
+THE MIX FOR THIS REPLY:
+${longRule}
+Then about ${t.mcq} "mcq" cards whose wrong options are REAL misconceptions a student actually holds (never filler).
+${quickRule}
 
-REQUIRED COUNTS per reply: at least 2 "extended" cards (3 if the material supports it), then 2-3 "mcq" whose wrong options are REAL misconceptions a student actually holds (never filler), then 5-8 quick cards. Never return zero extended cards.
+Emit in this order: extended, then mcq, then quick.
 
 Ground everything in the material. Do NOT invent NZQA codes. No JSON outside the array.
 
@@ -324,10 +362,10 @@ function callModelMulti(prompt, images, maxTokens = 1000, model = MODEL_SMART){
   return postMessages(content, maxTokens, model);
 }
 
-function promptFor(mode, source, level){
+function promptFor(mode, source, level, pctLong){
   if (mode === 'flip') return flipPrompt(source, level);
   if (mode === 'extended') return extendedPrompt(source, level);
-  return mixedPrompt(source, level);
+  return mixedPrompt(source, level, pctLong);
 }
 function parseReply(mode, reply){
   if (mode === 'flip'){
@@ -344,19 +382,19 @@ function parseReply(mode, reply){
   return cardsFromJson(parseJsonArray(reply));
 }
 
-async function genText(source, mode, level, onProgress, model){
+async function genText(source, mode, level, onProgress, model, pctLong){
   const batches = batchText(source);
   let cards = [];
   for (let i = 0; i < batches.length; i++){
     onProgress && onProgress(i + 1, batches.length, 'text');
     let reply = '';
-    try { reply = await callModel(promptFor(mode, batches[i], level), 2000, model); }
+    try { reply = await callModel(promptFor(mode, batches[i], level, pctLong), 2000, model); }
     catch (e){ noteApiError(e); continue; }
     cards = cards.concat(parseReply(mode, reply));
   }
   return cards;
 }
-async function genImages(images, mode, level, onProgress, model){
+async function genImages(images, mode, level, onProgress, model, pctLong){
   const groups = [];
   for (let i = 0; i < images.length; i += 6) groups.push(images.slice(i, i + 6));
   const note = 'Base the cards ONLY on the attached image(s). Read all text, labels, diagrams, formulae and handwriting in them.';
@@ -364,7 +402,7 @@ async function genImages(images, mode, level, onProgress, model){
   for (let g = 0; g < groups.length; g++){
     onProgress && onProgress(g + 1, groups.length, 'images');
     let reply = '';
-    try { reply = await callModelMulti(promptFor(mode, note, level), groups[g], 2000, model); }
+    try { reply = await callModelMulti(promptFor(mode, note, level, pctLong), groups[g], 2000, model); }
     catch (e){ noteApiError(e); continue; }
     cards = cards.concat(parseReply(mode, reply));
   }
@@ -553,6 +591,37 @@ function Segmented({ value, onChange, options }){
           </button>
         );
       })}
+    </div>
+  );
+}
+
+/* Quick ←→ Long answer balance. Value is the % of cards that should be long. */
+function MixSlider({ value, onChange, compact }){
+  const pct = Math.max(0, Math.min(100, value));
+  const labelFor = (p) =>
+    p <= 5   ? 'Short answers only' :
+    p >= 95  ? 'Long answers only'  :
+    p < 25   ? 'Mostly quick recall' :
+    p < 45   ? 'Balanced, leaning quick' :
+    p < 60   ? 'An even split' :
+    p < 80   ? 'Balanced, leaning long' : 'Mostly exam-style';
+
+  return (
+    <div>
+      <div className="flex items-center justify-between" style={{ marginBottom: 9 }}>
+        <Chip colour={T.green}>{100 - pct}% quick</Chip>
+        <div style={{ fontFamily: SANS, fontSize: 12.5, fontWeight: 600, color: T.muted }}>{labelFor(pct)}</div>
+        <Chip colour={T.accent}>{pct}% long</Chip>
+      </div>
+      <input className="sf-range" type="range" min={0} max={100} step={5} value={pct}
+        onChange={e => onChange(Number(e.target.value))}
+        style={{ background: `linear-gradient(to right, ${T.green}, ${T.accent})` }} />
+      {!compact && (
+        <div className="flex items-center justify-between" style={{ marginTop: 7 }}>
+          <Sub style={{ fontSize: 12 }}>Flip · fill-the-blank · multi-choice</Sub>
+          <Sub style={{ fontSize: 12 }}>Full exam questions</Sub>
+        </div>
+      )}
     </div>
   );
 }
@@ -887,27 +956,32 @@ function buildQueue(decks, progress, settings, stats){
   const budget = newBudgetFor(settings, stats);
   let items = due.concat(budget === Infinity ? fresh : fresh.slice(0, budget));
 
-  if (settings.interleave && items.length > 1){
+  // round-robin across subjects so no topic arrives in one block
+  const interleaveSubjects = (list) => {
+    if (!settings.interleave || list.length < 2) return list;
     const bySub = {};
-    for (const it of items){
+    for (const it of list){
       const k = it.deck.subject || '';
       if (!bySub[k]) bySub[k] = [];
       bySub[k].push(it);
     }
     const lanes = Object.values(bySub);
-    if (lanes.length > 1){
-      const out = [];
-      const cap = items.length * lanes.length + lanes.length;
-      let n = 0;
-      while (out.length < items.length && n < cap){
-        const lane = lanes[n % lanes.length];
-        if (lane.length) out.push(lane.shift());
-        n++;
-      }
-      if (out.length === items.length) items = out;
+    if (lanes.length < 2) return list;
+    const out = [];
+    const cap = list.length * lanes.length + lanes.length;
+    let n = 0;
+    while (out.length < list.length && n < cap){
+      const lane = lanes[n % lanes.length];
+      if (lane.length) out.push(lane.shift());
+      n++;
     }
-  }
-  return items;
+    return out.length === list.length ? out : list;
+  };
+
+  // then blend long vs quick to the ratio the user picked
+  const long = interleaveSubjects(items.filter(it => isLongCard(it.card)));
+  const quick = interleaveSubjects(items.filter(it => !isLongCard(it.card)));
+  return blendByRatio(long, quick, longMixOf(settings));
 }
 
 function Feed({ decks, progress, settings, stats, onGrade, reduceMotion }){
@@ -916,6 +990,12 @@ function Feed({ decks, progress, settings, stats, onGrade, reduceMotion }){
     for (const d of decks) for (const c of d.cards) out.push({ card: c, deck: d });
     return out;
   }, [decks]);
+
+  // practice pool: shuffled, then blended to the same long/quick ratio
+  const mixedPool = useCallback(() => {
+    const s = shuffle(allItems);
+    return blendByRatio(s.filter(it => isLongCard(it.card)), s.filter(it => !isLongCard(it.card)), longMixOf(settings));
+  }, [allItems, settings]);
 
   const [queue, setQueue] = useState(() => buildQueue(decks, progress, settings, stats));
   const [reviewed, setReviewed] = useState(0);
@@ -927,7 +1007,7 @@ function Feed({ decks, progress, settings, stats, onGrade, reduceMotion }){
 
   useEffect(() => {
     if (inPractice && pool.length === 0 && allItems.length > 0){
-      setPool(shuffle(allItems));
+      setPool(mixedPool());
       setPIdx(0);
     }
   }, [inPractice, pool.length, allItems]);
@@ -951,7 +1031,7 @@ function Feed({ decks, progress, settings, stats, onGrade, reduceMotion }){
     onGrade(it.card, it.deck, q, sure, true);
     setReviewed(r => r + 1);
     const next = pIdx + 1;
-    if (next >= pool.length){ setPool(shuffle(allItems)); setPIdx(0); }
+    if (next >= pool.length){ setPool(mixedPool()); setPIdx(0); }
     else setPIdx(next);
   };
 
@@ -1003,7 +1083,7 @@ function Feed({ decks, progress, settings, stats, onGrade, reduceMotion }){
 const INPUT = { width: '100%', background: T.well, color: T.ink, border: `1px solid ${T.border}`,
   borderRadius: R.well, padding: '13px 14px', fontFamily: SANS, lineHeight: 1.55, outline: 'none' };
 
-function Create({ onSave, settings }){
+function Create({ onSave, settings, onSettings }){
   const [mode, setMode] = useState('generate');
   const [cardType, setCardType] = useState('mix');
   const [source, setSource] = useState('');
@@ -1054,12 +1134,13 @@ function Create({ onSave, settings }){
     try {
       const model = pickModel(cardType, settings);
       let cards = [];
-      if (source.trim()) cards = cards.concat(await genText(source, cardType, lvl, (i, n, phase) => setProg({ i, n, phase }), model));
+      const pctLong = longMixOf(settings);
+      if (source.trim()) cards = cards.concat(await genText(source, cardType, lvl, (i, n, phase) => setProg({ i, n, phase }), model, pctLong));
       if (images.length){
         setProg({ i: 0, n: 0, phase: 'prep' });
         const shrunk = [];
         for (const b of images.slice(0, 12)){ try { shrunk.push(await resizeImage(b)); } catch {} }
-        if (shrunk.length) cards = cards.concat(await genImages(shrunk, cardType, lvl, (i, n, phase) => setProg({ i, n, phase }), model));
+        if (shrunk.length) cards = cards.concat(await genImages(shrunk, cardType, lvl, (i, n, phase) => setProg({ i, n, phase }), model, pctLong));
         else if (!cards.length){ setErr('Could not read those images. Try a clearer photo.'); setBusy(false); setProg(null); return; }
       }
       cards = dedupeCards(cards);
@@ -1097,6 +1178,12 @@ function Create({ onSave, settings }){
           <Segmented value={cardType} onChange={setCardType}
             options={[{ v: 'mix', label: 'Mixed' }, { v: 'extended', label: 'Long' }, { v: 'flip', label: 'Quick' }]} />
         </div>
+      )}
+
+      {mode === 'generate' && cardType === 'mix' && (
+        <Card style={{ padding: 15, marginTop: 10, boxShadow: SH.raised }}>
+          <MixSlider value={longMixOf(settings)} onChange={(v) => onSettings({ ...settings, longMix: v })} compact />
+        </Card>
       )}
 
       {mode === 'generate' && (
@@ -1505,6 +1592,14 @@ function Settings({ settings, onChange }){
     <div>
       <Title style={{ marginBottom: 14 }}>Settings</Title>
 
+      <Card style={{ padding: 15, marginBottom: 10, boxShadow: SH.raised }}>
+        <div style={{ fontFamily: SANS, fontSize: 15, fontWeight: 700, color: T.ink }}>Answer length</div>
+        <Sub style={{ fontSize: 12.5, marginTop: 2, marginBottom: 14 }}>
+          Sets the balance of new cards you make, and how your feed is mixed.
+        </Sub>
+        <MixSlider value={longMixOf(settings)} onChange={(v) => set({ longMix: v })} />
+      </Card>
+
       <SettingRow title="Mix subjects up" note="Rotates subjects so you don't do one topic in a block">
         <Toggle on={settings.interleave} onClick={() => set({ interleave: !settings.interleave })} />
       </SettingRow>
@@ -1636,9 +1731,10 @@ export default function App(){
     <Shell>
       <Masthead due={dueCount} streak={stats.streak || 0} />
       <div style={{ minHeight: 440 }}>
-        {tab === 'feed' && <Feed key={'feed-' + cardCount} decks={library.decks} progress={progress} settings={settings}
+        {/* key includes the mix so moving the slider rebuilds the queue at the new ratio */}
+        {tab === 'feed' && <Feed key={'feed-' + cardCount + '-' + longMixOf(settings)} decks={library.decks} progress={progress} settings={settings}
           stats={stats} onGrade={gradeCard} reduceMotion={reduceMotion.current} />}
-        {tab === 'create' && <Create onSave={saveDeck} settings={settings} />}
+        {tab === 'create' && <Create onSave={saveDeck} settings={settings} onSettings={persistSettings} />}
         {tab === 'decks' && <Decks decks={library.decks} progress={progress} onEditCard={editCard} onDeleteCard={deleteCard} onDeleteDeck={deleteDeck} />}
         {tab === 'stats' && <Stats decks={library.decks} progress={progress} stats={stats} />}
         {tab === 'settings' && <Settings settings={settings} onChange={persistSettings} />}
@@ -1671,6 +1767,15 @@ function Shell({ children }){
           .sf-tap:hover { border-color: ${rgba(T.accent, 0.35)}; }
         }
         :focus-visible { outline: 2.5px solid ${rgba(T.accent, 0.5)}; outline-offset: 2px; }
+
+        .sf-range { -webkit-appearance: none; appearance: none; width: 100%; height: 10px;
+          border-radius: 999px; outline: none; cursor: pointer; }
+        .sf-range::-webkit-slider-thumb { -webkit-appearance: none; appearance: none;
+          width: 28px; height: 28px; border-radius: 999px; background: #fff;
+          border: 3px solid ${T.surface}; box-shadow: 0 2px 8px rgba(20,22,43,0.28); cursor: grab; }
+        .sf-range::-webkit-slider-thumb:active { cursor: grabbing; transform: scale(1.08); }
+        .sf-range::-moz-range-thumb { width: 24px; height: 24px; border-radius: 999px; background: #fff;
+          border: 3px solid ${T.surface}; box-shadow: 0 2px 8px rgba(20,22,43,0.28); cursor: grab; }
 
         .sf-stagger > * { animation: sf-rise 280ms cubic-bezier(.2,.8,.3,1) backwards; }
         .sf-stagger > *:nth-child(1) { animation-delay: 0ms; }
