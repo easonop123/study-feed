@@ -1,0 +1,11 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "studyfeed-web",
+      "runtimeExecutable": "node",
+      "runtimeArgs": ["node_modules/esbuild/bin/esbuild", "--servedir=docs", "--serve=8123"],
+      "port": 8123
+    }
+  ]
+}

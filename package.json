@@ -1,0 +1,17 @@
+{
+  "name": "study-feed",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Turns dead time into revision. Runs as a claude.ai Artifact or as a website.",
+  "scripts": {
+    "build": "esbuild web/main.jsx --bundle --loader:.jsx=jsx --jsx=automatic --minify --outfile=docs/app.js",
+    "check": "esbuild StudyFeed.jsx --bundle --loader:.jsx=jsx --external:react --format=esm --outfile=/dev/null"
+  },
+  "dependencies": {
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1"
+  },
+  "devDependencies": {
+    "esbuild": "^0.23.0"
+  }
+}

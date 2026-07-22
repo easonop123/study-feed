@@ -2,10 +2,9 @@
 # (large pastes get dropped; file upload is reliable). Not a second source.
 StudyFeed.txt
 
-# nothing to build — single-file source. Keep the repo clean of OS/editor cruft.
+node_modules/
 .DS_Store
 Thumbs.db
 *.log
-node_modules/
 .vscode/
 .idea/

@@ -72,9 +72,27 @@ const addDays = (base, n) => {
 };
 const TODAY = () => dayStr();
 
+/* ---- platform ------------------------------------------------------------
+   The same file runs in two places: inside a claude.ai Artifact (which
+   provides window.storage and a keyless API route) and as a plain website
+   (browser storage, and your own API key). Detect, don't fork. */
+const IN_ARTIFACT = typeof window !== 'undefined' && !!window.storage;
+const KEY_STORE = 'studyfeed:apikey';
+
+const getApiKey = () => {
+  try { return window.localStorage.getItem(KEY_STORE) || ''; } catch { return ''; }
+};
+const setApiKey = (k) => {
+  try { k ? window.localStorage.setItem(KEY_STORE, k) : window.localStorage.removeItem(KEY_STORE); } catch {}
+};
+
 /* ---- storage ------------------------------------------------------------- */
 async function load(key, fallback){
   try {
+    if (!IN_ARTIFACT){
+      const raw = window.localStorage.getItem(key);
+      return raw === null ? fallback : JSON.parse(raw);
+    }
     const r = await window.storage.get(key);
     if (r === undefined || r === null) return fallback;
     const raw = (r && typeof r === 'object' && 'value' in r) ? r.value : r;
@@ -83,8 +101,11 @@ async function load(key, fallback){
   } catch { return fallback; }
 }
 async function save(key, value){
-  try { await window.storage.set(key, JSON.stringify(value)); return true; }
-  catch (e){ console.error('storage.set failed', key, e); return false; }
+  try {
+    if (!IN_ARTIFACT){ window.localStorage.setItem(key, JSON.stringify(value)); return true; }
+    await window.storage.set(key, JSON.stringify(value));
+    return true;
+  } catch (e){ console.error('storage.set failed', key, e); return false; }
 }
 
 /* longMix = what % of your cards should be long (extended-response) answers.
@@ -352,12 +373,25 @@ let lastApiError = '';
 const noteApiError = (e) => { lastApiError = (e && e.message) ? String(e.message) : String(e); };
 
 async function postMessages(content, maxTokens, model){
+  const headers = { 'Content-Type': 'application/json', 'anthropic-version': '2023-06-01' };
+
+  /* Website build: the request carries YOUR key, and browsers must opt in to
+     talking to the API directly. Inside an Artifact neither is needed. */
+  if (!IN_ARTIFACT){
+    const key = getApiKey();
+    if (!key) throw new Error('no API key set — add one under You → API key');
+    headers['x-api-key'] = key;
+    headers['anthropic-dangerous-direct-browser-access'] = 'true';
+  }
+
   const res = await fetch('https://api.anthropic.com/v1/messages', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json', 'anthropic-version': '2023-06-01' },
+    method: 'POST', headers,
     body: JSON.stringify({ model, max_tokens: maxTokens, messages: [{ role: 'user', content }] }),
   });
-  if (!res.ok) throw new Error('API returned ' + res.status + (res.status === 404 ? ' (unknown model)' : ''));
+  if (!res.ok){
+    if (res.status === 401) throw new Error('API key rejected — check it under You → API key');
+    throw new Error('API returned ' + res.status + (res.status === 404 ? ' (unknown model)' : ''));
+  }
   const data = await res.json();
   return (data.content || []).filter(b => b.type === 'text').map(b => b.text).join('');
 }
@@ -1651,11 +1685,52 @@ function SettingRow({ title, note, children }){
   );
 }
 
+/* Only on the website build. In an Artifact the API route needs no key. */
+function ApiKeyCard(){
+  const [key, setKey] = useState(getApiKey());
+  const [editing, setEditing] = useState(!getApiKey());
+  const masked = key ? key.slice(0, 7) + '…' + key.slice(-4) : '';
+
+  return (
+    <Card style={{ padding: 15, marginBottom: 10, boxShadow: SH.raised }}>
+      <div style={{ fontFamily: SANS, fontSize: 15, fontWeight: 700, color: T.ink }}>API key</div>
+      <Sub style={{ fontSize: 12.5, marginTop: 2, marginBottom: 12 }}>
+        Needed to make cards. Studying works without one. Stored only on this device — set a
+        spend limit on it in the Anthropic console.
+      </Sub>
+      {editing ? (
+        <div>
+          <input type="password" value={key} onChange={e => setKey(e.target.value)}
+            placeholder="sk-ant-…" autoComplete="off" spellCheck={false}
+            style={{ ...INPUT, fontSize: 14 }} />
+          <div className="flex gap-2" style={{ marginTop: 10 }}>
+            <Btn kind="primary" onClick={() => { setApiKey(key.trim()); setEditing(false); }}
+              disabled={!key.trim()} style={{ fontSize: 14, padding: '11px 20px' }}>Save key</Btn>
+            {getApiKey() && <Btn kind="ghost" onClick={() => { setKey(getApiKey()); setEditing(false); }}
+              style={{ fontSize: 14, padding: '11px 16px' }}>Cancel</Btn>}
+          </div>
+        </div>
+      ) : (
+        <div className="flex items-center justify-between">
+          <Chip colour={T.green}>Saved · {masked}</Chip>
+          <div className="flex gap-2">
+            <Btn kind="soft" onClick={() => setEditing(true)} style={{ fontSize: 13, padding: '8px 14px' }}>Change</Btn>
+            <Btn kind="danger" onClick={() => { setApiKey(''); setKey(''); setEditing(true); }}
+              style={{ fontSize: 13, padding: '8px 14px' }}>Remove</Btn>
+          </div>
+        </div>
+      )}
+    </Card>
+  );
+}
+
 function Settings({ settings, onChange }){
   const set = (patch) => onChange({ ...settings, ...patch });
   return (
     <div>
       <Title style={{ marginBottom: 14 }}>Settings</Title>
+
+      {!IN_ARTIFACT && <ApiKeyCard />}
 
       <Card style={{ padding: 15, marginBottom: 10, boxShadow: SH.raised }}>
         <div style={{ fontFamily: SANS, fontSize: 15, fontWeight: 700, color: T.ink }}>Answer length</div>

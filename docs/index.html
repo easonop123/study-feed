@@ -1,0 +1,27 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+  <title>Study Feed</title>
+  <meta name="description" content="Turns dead time into revision." />
+
+  <!-- installs to the home screen as a proper full-screen app -->
+  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-status-bar-style" content="default" />
+  <meta name="apple-mobile-web-app-title" content="Study Feed" />
+  <meta name="theme-color" content="#F6F7FB" />
+  <link rel="manifest" href="manifest.webmanifest" />
+  <link rel="apple-touch-icon" href="icon.png" />
+
+  <!-- the app uses Tailwind core utilities for layout only -->
+  <script src="https://cdn.tailwindcss.com"></script>
+  <style>
+    html, body { margin: 0; background: #F6F7FB; -webkit-font-smoothing: antialiased; }
+  </style>
+</head>
+<body>
+  <div id="root"></div>
+  <script type="module" src="app.js"></script>
+</body>
+</html>
