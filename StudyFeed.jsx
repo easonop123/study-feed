@@ -168,9 +168,13 @@ function schedule(prevRaw, q, committedWrong){
     if (q === Q.HARD)      p.ease = Math.max(1.3, p.ease - 0.15);
     else if (q === Q.EASY) p.ease = p.ease + 0.15;
 
+    /* Distinct steps at every stage — the old SM-2 gave Hard/Good/Easy the
+       SAME interval for the first two reviews (1 then 6), so the previews all
+       showed the same time. Graduating steps make the four buttons mean
+       something from the very first review. */
     let ivl;
-    if (p.reps === 0)      ivl = 1;
-    else if (p.reps === 1) ivl = 6;
+    if (p.reps === 0)      ivl = q === Q.HARD ? 1 : q === Q.GOOD ? 2 : 4;
+    else if (p.reps === 1) ivl = q === Q.HARD ? 3 : q === Q.GOOD ? 6 : 10;
     else if (q === Q.HARD) ivl = p.interval * 1.2;
     else if (q === Q.EASY) ivl = p.interval * p.ease * 1.3;
     else                   ivl = p.interval * p.ease;
@@ -454,6 +458,19 @@ function pickModel(mode, settings){
    would otherwise surface as a blank "nothing came back". Record it. */
 let lastApiError = '';
 const noteApiError = (e) => { lastApiError = (e && e.message) ? String(e.message) : String(e); };
+
+/* Turn a raw fetch/API failure into something the user can act on. The most
+   common one on the website is simply "no key yet". */
+function friendlyApiError(e){
+  const m = (e && e.message) ? e.message : '';
+  if (/no API key/i.test(m)) return IN_ARTIFACT
+    ? 'The AI is unavailable right now — try again in a moment.'
+    : 'Add your own API key under the You tab to turn this on.';
+  if (/\b401\b/.test(m)) return 'Your API key was rejected — check it under the You tab.';
+  if (/\b40[34]\b/.test(m)) return 'That model isn\'t available on your key. ' + m;
+  if (/\b429\b/.test(m)) return 'Rate limited — wait a moment and try again.';
+  return 'Couldn\'t reach the AI. Check your connection and try again.';
+}
 
 async function postMessages(content, maxTokens, model){
   const headers = { 'Content-Type': 'application/json', 'anthropic-version': '2023-06-01' };
@@ -1061,7 +1078,7 @@ function ExtendedFace({ card, phase, deck, onReveal }){
       const h = await getHints(card, deck.standard || 'NCEA Level 1');
       if (h.length) setHints(h);
       else setHintErr('Could not fetch points. Try again.');
-    } catch { setHintErr('No connection — try again when online.'); }
+    } catch (e){ setHintErr(friendlyApiError(e)); }
     finally { setHintBusy(false); }
   };
 
@@ -1072,7 +1089,7 @@ function ExtendedFace({ card, phase, deck, onReveal }){
       const r = await markAnswer(card, answer, deck.standard || 'NCEA Level 1');
       if (r){ setResult(r); onReveal && onReveal(); }   // show feedback and the ladder together
       else setErr('Could not read the marking. Try again.');
-    } catch { setErr('No connection to the marker. Your answer is safe — try again when online.'); }
+    } catch (e){ setErr(friendlyApiError(e) + ' Your answer is safe.'); }
     finally { setBusy(false); }
   };
 
@@ -1413,7 +1430,7 @@ function Create({ onSave, settings, onSettings, onPending }){
       }
       cards = dedupeCards(cards);
       if (!cards.length){
-        setErr(lastApiError ? `Nothing came back — ${lastApiError}.`
+        setErr(lastApiError ? friendlyApiError({ message: lastApiError })
                             : 'Nothing came back. Try clearer notes, a narrower topic, or a sharper photo.');
         setBusy(false); return;
       }
