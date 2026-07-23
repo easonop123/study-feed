@@ -60,6 +60,16 @@ function subjectColour(name){
 const TYPE_LABEL = { flip: 'Flip', cloze: 'Fill the blank', short: 'Short answer', mcq: 'Multiple choice', extended: 'Long answer' };
 const LEVEL_PRESETS = ['NCEA Level 1', 'NCEA Level 2', 'NCEA Level 3'];
 
+/* Symbols that are a pain to type when answering chemistry/physics/maths.
+   Subscripts build formulae (H + ₂ + O = H₂O); superscripts build charges
+   and powers (SO₄ + ² + ⁻ = SO₄²⁻; ×10 + ⁻ + ⁷). */
+const SYMBOL_GROUPS = [
+  ['Subscript (formulae)', ['₀','₁','₂','₃','₄','₅','₆','₇','₈','₉']],
+  ['Superscript (charges, powers)', ['⁰','¹','²','³','⁴','⁵','⁶','⁷','⁸','⁹','⁺','⁻']],
+  ['Reactions', ['→','⇌','↔','↑','↓','Δ']],
+  ['Maths', ['°','×','÷','±','√','≈','≠','≤','≥','·','∴','⁻']],
+];
+
 /* ---- dates : YYYY-MM-DD so they compare lexically ------------------------ */
 const dayStr = (d = new Date()) => {
   const z = new Date(d.getTime() - d.getTimezoneOffset() * 60000);
@@ -895,6 +905,43 @@ const ANSWER   = { fontFamily: SANS, fontSize: 16, lineHeight: 1.6, color: T.mut
 const REVEAL   = { marginTop: 18, paddingTop: 18, borderTop: `1px solid ${T.border}`, animation: 'sf-reveal 280ms cubic-bezier(.2,.8,.3,1)' };
 const PANEL    = { background: T.well, borderRadius: R.well, padding: '13px 15px' };
 
+/* A collapsible key palette for symbols that are awkward to type. Tapping a
+   key calls onInsert(symbol); the parent drops it in at the caret. Collapsed
+   by default so it stays out of the way when it isn't needed. */
+function SymbolBar({ onInsert }){
+  const [open, setOpen] = useState(false);
+  return (
+    <div style={{ marginTop: 10 }}>
+      <button className="sf-tap" onClick={() => setOpen(o => !o)}
+        style={{ background: T.well, border: 'none', borderRadius: R.pill, padding: '8px 14px', cursor: 'pointer',
+          fontFamily: SANS, fontSize: 13, fontWeight: 600, color: T.muted }}>
+        {open ? '× Hide symbols' : 'H₂O⁺  Symbols'}
+      </button>
+      {open && (
+        <div style={{ ...PANEL, marginTop: 8 }}>
+          {SYMBOL_GROUPS.map(([label, syms]) => (
+            <div key={label} style={{ marginBottom: 10 }}>
+              <div style={{ fontFamily: SANS, fontSize: 11, fontWeight: 700, color: T.faint, marginBottom: 6 }}>{label}</div>
+              <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
+                {syms.map(sym => (
+                  <button key={sym} className="sf-tap"
+                    onMouseDown={e => e.preventDefault()}   /* keep the textarea focused so the caret survives */
+                    onClick={() => onInsert(sym)}
+                    style={{ minWidth: 38, height: 38, borderRadius: 10, border: `1px solid ${T.border}`,
+                      background: T.surface, cursor: 'pointer', fontFamily: SANS, fontSize: 17, color: T.ink }}>
+                    {sym}
+                  </button>
+                ))}
+              </div>
+            </div>
+          ))}
+          <Sub style={{ fontSize: 11.5 }}>Build them up: type H, tap ₂, type O → H₂O</Sub>
+        </div>
+      )}
+    </div>
+  );
+}
+
 function FlipFace({ card, phase }){
   return (
     <div>
@@ -980,7 +1027,33 @@ function ExtendedFace({ card, phase, deck, onReveal }){
   const [hintBusy, setHintBusy] = useState(false);
   const [hintErr, setHintErr] = useState('');
 
-  useEffect(() => { setAnswer(''); setResult(null); setErr(''); setHints(null); setHintErr(''); }, [card.id]);
+  const taRef = useRef(null);
+  const selRef = useRef({ start: 0, end: 0 });    // last caret/selection in the answer box
+  const caretRef = useRef(null);                  // where to put the caret after the next render
+  const rememberSel = () => {
+    const ta = taRef.current;
+    if (ta) selRef.current = { start: ta.selectionStart, end: ta.selectionEnd };
+  };
+  // after a symbol insert, React resets the caret to the end; put it back
+  useEffect(() => {
+    if (caretRef.current != null && taRef.current){
+      const p = caretRef.current; caretRef.current = null;
+      try { taRef.current.setSelectionRange(p, p); } catch {}
+    }
+  });
+  const insertSymbol = (sym) => {
+    const ta = taRef.current;
+    const val = ta ? ta.value : answer;
+    let { start, end } = selRef.current;
+    start = Math.min(start, val.length); end = Math.min(end, val.length);
+    const pos = start + sym.length;
+    selRef.current = { start: pos, end: pos };
+    caretRef.current = pos;
+    if (ta) ta.focus();
+    setAnswer(val.slice(0, start) + sym + val.slice(end));
+  };
+
+  useEffect(() => { setAnswer(''); setResult(null); setErr(''); setHints(null); setHintErr(''); selRef.current = { start: 0, end: 0 }; }, [card.id]);
 
   const doHints = async () => {
     setHintBusy(true); setHintErr('');
@@ -1017,12 +1090,15 @@ function ExtendedFace({ card, phase, deck, onReveal }){
       {phase === 'attempt' && (
         <div style={{ marginTop: 16 }}>
           <Sub style={{ marginBottom: 8, fontWeight: 600, color: T.ink }}>Write your answer</Sub>
-          <textarea value={answer} onChange={e => setAnswer(e.target.value)}
+          <textarea ref={taRef} value={answer}
+            onChange={e => { setAnswer(e.target.value); selRef.current = { start: e.target.selectionStart, end: e.target.selectionEnd }; }}
+            onSelect={rememberSel} onClick={rememberSel} onKeyUp={rememberSel}
             placeholder={`Use the ${card.verb.toLowerCase()} command properly — ${card.marks} marks means ${card.marks >= 5 ? 'several linked points' : 'more than one point'}.`}
             rows={6}
             style={{ width: '100%', background: T.well, color: T.ink, border: `1px solid ${T.border}`,
               borderRadius: R.well, padding: 14, fontFamily: SANS, fontSize: 15, lineHeight: 1.55,
               resize: 'vertical', outline: 'none' }} />
+          <SymbolBar onInsert={insertSymbol} />
           <div className="flex items-center justify-between" style={{ marginTop: 7, marginBottom: 11 }}>
             <Sub style={{ fontSize: 12 }}>{words > 0 ? `${words} words` : 'Even a rough attempt beats reading the answer'}</Sub>
           </div>
