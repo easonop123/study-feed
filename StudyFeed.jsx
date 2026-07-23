@@ -548,6 +548,28 @@ async function markAnswer(card, answer, level){
   return objs[0] || null;
 }
 
+/* Writing points — a scaffold when you're stuck, NOT the answer. Prompts and
+   structure only, so you still have to write it yourself. */
+function hintPrompt(card, level){
+  return `A ${level} student is stuck on this exam question and wants a nudge, NOT the answer.
+
+COMMAND VERB: ${card.verb}
+QUESTION (${card.marks} marks): ${card.prompt}
+
+Give 3-5 short writing points that guide them to build the answer themselves:
+- name WHAT to cover and in what order (the structure the marks follow)
+- phrase each as a prompt or a fill-in, e.g. "Start by defining ___" or "Then link it to ___ because…"
+- for a ${card.verb} question, remind them what that verb demands
+Do NOT state the actual facts, terms, values or model answer — leave the thinking to them.
+
+Return ONLY a JSON array of short strings. No prose outside it.`;
+}
+async function getHints(card, level){
+  const reply = await callModel(hintPrompt(card, level), 600, MODEL_SMART);
+  const arr = parseJsonArray(reply);
+  return Array.isArray(arr) ? arr.map(String).filter(Boolean).slice(0, 6) : [];
+}
+
 function parseManual(text){
   const seen = new Set();
   const cards = [];
@@ -954,8 +976,21 @@ function ExtendedFace({ card, phase, deck, onReveal }){
   const [busy, setBusy] = useState(false);
   const [result, setResult] = useState(null);
   const [err, setErr] = useState('');
+  const [hints, setHints] = useState(null);      // null = not asked, [] = none, [..] = points
+  const [hintBusy, setHintBusy] = useState(false);
+  const [hintErr, setHintErr] = useState('');
 
-  useEffect(() => { setAnswer(''); setResult(null); setErr(''); }, [card.id]);
+  useEffect(() => { setAnswer(''); setResult(null); setErr(''); setHints(null); setHintErr(''); }, [card.id]);
+
+  const doHints = async () => {
+    setHintBusy(true); setHintErr('');
+    try {
+      const h = await getHints(card, deck.standard || 'NCEA Level 1');
+      if (h.length) setHints(h);
+      else setHintErr('Could not fetch points. Try again.');
+    } catch { setHintErr('No connection — try again when online.'); }
+    finally { setHintBusy(false); }
+  };
 
   const doMark = async () => {
     if (!answer.trim()) return;
@@ -998,6 +1033,33 @@ function ExtendedFace({ card, phase, deck, onReveal }){
             <Btn kind="soft" onClick={() => onReveal && onReveal()} style={{ whiteSpace: 'nowrap' }}>Skip</Btn>
           </div>
           {err && <Sub style={{ marginTop: 10, color: T.red }}>{err}</Sub>}
+
+          {/* a nudge for when you're stuck — structure, not the answer */}
+          {hints === null ? (
+            <button className="sf-tap" onClick={doHints} disabled={hintBusy}
+              style={{ background: 'none', border: 'none', cursor: hintBusy ? 'default' : 'pointer',
+                padding: '12px 2px 0', fontFamily: SANS, fontSize: 13.5, fontWeight: 600,
+                color: hintBusy ? T.faint : T.accent }}>
+              {hintBusy ? 'Thinking of some pointers…' : '💡 Stuck? Give me some writing points'}
+            </button>
+          ) : (
+            <div style={{ ...PANEL, marginTop: 14, background: rgba(T.amber, 0.09) }}>
+              <div className="flex items-center justify-between" style={{ marginBottom: 8 }}>
+                <Chip colour={T.amber}>Writing points</Chip>
+                <Sub style={{ fontSize: 11.5 }}>The shape of the answer — the words are yours</Sub>
+              </div>
+              <div className="flex flex-col gap-2">
+                {hints.map((h, i) => (
+                  <div key={i} className="flex gap-2" style={{ alignItems: 'flex-start' }}>
+                    <span style={{ fontFamily: SANS, fontSize: 12, fontWeight: 800, color: T.amber,
+                      lineHeight: '22px', flexShrink: 0 }}>{i + 1}</span>
+                    <span style={{ fontFamily: SANS, fontSize: 14.5, lineHeight: 1.5, color: T.ink }}>{h}</span>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+          {hintErr && <Sub style={{ marginTop: 8, color: T.red }}>{hintErr}</Sub>}
         </div>
       )}
 
