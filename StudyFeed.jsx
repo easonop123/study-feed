@@ -443,15 +443,24 @@ MATERIAL:
 ${source}`;
 }
 
-/* Two tiers. Haiku is ~3x cheaper and plenty for short recall; Sonnet does the
-   work where quality shows. Routing is per WHOLE call — splitting one batch
-   across both sends the same notes twice and cancels most of the saving. */
-const MODEL_SMART = 'claude-sonnet-4-6';
-const MODEL_CHEAP = 'claude-haiku-4-5-20251001';
+/* Models served free (rate-limited) by NVIDIA Build (build.nvidia.com), called
+   through their OpenAI-compatible endpoint. Qwen handles generation (fast, clean
+   JSON, follows "return only JSON"); DeepSeek does the marking, where careful
+   reasoning about A/M/E quality is worth the extra latency.
+   Both IDs are copied verbatim from the model pages — swap here if a model on
+   the catalog gets deprecated (free models can be removed with days' notice). */
+const NVIDIA_BASE = 'https://integrate.api.nvidia.com/v1/chat/completions';
+const MODEL_SMART = 'deepseek-ai/deepseek-v4-pro';
+const MODEL_CHEAP = 'qwen/qwen3-next-80b-a3b-instruct';
+const MODEL_GEN   = 'qwen/qwen3-next-80b-a3b-instruct';   // generation, both tiers
+/* DeepSeek "thinks out loud" by default; that reasoning would pollute the JSON
+   the marker parser expects, so we turn it off for any deepseek model. */
+const isDeepSeek = (m) => /deepseek/i.test(m || '');
 
 function pickModel(mode, settings){
-  if (settings && settings.saveUsage) return MODEL_CHEAP;
-  return mode === 'flip' ? MODEL_CHEAP : MODEL_SMART;
+  // Generation is all Qwen for now — it returns clean structured output and is
+  // the free NVIDIA endpoint. (saveUsage kept for later multi-model routing.)
+  return MODEL_GEN;
 }
 
 /* One bad batch shouldn't sink the rest — but a failure hitting EVERY batch
@@ -463,43 +472,50 @@ const noteApiError = (e) => { lastApiError = (e && e.message) ? String(e.message
    common one on the website is simply "no key yet". */
 function friendlyApiError(e){
   const m = (e && e.message) ? e.message : '';
-  if (/no API key/i.test(m)) return IN_ARTIFACT
-    ? 'The AI is unavailable right now — try again in a moment.'
-    : 'Add your own API key under the You tab to turn this on.';
-  if (/\b401\b/.test(m)) return 'Your API key was rejected — check it under the You tab.';
-  if (/\b40[34]\b/.test(m)) return 'That model isn\'t available on your key. ' + m;
-  if (/\b429\b/.test(m)) return 'Rate limited — wait a moment and try again.';
+  if (/no API key/i.test(m)) return 'Add your NVIDIA API key under the You tab to turn this on.';
+  if (/\b401\b/.test(m) || /\b403\b/.test(m)) return 'Your NVIDIA key was rejected — check it under the You tab (it should start with nvapi-).';
+  if (/\b404\b/.test(m)) return 'That model wasn\'t found — it may have been removed from NVIDIA\'s catalog. ' + m;
+  if (/\b429\b/.test(m)) return 'Rate limited (NVIDIA\'s free tier allows ~40 requests/min) — wait a moment and try again.';
+  if (/no images/i.test(m)) return m;
   return 'Couldn\'t reach the AI. Check your connection and try again.';
 }
 
+/* Send an OpenAI-compatible chat request through our own serverless proxy
+   (api/nvidia.js on Vercel). `content` is either a plain string (text prompt)
+   or an OpenAI-style content array (for images). The proxy holds the NVIDIA
+   key server-side and adds the Authorization header, so the browser never
+   sees the key and there's no cross-origin (CORS) problem. */
 async function postMessages(content, maxTokens, model){
-  const headers = { 'Content-Type': 'application/json', 'anthropic-version': '2023-06-01' };
+  const body = {
+    model,
+    messages: [{ role: 'user', content }],
+    temperature: isDeepSeek(model) ? 0.6 : 0.7,
+    top_p: 0.9,
+    max_tokens: maxTokens,
+    stream: false,
+  };
+  // DeepSeek: switch off chain-of-thought so replies are clean JSON, not prose.
+  if (isDeepSeek(model)) body.chat_template_kwargs = { thinking: false };
 
-  /* Website build: the request carries YOUR key, and browsers must opt in to
-     talking to the API directly. Inside an Artifact neither is needed. */
-  if (!IN_ARTIFACT){
-    const key = getApiKey();
-    if (!key) throw new Error('no API key set — add one under You → API key');
-    headers['x-api-key'] = key;
-    headers['anthropic-dangerous-direct-browser-access'] = 'true';
-  }
-
-  const res = await fetch('https://api.anthropic.com/v1/messages', {
-    method: 'POST', headers,
-    body: JSON.stringify({ model, max_tokens: maxTokens, messages: [{ role: 'user', content }] }),
+  const res = await fetch('/api/nvidia', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
   });
   if (!res.ok){
-    if (res.status === 401) throw new Error('API key rejected — check it under You → API key');
-    throw new Error('API returned ' + res.status + (res.status === 404 ? ' (unknown model)' : ''));
+    let detail = '';
+    try { const j = await res.json(); detail = (j && (j.detail || (j.error && j.error.message))) || ''; } catch {}
+    throw new Error('API returned ' + res.status + (detail ? ' — ' + detail : ''));
   }
   const data = await res.json();
-  return (data.content || []).filter(b => b.type === 'text').map(b => b.text).join('');
+  const msg = data && data.choices && data.choices[0] && data.choices[0].message;
+  return (msg && msg.content) ? msg.content : '';
 }
-const callModel = (prompt, maxTokens = 1000, model = MODEL_SMART) => postMessages(prompt, maxTokens, model);
-function callModelMulti(prompt, images, maxTokens = 1000, model = MODEL_SMART){
-  const content = images.map(im => ({ type: 'image', source: { type: 'base64', media_type: im.media_type, data: im.data } }));
-  content.push({ type: 'text', text: prompt });
-  return postMessages(content, maxTokens, model);
+const callModel = (prompt, maxTokens = 1000, model = MODEL_GEN) => postMessages(prompt, maxTokens, model);
+/* These text models can't see images. Rather than send a broken request,
+   fail with a clear message the UI turns into "not supported yet". */
+function callModelMulti(prompt, images, maxTokens = 1000, model = MODEL_GEN){
+  return Promise.reject(new Error('no images: photo generation needs a vision model, which isn\'t wired up yet — paste or type your notes instead.'));
 }
 
 function promptFor(mode, source, level, pctLong){
@@ -665,28 +681,21 @@ function stripXml(xml){
 async function extractFile(file){
   const name = (file.name || '').toLowerCase();
   const type = file.type || '';
-  if (type.startsWith('image/')) return { text: '', images: [file] };
+  // Text models can't read pictures yet, so a bare image file has nothing to give.
+  if (type.startsWith('image/')) throw new Error('Photos need a vision model, which isn\'t wired up yet — paste or type your notes, or attach a Word/PowerPoint/text file.');
   if (name.endsWith('.txt') || type === 'text/plain') return { text: (await file.text()).trim(), images: [] };
 
   const JSZip = await loadJSZip();
   const zip = await JSZip.loadAsync(file);
 
-  // content images only — logos and bullet icons cost usage and teach nothing
-  const images = [];
-  const media = Object.keys(zip.files).filter(n => /\/media\/[^/]+\.(png|jpe?g|gif|bmp|webp)$/i.test(n));
-  for (const n of media){
-    if (images.length >= MAX_EMBEDDED_IMAGES) break;
-    try {
-      const b = await zip.file(n).async('blob');
-      if (b && b.size >= MIN_EMBEDDED_IMAGE_BYTES) images.push(b);
-    } catch {}
-  }
-
+  // Text-only for now: embedded pictures in the file are ignored, since the
+  // current models can't see them. Slides that are ONLY a diagram contribute
+  // nothing; slides with text still work.
   if (name.endsWith('.docx')){
     const doc = zip.file('word/document.xml');
     const text = doc ? stripXml(await doc.async('string')).trim() : '';
-    if (!text && !images.length) throw new Error('This Word file had no readable text or pictures.');
-    return { text, images };
+    if (!text) throw new Error('This Word file had no readable text (it may be all images, which can\'t be read yet).');
+    return { text, images: [] };
   }
   if (name.endsWith('.pptx')){
     const slides = Object.keys(zip.files)
@@ -695,10 +704,10 @@ async function extractFile(file){
     const parts = [];
     for (const n of slides) parts.push(stripXml(await zip.file(n).async('string')).trim());
     const text = parts.filter(Boolean).join('\n\n');
-    if (!text && !images.length) throw new Error('This PowerPoint had no readable content.');
-    return { text, images };
+    if (!text) throw new Error('This PowerPoint had no readable text (slides may be all images, which can\'t be read yet).');
+    return { text, images: [] };
   }
-  throw new Error('Use a photo, Word, PowerPoint or text file.');
+  throw new Error('Use a Word, PowerPoint or text file, or paste your notes.');
 }
 
 /* ==========================================================================
@@ -1412,7 +1421,7 @@ function Create({ onSave, settings, onSettings, onPending }){
       setDrafts(cards.map(c => ({ ...c, keep: true })));
       return;
     }
-    if (!source.trim() && !images.length){ setErr('Paste notes, type a topic, or attach a file or photo first.'); return; }
+    if (!source.trim() && !images.length){ setErr('Paste notes, type a topic, or attach a Word/PowerPoint/text file first.'); return; }
 
     setBusy(true); setErr(''); setProg(null);
     lastApiError = '';
@@ -1473,20 +1482,13 @@ function Create({ onSave, settings, onSettings, onPending }){
 
       {mode === 'generate' && (
         <Card style={{ padding: 14, marginTop: 14, boxShadow: SH.raised }}>
-          <input ref={fileRef} type="file" accept="image/*,.docx,.pptx,.txt" multiple onChange={onFiles} style={{ display: 'none' }} />
+          <input ref={fileRef} type="file" accept=".docx,.pptx,.txt" multiple onChange={onFiles} style={{ display: 'none' }} />
           <Btn full kind="soft" onClick={() => fileRef.current && fileRef.current.click()}>
-            📎  Add photo, Word or PowerPoint
+            📎  Add Word, PowerPoint or text file
           </Btn>
           {attaching && <Sub style={{ marginTop: 10, textAlign: 'center' }}>{attaching}</Sub>}
-          {!attaching && images.length > 0 && (
-            <div className="flex items-center justify-between" style={{ marginTop: 10 }}>
-              <Chip colour={T.green}>{images.length} image{images.length > 1 ? 's' : ''} added{images.length > 12 ? ' (first 12 used)' : ''}</Chip>
-              <button className="sf-tap" onClick={() => setImages([])}
-                style={{ background: 'none', border: 'none', cursor: 'pointer', fontFamily: SANS, fontSize: 13, fontWeight: 600, color: T.red }}>Clear</button>
-            </div>
-          )}
-          {!attaching && images.length === 0 && (
-            <Sub style={{ marginTop: 10, textAlign: 'center', fontSize: 12.5 }}>Any size — it only sends what's readable</Sub>
+          {!attaching && (
+            <Sub style={{ marginTop: 10, textAlign: 'center', fontSize: 12.5 }}>Reads the text from your file. (Photos and diagrams aren't read yet.)</Sub>
           )}
         </Card>
       )}
@@ -1930,7 +1932,8 @@ function SettingRow({ title, note, children }){
   );
 }
 
-/* Only on the website build. In an Artifact the API route needs no key. */
+/* NVIDIA is an external API, so a key is always needed (unlike the old keyless
+   Artifact route). Get a free one at build.nvidia.com — it starts with nvapi-. */
 function ApiKeyCard(){
   const [key, setKey] = useState(getApiKey());
   const [editing, setEditing] = useState(!getApiKey());
@@ -1938,15 +1941,15 @@ function ApiKeyCard(){
 
   return (
     <Card style={{ padding: 15, marginBottom: 10, boxShadow: SH.raised }}>
-      <div style={{ fontFamily: SANS, fontSize: 15, fontWeight: 700, color: T.ink }}>API key</div>
+      <div style={{ fontFamily: SANS, fontSize: 15, fontWeight: 700, color: T.ink }}>NVIDIA API key</div>
       <Sub style={{ fontSize: 12.5, marginTop: 2, marginBottom: 12 }}>
-        Needed to make cards. Studying works without one. Stored only on this device — set a
-        spend limit on it in the Anthropic console.
+        Needed to make and mark cards. Studying existing cards works without one. Get a free key
+        at build.nvidia.com (starts with nvapi-). Stored only on this device.
       </Sub>
       {editing ? (
         <div>
           <input type="password" value={key} onChange={e => setKey(e.target.value)}
-            placeholder="sk-ant-…" autoComplete="off" spellCheck={false}
+            placeholder="nvapi-…" autoComplete="off" spellCheck={false}
             style={{ ...INPUT, fontSize: 14 }} />
           <div className="flex gap-2" style={{ marginTop: 10 }}>
             <Btn kind="primary" onClick={() => { setApiKey(key.trim()); setEditing(false); }}
@@ -2054,7 +2057,7 @@ function Settings({ settings, onChange, library, progress, onImport }){
 
       <TransferCard library={library} progress={progress} onImport={onImport} />
 
-      {!IN_ARTIFACT && <ApiKeyCard />}
+      <ApiKeyCard />
 
       <Card style={{ padding: 15, marginBottom: 10, boxShadow: SH.raised }}>
         <div style={{ fontFamily: SANS, fontSize: 15, fontWeight: 700, color: T.ink }}>Answer length</div>

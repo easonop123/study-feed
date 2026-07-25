@@ -3,6 +3,11 @@
 StudyFeed.txt
 
 node_modules/
+
+# never commit API keys / local env
+.env
+.env.*
+
 .DS_Store
 Thumbs.db
 *.log
