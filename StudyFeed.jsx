@@ -444,15 +444,17 @@ ${source}`;
 }
 
 /* Models served free (rate-limited) by NVIDIA Build (build.nvidia.com), called
-   through their OpenAI-compatible endpoint. Qwen handles generation (fast, clean
-   JSON, follows "return only JSON"); DeepSeek does the marking, where careful
-   reasoning about A/M/E quality is worth the extra latency.
-   Both IDs are copied verbatim from the model pages — swap here if a model on
-   the catalog gets deprecated (free models can be removed with days' notice). */
+   through their OpenAI-compatible endpoint. Everything runs on Qwen: it's fast
+   (~4s), returns clean JSON, and follows "return only JSON" well.
+   Marking + hints used to use deepseek-ai/deepseek-v4-pro for its reasoning, but
+   that model takes 30-60s+ per call on the free tier — long enough that the
+   Mark/Hint buttons appeared to hang forever — so they run on Qwen too now.
+   Swap here if a model on the catalog gets deprecated (free models can be
+   removed with days' notice). */
 const NVIDIA_BASE = 'https://integrate.api.nvidia.com/v1/chat/completions';
-const MODEL_SMART = 'deepseek-ai/deepseek-v4-pro';
+const MODEL_SMART = 'qwen/qwen3-next-80b-a3b-instruct';   // marking + hints
 const MODEL_CHEAP = 'qwen/qwen3-next-80b-a3b-instruct';
-const MODEL_GEN   = 'qwen/qwen3-next-80b-a3b-instruct';   // generation, both tiers
+const MODEL_GEN   = 'qwen/qwen3-next-80b-a3b-instruct';   // generation
 /* DeepSeek "thinks out loud" by default; that reasoning would pollute the JSON
    the marker parser expects, so we turn it off for any deepseek model. */
 const isDeepSeek = (m) => /deepseek/i.test(m || '');
@@ -476,6 +478,7 @@ function friendlyApiError(e){
   if (/\b401\b/.test(m) || /\b403\b/.test(m)) return 'Your NVIDIA key was rejected — check it under the You tab (it should start with nvapi-).';
   if (/\b404\b/.test(m)) return 'That model wasn\'t found — it may have been removed from NVIDIA\'s catalog. ' + m;
   if (/\b429\b/.test(m)) return 'Rate limited (NVIDIA\'s free tier allows ~40 requests/min) — wait a moment and try again.';
+  if (/timed out/i.test(m)) return 'That took too long and timed out — try again in a moment.';
   if (/no images/i.test(m)) return m;
   return 'Couldn\'t reach the AI. Check your connection and try again.';
 }
@@ -497,11 +500,24 @@ async function postMessages(content, maxTokens, model){
   // DeepSeek: switch off chain-of-thought so replies are clean JSON, not prose.
   if (isDeepSeek(model)) body.chat_template_kwargs = { thinking: false };
 
-  const res = await fetch('/api/nvidia', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(body),
-  });
+  // Never let a slow model spin the UI forever — abort after 60s so the caller
+  // gets a real error it can show instead of an endless "Marking…" spinner.
+  const ctrl = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(), 60000);
+  let res;
+  try {
+    res = await fetch('/api/nvidia', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+      signal: ctrl.signal,
+    });
+  } catch (e){
+    if (e && e.name === 'AbortError') throw new Error('timed out — the AI took too long to respond');
+    throw new Error('could not reach the AI — check your connection');
+  } finally {
+    clearTimeout(timer);
+  }
   if (!res.ok){
     let detail = '';
     try { const j = await res.json(); detail = (j && (j.detail || (j.error && j.error.message))) || ''; } catch {}

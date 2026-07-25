@@ -11,6 +11,10 @@
 
 const NVIDIA_URL = 'https://integrate.api.nvidia.com/v1/chat/completions';
 
+// Allow the function up to 60s (Hobby-plan max) so a slow model returns a real
+// response/error instead of being killed early. The client also aborts at 60s.
+export const maxDuration = 60;
+
 export default async function handler(req, res) {
   if (req.method !== 'POST') {
     res.setHeader('Allow', 'POST');
