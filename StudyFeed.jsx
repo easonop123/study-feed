@@ -17,39 +17,41 @@ import React, { useState, useEffect, useRef, useMemo, useCallback } from 'react'
    - avoids ?? / ?. / ||= (the artifact transpiler rejects them)
    ========================================================================== */
 
-/* ---- tokens -------------------------------------------------------------- */
+/* ---- tokens --------------------------------------------------------------
+   "Calm" palette: soft, low-contrast, easy on the eyes. Soft charcoal ink
+   (not pure black), a gentle indigo accent, muted status colours. */
 const T = {
-  bg:        '#F6F7FB',
+  bg:        '#F6F8FB',
   surface:   '#FFFFFF',
-  well:      '#F1F3F9',
-  border:    '#E4E7F0',
-  ink:       '#14162B',
-  muted:     '#5C6178',
-  faint:     '#9AA0B4',
-  accent:    '#4255FF',
-  accentInk: '#2F3EDB',
-  green:     '#10B981',
-  amber:     '#F59E0B',
-  red:       '#E5484D',
+  well:      '#F1F4F9',
+  border:    '#EBEEF3',
+  ink:       '#2B2F3A',
+  muted:     '#6E7482',
+  faint:     '#A6ABB7',
+  accent:    '#6472F0',
+  accentInk: '#4E5AD6',
+  green:     '#37B98C',
+  amber:     '#E1A63E',
+  red:       '#E06B62',
 };
 
-const SANS = '-apple-system, BlinkMacSystemFont, "SF Pro Rounded", "Segoe UI", Roboto, system-ui, sans-serif';
+const SANS = 'system-ui, -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif';
 
 const rgba = (hex, a) => {
   const n = parseInt(hex.slice(1), 16);
   return `rgba(${(n >> 16) & 255}, ${(n >> 8) & 255}, ${n & 255}, ${a})`;
 };
 
-const R  = { card: 20, well: 16, input: 14, pill: 999 };
+const R  = { card: 18, well: 14, input: 12, pill: 999 };
 const SH = {
-  card:    '0 1px 2px rgba(20,22,43,0.04), 0 10px 28px -12px rgba(20,22,43,0.16)',
-  raised:  '0 1px 2px rgba(20,22,43,0.06)',
-  pop:     '0 2px 10px rgba(20,22,43,0.09)',
-  accent:  `0 6px 16px -4px ${rgba('#4255FF', 0.45)}`,
+  card:    '0 1px 2px rgba(30,34,50,0.04), 0 12px 28px -18px rgba(30,34,50,0.22)',
+  raised:  '0 1px 2px rgba(30,34,50,0.05)',
+  pop:     '0 2px 10px rgba(30,34,50,0.08)',
+  accent:  `0 6px 18px -6px ${rgba('#6472F0', 0.40)}`,
 };
 
-/* friendly hues that read well on white */
-const HUES = ['#4255FF','#F59E0B','#10B981','#A855F7','#06B6D4','#EC4899','#8B5CF6','#F97316'];
+/* soft, muted subject hues that sit calmly on the light ground */
+const HUES = ['#6472F0','#E1A63E','#37B98C','#9B7EDE','#3BA9C4','#E285B4','#8B84E0','#E59A5B'];
 function subjectColour(name){
   const s = (name || '').trim().toLowerCase();
   let h = 0;
@@ -84,17 +86,10 @@ const TODAY = () => dayStr();
 
 /* ---- platform ------------------------------------------------------------
    The same file runs in two places: inside a claude.ai Artifact (which
-   provides window.storage and a keyless API route) and as a plain website
-   (browser storage, and your own API key). Detect, don't fork. */
+   provides window.storage) and as a plain website. On the website the AI
+   key lives server-side in the Vercel proxy (api/nvidia.js), so the browser
+   never handles a key. Detect the runtime, don't fork. */
 const IN_ARTIFACT = typeof window !== 'undefined' && !!window.storage;
-const KEY_STORE = 'studyfeed:apikey';
-
-const getApiKey = () => {
-  try { return window.localStorage.getItem(KEY_STORE) || ''; } catch { return ''; }
-};
-const setApiKey = (k) => {
-  try { k ? window.localStorage.setItem(KEY_STORE, k) : window.localStorage.removeItem(KEY_STORE); } catch {}
-};
 
 /* ---- storage ------------------------------------------------------------- */
 async function load(key, fallback){
@@ -1983,46 +1978,6 @@ function SettingRow({ title, note, children }){
   );
 }
 
-/* NVIDIA is an external API, so a key is always needed (unlike the old keyless
-   Artifact route). Get a free one at build.nvidia.com — it starts with nvapi-. */
-function ApiKeyCard(){
-  const [key, setKey] = useState(getApiKey());
-  const [editing, setEditing] = useState(!getApiKey());
-  const masked = key ? key.slice(0, 7) + '…' + key.slice(-4) : '';
-
-  return (
-    <Card style={{ padding: 15, marginBottom: 10, boxShadow: SH.raised }}>
-      <div style={{ fontFamily: SANS, fontSize: 15, fontWeight: 700, color: T.ink }}>NVIDIA API key</div>
-      <Sub style={{ fontSize: 12.5, marginTop: 2, marginBottom: 12 }}>
-        Needed to make and mark cards. Studying existing cards works without one. Get a free key
-        at build.nvidia.com (starts with nvapi-). Stored only on this device.
-      </Sub>
-      {editing ? (
-        <div>
-          <input type="password" value={key} onChange={e => setKey(e.target.value)}
-            placeholder="nvapi-…" autoComplete="off" spellCheck={false}
-            style={{ ...INPUT, fontSize: 14 }} />
-          <div className="flex gap-2" style={{ marginTop: 10 }}>
-            <Btn kind="primary" onClick={() => { setApiKey(key.trim()); setEditing(false); }}
-              disabled={!key.trim()} style={{ fontSize: 14, padding: '11px 20px' }}>Save key</Btn>
-            {getApiKey() && <Btn kind="ghost" onClick={() => { setKey(getApiKey()); setEditing(false); }}
-              style={{ fontSize: 14, padding: '11px 16px' }}>Cancel</Btn>}
-          </div>
-        </div>
-      ) : (
-        <div className="flex items-center justify-between">
-          <Chip colour={T.green}>Saved · {masked}</Chip>
-          <div className="flex gap-2">
-            <Btn kind="soft" onClick={() => setEditing(true)} style={{ fontSize: 13, padding: '8px 14px' }}>Change</Btn>
-            <Btn kind="danger" onClick={() => { setApiKey(''); setKey(''); setEditing(true); }}
-              style={{ fontSize: 13, padding: '8px 14px' }}>Remove</Btn>
-          </div>
-        </div>
-      )}
-    </Card>
-  );
-}
-
 function TransferCard({ library, progress, onImport }){
   const [pasting, setPasting] = useState(false);
   const [text, setText] = useState('');
@@ -2108,8 +2063,6 @@ function Settings({ settings, onChange, library, progress, onImport }){
 
       <TransferCard library={library} progress={progress} onImport={onImport} />
 
-      <ApiKeyCard />
-
       <Card style={{ padding: 15, marginBottom: 10, boxShadow: SH.raised }}>
         <div style={{ fontFamily: SANS, fontSize: 15, fontWeight: 700, color: T.ink }}>Answer length</div>
         <Sub style={{ fontSize: 12.5, marginTop: 2, marginBottom: 14 }}>
@@ -2120,10 +2073,6 @@ function Settings({ settings, onChange, library, progress, onImport }){
 
       <SettingRow title="Mix subjects up" note="Rotates subjects so you don't do one topic in a block">
         <Toggle on={settings.interleave} onClick={() => set({ interleave: !settings.interleave })} />
-      </SettingRow>
-
-      <SettingRow title="Save usage" note="Faster, cheaper model for everything. Long answers get weaker.">
-        <Toggle on={settings.saveUsage} onClick={() => set({ saveUsage: !settings.saveUsage })} />
       </SettingRow>
 
       <Card style={{ padding: 15, boxShadow: SH.raised }}>
