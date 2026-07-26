@@ -402,14 +402,16 @@ ${source}`;
 }
 
 /* turn the slider percentage into concrete per-reply counts */
+/* Per-reply card targets. Tuned to ~18-20 cards/batch so a generate returns a
+   full set (Qwen produces close to exactly what's asked, so ask for more). */
 function mixTargets(pctLong){
   const p = Math.max(0, Math.min(100, pctLong));
-  if (p <= 5)  return { long: 0, mcq: 2, quick: 11 };
-  if (p >= 95) return { long: 6, mcq: 1, quick: 0 };
+  if (p <= 5)  return { long: 0, mcq: 3, quick: 18 };
+  if (p >= 95) return { long: 9, mcq: 2, quick: 0 };
   return {
-    long:  Math.max(1, Math.round((p / 100) * 7)),
-    mcq:   2,
-    quick: Math.max(1, Math.round(((100 - p) / 100) * 11)),
+    long:  Math.max(1, Math.round((p / 100) * 10)),
+    mcq:   3,
+    quick: Math.max(2, Math.round(((100 - p) / 100) * 18)),
   };
 }
 
@@ -455,6 +457,10 @@ const NVIDIA_BASE = 'https://integrate.api.nvidia.com/v1/chat/completions';
 const MODEL_SMART = 'qwen/qwen3-next-80b-a3b-instruct';   // marking + hints
 const MODEL_CHEAP = 'qwen/qwen3-next-80b-a3b-instruct';
 const MODEL_GEN   = 'qwen/qwen3-next-80b-a3b-instruct';   // generation
+/* Vision model for reading slide images (diagrams, photos of notes). It accepts
+   only ONE image per request, so images are transcribed to text one at a time
+   and that text is fed to Qwen — same card quality as typed notes. */
+const MODEL_VISION = 'meta/llama-3.2-11b-vision-instruct';
 /* DeepSeek "thinks out loud" by default; that reasoning would pollute the JSON
    the marker parser expects, so we turn it off for any deepseek model. */
 const isDeepSeek = (m) => /deepseek/i.test(m || '');
@@ -528,10 +534,16 @@ async function postMessages(content, maxTokens, model){
   return (msg && msg.content) ? msg.content : '';
 }
 const callModel = (prompt, maxTokens = 1000, model = MODEL_GEN) => postMessages(prompt, maxTokens, model);
-/* These text models can't see images. Rather than send a broken request,
-   fail with a clear message the UI turns into "not supported yet". */
-function callModelMulti(prompt, images, maxTokens = 1000, model = MODEL_GEN){
-  return Promise.reject(new Error('no images: photo generation needs a vision model, which isn\'t wired up yet — paste or type your notes instead.'));
+/* Read ONE slide/photo with the vision model and return it as plain study text
+   (all wording transcribed, diagrams/graphs/formulae described). `img` is a
+   { media_type, data } object from resizeImage. */
+const VISION_PROMPT = 'You are reading one slide or page from a student\'s study material. Write out EVERYTHING on it that is useful for revision: transcribe all text word-for-word, and describe any diagrams, figures, graphs, tables, labels or formulae in enough detail that someone could learn from them without seeing the image. Output plain study notes only — no preamble, no "this slide shows".';
+async function describeImage(img){
+  const content = [
+    { type: 'text', text: VISION_PROMPT },
+    { type: 'image_url', image_url: { url: 'data:' + img.media_type + ';base64,' + img.data } },
+  ];
+  return postMessages(content, 1500, MODEL_VISION);
 }
 
 function promptFor(mode, source, level, pctLong){
@@ -560,25 +572,25 @@ async function genText(source, mode, level, onProgress, model, pctLong){
   for (let i = 0; i < batches.length; i++){
     onProgress && onProgress(i + 1, batches.length, 'text');
     let reply = '';
-    try { reply = await callModel(promptFor(mode, batches[i], level, pctLong), 2000, model); }
+    try { reply = await callModel(promptFor(mode, batches[i], level, pctLong), 4000, model); }
     catch (e){ noteApiError(e); continue; }
     cards = cards.concat(parseReply(mode, reply));
   }
   return cards;
 }
-async function genImages(images, mode, level, onProgress, model, pctLong){
-  const groups = [];
-  for (let i = 0; i < images.length; i += 6) groups.push(images.slice(i, i + 6));
-  const note = 'Base the cards ONLY on the attached image(s). Read all text, labels, diagrams, formulae and handwriting in them.';
-  let cards = [];
-  for (let g = 0; g < groups.length; g++){
-    onProgress && onProgress(g + 1, groups.length, 'images');
-    let reply = '';
-    try { reply = await callModelMulti(promptFor(mode, note, level, pctLong), groups[g], 2000, model); }
-    catch (e){ noteApiError(e); continue; }
-    cards = cards.concat(parseReply(mode, reply));
+/* Transcribe each image to study text (one vision call per image, since the
+   vision model takes only one image at a time), then join into a single notes
+   blob the normal Qwen pipeline can turn into cards. */
+async function transcribeImages(images, onProgress){
+  const parts = [];
+  for (let i = 0; i < images.length; i++){
+    onProgress && onProgress(i + 1, images.length, 'images');
+    try {
+      const txt = await describeImage(images[i]);
+      if (txt && txt.trim()) parts.push('# Slide ' + (i + 1) + '\n' + txt.trim());
+    } catch (e){ noteApiError(e); }
   }
-  return cards;
+  return parts.join('\n\n');
 }
 
 function markPrompt(card, answer, level){
@@ -694,24 +706,42 @@ function stripXml(xml){
     .replace(/&quot;/g, '"').replace(/&#3?9;/g, "'")
     .replace(/[ \t]+\n/g, '\n').replace(/\n{3,}/g, '\n\n');
 }
+/* Pull the biggest embedded images out of a docx/pptx zip (skips tiny logos and
+   bullets via MIN_EMBEDDED_IMAGE_BYTES, caps at MAX_EMBEDDED_IMAGES). Vector
+   formats (emf/wmf) are skipped — the browser can't decode them to a bitmap. */
+async function embeddedImages(zip, dir){
+  const rx = new RegExp('^' + dir + '/.*\\.(png|jpe?g|gif|webp)$', 'i');
+  const names = Object.keys(zip.files).filter(n => rx.test(n)).sort();
+  const out = [];
+  for (const n of names){
+    if (out.length >= MAX_EMBEDDED_IMAGES) break;
+    const buf = await zip.file(n).async('arraybuffer');
+    if (buf.byteLength < MIN_EMBEDDED_IMAGE_BYTES) continue;   // skip icons/bullets
+    const ext = n.split('.').pop().toLowerCase();
+    const mime = ext === 'png' ? 'image/png' : ext === 'gif' ? 'image/gif' : ext === 'webp' ? 'image/webp' : 'image/jpeg';
+    out.push(new Blob([buf], { type: mime }));
+  }
+  return out;
+}
+
 async function extractFile(file){
   const name = (file.name || '').toLowerCase();
   const type = file.type || '';
-  // Text models can't read pictures yet, so a bare image file has nothing to give.
-  if (type.startsWith('image/')) throw new Error('Photos need a vision model, which isn\'t wired up yet — paste or type your notes, or attach a Word/PowerPoint/text file.');
+  // A bare photo/image file goes straight to the vision path.
+  if (type.startsWith('image/')) return { text: '', images: [file] };
   if (name.endsWith('.txt') || type === 'text/plain') return { text: (await file.text()).trim(), images: [] };
 
   const JSZip = await loadJSZip();
   const zip = await JSZip.loadAsync(file);
 
-  // Text-only for now: embedded pictures in the file are ignored, since the
-  // current models can't see them. Slides that are ONLY a diagram contribute
-  // nothing; slides with text still work.
+  // Text is read directly; embedded pictures (diagrams, photos of notes) are
+  // handed to the vision model so slides that are ONLY an image still count.
   if (name.endsWith('.docx')){
     const doc = zip.file('word/document.xml');
     const text = doc ? stripXml(await doc.async('string')).trim() : '';
-    if (!text) throw new Error('This Word file had no readable text (it may be all images, which can\'t be read yet).');
-    return { text, images: [] };
+    const images = await embeddedImages(zip, 'word/media');
+    if (!text && !images.length) throw new Error('This Word file had no readable text or images.');
+    return { text, images };
   }
   if (name.endsWith('.pptx')){
     const slides = Object.keys(zip.files)
@@ -720,10 +750,11 @@ async function extractFile(file){
     const parts = [];
     for (const n of slides) parts.push(stripXml(await zip.file(n).async('string')).trim());
     const text = parts.filter(Boolean).join('\n\n');
-    if (!text) throw new Error('This PowerPoint had no readable text (slides may be all images, which can\'t be read yet).');
-    return { text, images: [] };
+    const images = await embeddedImages(zip, 'ppt/media');
+    if (!text && !images.length) throw new Error('This PowerPoint had no readable text or images.');
+    return { text, images };
   }
-  throw new Error('Use a Word, PowerPoint or text file, or paste your notes.');
+  throw new Error('Use a Word, PowerPoint, image or text file, or paste your notes.');
 }
 
 /* ==========================================================================
@@ -1450,8 +1481,12 @@ function Create({ onSave, settings, onSettings, onPending }){
         setProg({ i: 0, n: 0, phase: 'prep' });
         const shrunk = [];
         for (const b of images.slice(0, 12)){ try { shrunk.push(await resizeImage(b)); } catch {} }
-        if (shrunk.length) cards = cards.concat(await genImages(shrunk, cardType, lvl, (i, n, phase) => setProg({ i, n, phase }), model, pctLong));
-        else if (!cards.length){ setErr('Could not read those images. Try a clearer photo.'); setBusy(false); setProg(null); return; }
+        if (shrunk.length){
+          // read each image into study text, then make cards from that text
+          const imgText = await transcribeImages(shrunk, (i, n) => setProg({ i, n, phase: 'images' }));
+          if (imgText.trim()) cards = cards.concat(await genText(imgText, cardType, lvl, (i, n, phase) => setProg({ i, n, phase }), model, pctLong));
+          else if (!cards.length){ setErr('Could not read those images. Try a clearer photo.'); setBusy(false); setProg(null); return; }
+        } else if (!cards.length){ setErr('Could not read those images. Try a clearer photo.'); setBusy(false); setProg(null); return; }
       }
       cards = dedupeCards(cards);
       if (!cards.length){
@@ -1498,13 +1533,13 @@ function Create({ onSave, settings, onSettings, onPending }){
 
       {mode === 'generate' && (
         <Card style={{ padding: 14, marginTop: 14, boxShadow: SH.raised }}>
-          <input ref={fileRef} type="file" accept=".docx,.pptx,.txt" multiple onChange={onFiles} style={{ display: 'none' }} />
+          <input ref={fileRef} type="file" accept=".docx,.pptx,.txt,image/*" multiple onChange={onFiles} style={{ display: 'none' }} />
           <Btn full kind="soft" onClick={() => fileRef.current && fileRef.current.click()}>
-            📎  Add Word, PowerPoint or text file
+            📎  Add Word, PowerPoint, image or text file
           </Btn>
           {attaching && <Sub style={{ marginTop: 10, textAlign: 'center' }}>{attaching}</Sub>}
           {!attaching && (
-            <Sub style={{ marginTop: 10, textAlign: 'center', fontSize: 12.5 }}>Reads the text from your file. (Photos and diagrams aren't read yet.)</Sub>
+            <Sub style={{ marginTop: 10, textAlign: 'center', fontSize: 12.5 }}>Reads the text and the images/diagrams in your file.</Sub>
           )}
         </Card>
       )}
