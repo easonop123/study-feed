@@ -18,40 +18,88 @@ import React, { useState, useEffect, useRef, useMemo, useCallback } from 'react'
    ========================================================================== */
 
 /* ---- tokens --------------------------------------------------------------
-   "Calm" palette: soft, low-contrast, easy on the eyes. Soft charcoal ink
-   (not pure black), a gentle indigo accent, muted status colours. */
+   Colours are CSS custom properties so the whole app flips light/dark by
+   toggling data-theme on <html> (see THEME_CSS below). T.* holds the var()
+   references; rgba() makes any of them translucent. */
 const T = {
-  bg:        '#F6F8FB',
-  surface:   '#FFFFFF',
-  well:      '#F1F4F9',
-  border:    '#EBEEF3',
-  ink:       '#2B2F3A',
-  muted:     '#6E7482',
-  faint:     '#A6ABB7',
-  accent:    '#6472F0',
-  accentInk: '#4E5AD6',
-  green:     '#37B98C',
-  amber:     '#E1A63E',
-  red:       '#E06B62',
+  bg:        'var(--sf-bg)',
+  surface:   'var(--sf-surface)',
+  well:      'var(--sf-well)',
+  border:    'var(--sf-border)',
+  ink:       'var(--sf-ink)',
+  muted:     'var(--sf-muted)',
+  faint:     'var(--sf-faint)',
+  accent:    'var(--sf-accent)',
+  accentInk: 'var(--sf-accent-ink)',
+  green:     'var(--sf-green)',
+  amber:     'var(--sf-amber)',
+  red:       'var(--sf-red)',
 };
 
 const SANS = 'system-ui, -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif';
 
-const rgba = (hex, a) => {
-  const n = parseInt(hex.slice(1), 16);
-  return `rgba(${(n >> 16) & 255}, ${(n >> 8) & 255}, ${n & 255}, ${a})`;
+/* translucent colour that works for hex (#rrggbb) AND CSS vars / any colour
+   (via color-mix) — so one helper covers subject hues and theme tokens. */
+const rgba = (c, a) => {
+  if (c && c[0] === '#'){
+    const n = parseInt(c.slice(1), 16);
+    return `rgba(${(n >> 16) & 255}, ${(n >> 8) & 255}, ${n & 255}, ${a})`;
+  }
+  return `color-mix(in srgb, ${c} ${Math.round(a * 100)}%, transparent)`;
 };
 
 const R  = { card: 18, well: 14, input: 12, pill: 999 };
 const SH = {
-  card:    '0 1px 2px rgba(30,34,50,0.04), 0 12px 28px -18px rgba(30,34,50,0.22)',
-  raised:  '0 1px 2px rgba(30,34,50,0.05)',
-  pop:     '0 2px 10px rgba(30,34,50,0.08)',
-  accent:  `0 6px 18px -6px ${rgba('#6472F0', 0.40)}`,
+  card:   'var(--sf-sh-card)',
+  raised: 'var(--sf-sh-raised)',
+  pop:    'var(--sf-sh-pop)',
+  accent: 'var(--sf-sh-accent)',
 };
 
-/* soft, muted subject hues that sit calmly on the light ground */
+/* soft, muted subject hues (same in both themes — they sit on tinted tiles) */
 const HUES = ['#6472F0','#E1A63E','#37B98C','#9B7EDE','#3BA9C4','#E285B4','#8B84E0','#E59A5B'];
+
+/* Both palettes, injected once (see Shell). Light is default; dark applies via
+   the OS preference AND an explicit data-theme="dark" (the toggle), while
+   data-theme="light" forces light even on a dark OS. */
+const THEME_CSS = `
+  :root{
+    --sf-bg:#F6F8FB; --sf-surface:#FFFFFF; --sf-well:#F1F4F9; --sf-border:#EBEEF3;
+    --sf-ink:#2B2F3A; --sf-muted:#6E7482; --sf-faint:#A6ABB7;
+    --sf-accent:#6472F0; --sf-accent-ink:#4E5AD6;
+    --sf-green:#37B98C; --sf-amber:#E1A63E; --sf-red:#E06B62;
+    --sf-nav:rgba(255,255,255,.9); --sf-track:#D9DEE8;
+    --sf-sh-card:0 1px 2px rgba(30,34,50,.04), 0 12px 28px -18px rgba(30,34,50,.22);
+    --sf-sh-raised:0 1px 2px rgba(30,34,50,.05);
+    --sf-sh-pop:0 2px 10px rgba(30,34,50,.08);
+    --sf-sh-accent:0 6px 18px -6px rgba(100,114,240,.40);
+  }
+  :root[data-theme="dark"]{
+    --sf-bg:#14161C; --sf-surface:#1B1E26; --sf-well:#222631; --sf-border:#262A34;
+    --sf-ink:#E7EAF1; --sf-muted:#9CA2B0; --sf-faint:#636A78;
+    --sf-accent:#818DFF; --sf-accent-ink:#9AA4FF;
+    --sf-green:#46C79A; --sf-amber:#EAB454; --sf-red:#EA7B72;
+    --sf-nav:rgba(27,30,38,.9); --sf-track:#3A4150;
+    --sf-sh-card:0 1px 2px rgba(0,0,0,.25), 0 14px 30px -20px rgba(0,0,0,.6);
+    --sf-sh-raised:0 1px 2px rgba(0,0,0,.3);
+    --sf-sh-pop:0 2px 10px rgba(0,0,0,.4);
+    --sf-sh-accent:0 6px 18px -6px rgba(90,105,240,.5);
+  }
+  @media (prefers-color-scheme: dark){
+    :root:not([data-theme="light"]){
+      --sf-bg:#14161C; --sf-surface:#1B1E26; --sf-well:#222631; --sf-border:#262A34;
+      --sf-ink:#E7EAF1; --sf-muted:#9CA2B0; --sf-faint:#636A78;
+      --sf-accent:#818DFF; --sf-accent-ink:#9AA4FF;
+      --sf-green:#46C79A; --sf-amber:#EAB454; --sf-red:#EA7B72;
+      --sf-nav:rgba(27,30,38,.9); --sf-track:#3A4150;
+      --sf-sh-card:0 1px 2px rgba(0,0,0,.25), 0 14px 30px -20px rgba(0,0,0,.6);
+      --sf-sh-raised:0 1px 2px rgba(0,0,0,.3);
+      --sf-sh-pop:0 2px 10px rgba(0,0,0,.4);
+      --sf-sh-accent:0 6px 18px -6px rgba(90,105,240,.5);
+    }
+  }
+  html,body{ background:var(--sf-bg); }
+`;
 function subjectColour(name){
   const s = (name || '').trim().toLowerCase();
   let h = 0;
@@ -115,7 +163,7 @@ async function save(key, value){
 
 /* longMix = what % of your cards should be long (extended-response) answers.
    Drives both what gets generated and how the feed is blended. */
-const DEFAULT_SETTINGS = { interleave: true, newPerDay: 12, capNew: false, saveUsage: false, longMix: 30 };
+const DEFAULT_SETTINGS = { interleave: true, newPerDay: 12, capNew: false, longMix: 30, theme: 'system', name: '', examDate: '' };
 const longMixOf = (s) => (s && s.longMix != null) ? s.longMix : 30;
 const isLongCard = (c) => c.type === 'extended';
 
@@ -859,6 +907,7 @@ function Icon({ name, active }){
   const c = active ? T.accent : T.faint;
   const common = { width: 24, height: 24, viewBox: '0 0 24 24', fill: 'none',
     stroke: c, strokeWidth: active ? 2.2 : 1.9, strokeLinecap: 'round', strokeLinejoin: 'round' };
+  if (name === 'home') return <svg {...common}><path d="M4 11l8-6 8 6" /><path d="M6 10v9h12v-9" /></svg>;
   if (name === 'feed') return <svg {...common}><rect x="3" y="7" width="18" height="13" rx="3.5" /><path d="M7 4h10" /></svg>;
   if (name === 'create') return <svg {...common}><circle cx="12" cy="12" r="8.5" /><path d="M12 8.5v7M8.5 12h7" /></svg>;
   if (name === 'decks') return <svg {...common}><path d="M3 7.5A2.5 2.5 0 0 1 5.5 5h3.2l2 2.2h7.8A2.5 2.5 0 0 1 21 9.7v7.8a2.5 2.5 0 0 1-2.5 2.5h-13A2.5 2.5 0 0 1 3 17.5z" /></svg>;
@@ -1957,7 +2006,7 @@ function Toggle({ on, onClick }){
   return (
     <button className="sf-tap" onClick={onClick}
       style={{ width: 50, height: 30, borderRadius: R.pill, border: 'none', flexShrink: 0, cursor: 'pointer',
-        background: on ? T.green : '#D5D9E4', position: 'relative', transition: 'background 200ms' }}>
+        background: on ? T.green : 'var(--sf-track)', position: 'relative', transition: 'background 200ms' }}>
       <span style={{ position: 'absolute', top: 3, left: on ? 23 : 3, width: 24, height: 24, borderRadius: R.pill,
         background: '#fff', boxShadow: SH.pop, transition: 'left 200ms cubic-bezier(.2,.8,.3,1)' }} />
     </button>
@@ -2061,6 +2110,28 @@ function Settings({ settings, onChange, library, progress, onImport }){
     <div>
       <Title style={{ marginBottom: 14 }}>Settings</Title>
 
+      <Card style={{ padding: 15, marginBottom: 10, boxShadow: SH.raised }}>
+        <div style={{ fontFamily: SANS, fontSize: 15, fontWeight: 700, color: T.ink, marginBottom: 10 }}>Appearance</div>
+        <Segmented value={settings.theme || 'system'} onChange={(v) => set({ theme: v })}
+          options={[{ v: 'light', label: 'Light' }, { v: 'dark', label: 'Dark' }, { v: 'system', label: 'System' }]} />
+        <Sub style={{ fontSize: 12, marginTop: 8 }}>System follows your device's light or dark setting.</Sub>
+      </Card>
+
+      <Card style={{ padding: 15, marginBottom: 10, boxShadow: SH.raised }}>
+        <div style={{ fontFamily: SANS, fontSize: 15, fontWeight: 700, color: T.ink }}>Your details</div>
+        <Sub style={{ fontSize: 12.5, marginTop: 2, marginBottom: 12 }}>Used to greet you and count down to your exam on the Home screen.</Sub>
+        <div style={{ marginBottom: 10 }}>
+          <div style={{ fontFamily: SANS, fontSize: 12.5, fontWeight: 700, color: T.muted, marginBottom: 5 }}>Name <span style={{ fontWeight: 500, color: T.faint }}>(optional)</span></div>
+          <input value={settings.name || ''} onChange={e => set({ name: e.target.value })} placeholder="e.g. Eason"
+            style={{ ...INPUT, fontSize: 14.5 }} />
+        </div>
+        <div>
+          <div style={{ fontFamily: SANS, fontSize: 12.5, fontWeight: 700, color: T.muted, marginBottom: 5 }}>Exam date <span style={{ fontWeight: 500, color: T.faint }}>(optional)</span></div>
+          <input type="date" value={settings.examDate || ''} onChange={e => set({ examDate: e.target.value })}
+            style={{ ...INPUT, fontSize: 14.5 }} />
+        </div>
+      </Card>
+
       <TransferCard library={library} progress={progress} onImport={onImport} />
 
       <Card style={{ padding: 15, marginBottom: 10, boxShadow: SH.raised }}>
@@ -2098,9 +2169,208 @@ function Settings({ settings, onChange, library, progress, onImport }){
 /* ==========================================================================
    APP
    ========================================================================== */
+/* ==========================================================================
+   HOME  —  the screen the app opens on. A calm overview that answers
+   "what should I do now?" before dropping you into a card.
+   ========================================================================== */
+const WD = ['Sun','Mon','Tue','Wed','Thu','Fri','Sat'];
+function greetWord(){
+  const h = new Date().getHours();
+  return h < 12 ? 'Good morning' : h < 18 ? 'Good afternoon' : 'Good evening';
+}
+function longDate(){
+  try { return new Date().toLocaleDateString(undefined, { weekday: 'long', day: 'numeric', month: 'long' }); }
+  catch { return TODAY(); }
+}
+
+function Home({ library, progress, stats, settings, due, onStart, onCreate, onDecks }){
+  const today = TODAY();
+  const decks = library.decks;
+  const totalCards = decks.reduce((s, d) => s + d.cards.length, 0);
+  const reviewedToday = (stats.reviewsByDate && stats.reviewsByDate[today]) || 0;
+  const streak = stats.streak || 0;
+  const sessionPct = (reviewedToday + due) > 0 ? Math.round(reviewedToday / (reviewedToday + due) * 100) : (totalCards ? 100 : 0);
+
+  const name = (settings.name || '').trim();
+  const exam = (settings.examDate || '').trim();
+  const daysToExam = exam ? Math.round((new Date(exam + 'T00:00:00') - new Date(today + 'T00:00:00')) / 86400000) : null;
+
+  const deckRows = decks.map(d => {
+    let dueN = 0, mastered = 0;
+    for (const c of d.cards){
+      const p = progress[c.id];
+      if (p && p.seen && p.due <= today) dueN++;
+      if (p && p.seen && !p.flagged && p.interval >= 6 && p.due > today) mastered++;
+    }
+    return { d, dueN, pct: d.cards.length ? Math.round(mastered / d.cards.length * 100) : 0 };
+  }).sort((a, b) => b.dueN - a.dueN);
+
+  let flagged = 0;
+  for (const d of decks) for (const c of d.cards){ const p = progress[c.id]; if (p && p.flagged) flagged++; }
+
+  const subs = {};
+  for (const d of decks){
+    const s = d.subject || 'Untitled';
+    if (!subs[s]) subs[s] = { t: 0, m: 0 };
+    for (const c of d.cards){ subs[s].t++; const p = progress[c.id]; if (p && p.seen && !p.flagged && p.interval >= 6 && p.due > today) subs[s].m++; }
+  }
+  const subjRows = Object.entries(subs).map(([s, v]) => ({ s, pct: v.t ? Math.round(v.m / v.t * 100) : 0 })).sort((a, b) => b.pct - a.pct).slice(0, 5);
+
+  const week = []; let wkMax = 1;
+  for (let i = 6; i >= 0; i--){
+    const day = addDays(today, -i);
+    const n = (stats.reviewsByDate && stats.reviewsByDate[day]) || 0;
+    wkMax = Math.max(wkMax, n);
+    week.push({ n, wd: WD[new Date(day + 'T00:00:00').getDay()], isToday: day === today });
+  }
+
+  const LBL = { fontFamily: SANS, fontSize: 11, fontWeight: 700, letterSpacing: '0.06em', textTransform: 'uppercase', color: T.faint };
+  const panel = { padding: 18 };
+  const mins = Math.max(1, Math.round(due * 0.4));
+
+  return (
+    <div style={{ animation: 'sf-in 300ms cubic-bezier(.2,.8,.3,1)' }}>
+      <div style={{ marginBottom: 18 }}>
+        <Title style={{ fontSize: 25, fontWeight: 800 }}>{greetWord()}{name ? ', ' + name : ''}</Title>
+        <Sub style={{ marginTop: 3 }}>{longDate()}{daysToExam != null && daysToExam >= 0 ? ' · exam in ' + daysToExam + (daysToExam === 1 ? ' day' : ' days') : ''}</Sub>
+      </div>
+
+      {totalCards === 0 ? (
+        <Card style={{ padding: '40px 24px', textAlign: 'center' }}>
+          <div style={{ fontSize: 38, marginBottom: 10 }}>👋</div>
+          <Title>Welcome to Study Feed</Title>
+          <Sub style={{ marginTop: 6, marginBottom: 18 }}>Make your first deck from your notes, a file, or just a topic.</Sub>
+          <Btn kind="primary" onClick={onCreate}>Make your first cards</Btn>
+        </Card>
+      ) : (
+        <>
+          {/* hero — what to do now */}
+          <Card style={{ padding: '22px 24px', marginBottom: 16, display: 'flex', alignItems: 'center', gap: 22, flexWrap: 'wrap' }}>
+            <div style={{ flex: '1 1 260px' }}>
+              <div style={{ fontFamily: SANS, fontSize: 21, fontWeight: 750, letterSpacing: '-0.01em', color: T.ink }}>
+                {due > 0 ? `You've got ${due} card${due > 1 ? 's' : ''} ready` : 'You\'re all caught up'}
+              </div>
+              <Sub style={{ marginTop: 5, marginBottom: 18 }}>
+                {due > 0 ? `A mix of quick recall and long answers — about ${mins} min.` : 'Nothing due right now. Get ahead with some extra practice, or make more cards.'}
+              </Sub>
+              <div className="flex items-center gap-3" style={{ flexWrap: 'wrap' }}>
+                <Btn kind="primary" onClick={onStart}>{due > 0 ? 'Start studying →' : 'Practice anyway →'}</Btn>
+                <Sub style={{ fontSize: 12.5 }}>or pick a deck below</Sub>
+              </div>
+            </div>
+            <div style={{ position: 'relative', width: 116, height: 116, borderRadius: '50%', flexShrink: 0,
+              background: `conic-gradient(${T.accent} 0 ${sessionPct}%, ${T.well} 0)` }}>
+              <div style={{ position: 'absolute', inset: 11, borderRadius: '50%', background: T.surface }} />
+              <div style={{ position: 'absolute', inset: 0, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center' }}>
+                <div style={{ fontFamily: SANS, fontSize: 24, fontWeight: 800, lineHeight: 1, color: T.ink }}>{reviewedToday}</div>
+                <div style={{ fontFamily: SANS, fontSize: 10.5, color: T.faint, marginTop: 3, textTransform: 'uppercase', letterSpacing: '0.05em' }}>done today</div>
+              </div>
+            </div>
+          </Card>
+
+          {/* stat strip */}
+          <div style={{ display: 'flex', flexWrap: 'wrap', gap: 12, marginBottom: 16 }}>
+            {[['Due now', due, T.accentInk], ['🔥 ' + streak, null, T.amber, 'Day streak'], [reviewedToday, null, T.green, 'Reviewed today'], [totalCards, null, T.ink, 'Cards total']].map((it, i) => {
+              const isStreak = i === 1;
+              const big = isStreak ? it[0] : (i === 0 ? it[1] : it[0]);
+              const label = i === 0 ? 'Due now' : it[3];
+              const col = it[2];
+              return (
+                <Card key={i} style={{ flex: '1 1 140px', padding: '15px 16px', boxShadow: SH.raised }}>
+                  <div style={{ fontFamily: SANS, fontSize: 23, fontWeight: 800, lineHeight: 1, color: col, fontVariantNumeric: 'tabular-nums' }}>{big}</div>
+                  <div style={{ fontFamily: SANS, fontSize: 11.5, color: T.faint, marginTop: 6 }}>{label}</div>
+                </Card>
+              );
+            })}
+          </div>
+
+          {/* dashboard grid */}
+          <div style={{ display: 'flex', flexWrap: 'wrap', gap: 16, alignItems: 'flex-start' }}>
+            <Card style={{ ...panel, flex: '1 1 340px' }}>
+              <div className="flex items-center justify-between" style={{ marginBottom: 12 }}>
+                <span style={LBL}>Your decks</span>
+                <button className="sf-tap" onClick={onDecks} style={{ background: 'none', border: 'none', cursor: 'pointer', fontFamily: SANS, fontSize: 12.5, fontWeight: 650, color: T.accentInk }}>All decks →</button>
+              </div>
+              {deckRows.slice(0, 5).map(({ d, dueN, pct }, i) => {
+                const c = subjectColour(d.subject);
+                return (
+                  <button key={d.id} className="sf-tap" onClick={onDecks}
+                    style={{ display: 'flex', alignItems: 'center', gap: 13, width: '100%', textAlign: 'left', cursor: 'pointer',
+                      background: 'none', border: 'none', borderTop: i ? `1px solid ${T.border}` : 'none', padding: '11px 0' }}>
+                    <Tile colour={c} glyph={(d.subject || '?').trim().charAt(0).toUpperCase()} size={38} />
+                    <div style={{ flex: 1, minWidth: 0 }}>
+                      <div style={{ fontFamily: SANS, fontSize: 14, fontWeight: 650, color: T.ink, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{d.topic || d.subject || 'Untitled'}</div>
+                      <div style={{ fontFamily: SANS, fontSize: 12, color: T.faint, marginTop: 1 }}>{d.subject || 'Untitled'} · {d.cards.length} cards</div>
+                    </div>
+                    <div style={{ width: 72, height: 6, background: T.well, borderRadius: R.pill, overflow: 'hidden', flexShrink: 0 }}>
+                      <div style={{ height: '100%', width: pct + '%', background: T.green, borderRadius: R.pill }} />
+                    </div>
+                    <span style={{ fontFamily: SANS, fontSize: 11, fontWeight: 700, borderRadius: R.pill, padding: '2px 9px', flexShrink: 0,
+                      color: dueN ? '#fff' : T.faint, background: dueN ? T.accent : T.well }}>{dueN} due</span>
+                  </button>
+                );
+              })}
+            </Card>
+
+            <div style={{ flex: '1 1 240px', display: 'flex', flexDirection: 'column', gap: 16 }}>
+              <Card style={panel}>
+                <div style={{ ...LBL, marginBottom: 14 }}>This week</div>
+                <div style={{ display: 'flex', gap: 8, alignItems: 'flex-end', height: 60 }}>
+                  {week.map((w, i) => (
+                    <div key={i} title={w.n + ' reviewed'} style={{ flex: 1, minHeight: 6, background: T.well, borderRadius: 7, position: 'relative' }}>
+                      <div style={{ position: 'absolute', left: 0, right: 0, bottom: 0, height: Math.round(10 + (w.n / wkMax) * 90) + '%', background: w.isToday ? T.green : T.accent, borderRadius: 7, opacity: w.n ? 0.95 : 0.25 }} />
+                    </div>
+                  ))}
+                </div>
+                <div style={{ display: 'flex', gap: 8, marginTop: 7 }}>
+                  {week.map((w, i) => <span key={i} style={{ flex: 1, textAlign: 'center', fontFamily: SANS, fontSize: 10, color: T.faint }}>{w.wd[0]}</span>)}
+                </div>
+              </Card>
+
+              <Card style={panel}>
+                <div style={{ ...LBL, marginBottom: 12 }}>How well you know it</div>
+                {subjRows.length === 0 && <Sub style={{ fontSize: 13 }}>Study a little and this fills in.</Sub>}
+                {subjRows.map(({ s, pct }, i) => (
+                  <div key={s} className="flex items-center gap-3" style={{ padding: '9px 0', borderTop: i ? `1px solid ${T.border}` : 'none' }}>
+                    <span style={{ flex: 1, fontFamily: SANS, fontSize: 13.5, fontWeight: 650, color: T.ink }}>{s}</span>
+                    <div style={{ width: 110, height: 6, background: T.well, borderRadius: R.pill, overflow: 'hidden' }}>
+                      <div style={{ height: '100%', width: pct + '%', background: T.green, borderRadius: R.pill }} />
+                    </div>
+                    <span style={{ width: 34, textAlign: 'right', fontFamily: SANS, fontSize: 12, fontWeight: 650, color: T.muted, fontVariantNumeric: 'tabular-nums' }}>{pct}%</span>
+                  </div>
+                ))}
+              </Card>
+            </div>
+          </div>
+
+          {/* quick actions */}
+          <div style={{ display: 'flex', flexWrap: 'wrap', gap: 12, marginTop: 16 }}>
+            {[
+              { icon: '＋', t: 'Make new cards', s: 'Paste notes, a file, or a topic', on: onCreate },
+              flagged > 0
+                ? { icon: '✳', t: 'Review your tricky ones', s: `${flagged} card${flagged > 1 ? 's' : ''} keep tripping you up`, on: onStart }
+                : { icon: '◧', t: 'Study your feed', s: 'Review what\'s due today', on: onStart },
+            ].map((q, i) => (
+              <button key={i} className="sf-tap" onClick={q.on}
+                style={{ flex: '1 1 220px', display: 'flex', alignItems: 'center', gap: 12, textAlign: 'left', cursor: 'pointer',
+                  background: T.surface, border: `1px solid ${T.border}`, borderRadius: R.well, boxShadow: SH.raised, padding: '15px 16px' }}>
+                <span style={{ width: 34, height: 34, borderRadius: 10, background: rgba(T.accent, 0.12), color: T.accentInk, display: 'grid', placeItems: 'center', fontSize: 17, flexShrink: 0 }}>{q.icon}</span>
+                <div>
+                  <div style={{ fontFamily: SANS, fontSize: 14, fontWeight: 700, color: T.ink }}>{q.t}</div>
+                  <div style={{ fontFamily: SANS, fontSize: 12, color: T.faint, marginTop: 1 }}>{q.s}</div>
+                </div>
+              </button>
+            ))}
+          </div>
+        </>
+      )}
+    </div>
+  );
+}
+
 export default function App(){
   const [ready, setReady] = useState(false);
-  const [tab, setTab] = useState('feed');
+  const [tab, setTab] = useState('home');
   const [library, setLibrary] = useState({ decks: [] });
   const [progress, setProgress] = useState({});
   const [stats, setStats] = useState(DEFAULT_STATS);
@@ -2124,6 +2394,17 @@ export default function App(){
       setReady(true);
     })();
   }, []);
+
+  /* Apply the chosen theme to <html>: 'system' follows the OS, otherwise force
+     light/dark. The palette itself lives in THEME_CSS (data-theme selectors). */
+  useEffect(() => {
+    try {
+      const el = document.documentElement;
+      const t = settings.theme || 'system';
+      if (t === 'system') el.removeAttribute('data-theme');
+      else el.setAttribute('data-theme', t);
+    } catch {}
+  }, [settings.theme]);
 
   const persistLibrary = useCallback((lib) => { setLibrary(lib); save('library:main', lib); }, []);
   const persistProgress = useCallback((p) => { setProgress(p); save('progress:all', p); }, []);
@@ -2204,8 +2485,10 @@ export default function App(){
 
   return (
     <Shell tab={tab} setTab={setTab} due={dueCount} pending={pendingCount}>
-      <Masthead due={dueCount} streak={stats.streak || 0} />
+      {tab !== 'home' && <Masthead due={dueCount} streak={stats.streak || 0} />}
       <div style={{ minHeight: 440 }}>
+        {tab === 'home' && <Home library={library} progress={progress} stats={stats} settings={settings}
+          due={dueCount} onStart={() => setTab('feed')} onCreate={() => setTab('create')} onDecks={() => setTab('decks')} />}
         {/* key includes the mix so moving the slider rebuilds the queue at the new ratio */}
         {tab === 'feed' && <Feed key={'feed-' + cardCount + '-' + longMixOf(settings)} decks={library.decks} progress={progress} settings={settings}
           stats={stats} onGrade={gradeCard} reduceMotion={reduceMotion.current} />}
@@ -2228,6 +2511,7 @@ export default function App(){
 function Shell({ children, tab, setTab, due, pending }){
   return (
     <div style={{ background: T.bg, minHeight: '100vh', color: T.ink }}>
+      <style>{THEME_CSS}</style>
       <style>{`
         @keyframes sf-in { from { opacity: 0; transform: translateY(12px) scale(0.985); } to { opacity: 1; transform: none; } }
         @keyframes sf-reveal { from { opacity: 0; transform: translateY(-6px); } to { opacity: 1; transform: none; } }
@@ -2299,7 +2583,7 @@ function Shell({ children, tab, setTab, due, pending }){
   );
 }
 
-const NAV_ITEMS = [['feed','Study'],['create','Create'],['decks','Decks'],['stats','Stats'],['settings','You']];
+const NAV_ITEMS = [['home','Home'],['feed','Study'],['create','Create'],['decks','Decks'],['stats','Stats'],['settings','You']];
 
 function NavBadge({ k, due, pending }){
   if (k === 'feed' && due > 0){
@@ -2361,7 +2645,7 @@ function Nav({ tab, setTab, due, pending }){
   return (
     <div className="sf-navbottom" style={{ position: 'fixed', bottom: 0, left: 0, right: 0, justifyContent: 'center', pointerEvents: 'none' }}>
       <div style={{ width: '100%', maxWidth: 520, pointerEvents: 'auto',
-        background: rgba('#FFFFFF', 0.92), backdropFilter: 'blur(16px)', WebkitBackdropFilter: 'blur(16px)',
+        background: 'var(--sf-nav)', backdropFilter: 'blur(16px)', WebkitBackdropFilter: 'blur(16px)',
         borderTop: `1px solid ${T.border}`, display: 'flex',
         padding: '8px 6px calc(8px + env(safe-area-inset-bottom))' }}>
         {items.map(([k, label]) => {
