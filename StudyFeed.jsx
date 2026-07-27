@@ -489,24 +489,24 @@ ${source}`;
 }
 
 /* Models served free (rate-limited) by NVIDIA Build (build.nvidia.com), called
-   through their OpenAI-compatible endpoint. Everything runs on Qwen: it's fast
-   (~4s), returns clean JSON, and follows "return only JSON" well.
-   Marking + hints used to use deepseek-ai/deepseek-v4-pro for its reasoning, but
-   that model takes 30-60s+ per call on the free tier — long enough that the
-   Mark/Hint buttons appeared to hang forever — so they run on Qwen too now.
-   Swap here if a model on the catalog gets deprecated (free models can be
-   removed with days' notice). */
+   through their OpenAI-compatible endpoint. Everything text runs on Nemotron:
+   with reasoning turned off it's fast (~7s), returns clean JSON, and follows
+   "return only JSON" well.
+   NOTE: NVIDIA retires free models with little notice — qwen3-next-80b-a3b was
+   EOL'd 2026-07-27 and started returning HTTP 410 "Gone". If generation starts
+   failing with 410, the model here has been retired: pick a live one from
+   build.nvidia.com and swap the id below. */
 const NVIDIA_BASE = 'https://integrate.api.nvidia.com/v1/chat/completions';
-const MODEL_SMART = 'qwen/qwen3-next-80b-a3b-instruct';   // marking + hints
-const MODEL_CHEAP = 'qwen/qwen3-next-80b-a3b-instruct';
-const MODEL_GEN   = 'qwen/qwen3-next-80b-a3b-instruct';   // generation
+const MODEL_SMART = 'nvidia/llama-3.3-nemotron-super-49b-v1';   // marking + hints
+const MODEL_CHEAP = 'nvidia/llama-3.3-nemotron-super-49b-v1';
+const MODEL_GEN   = 'nvidia/llama-3.3-nemotron-super-49b-v1';   // generation
 /* Vision model for reading slide images (diagrams, photos of notes). It accepts
    only ONE image per request, so images are transcribed to text one at a time
-   and that text is fed to Qwen — same card quality as typed notes. */
+   and that text is fed to the text model — same card quality as typed notes. */
 const MODEL_VISION = 'meta/llama-3.2-11b-vision-instruct';
-/* DeepSeek "thinks out loud" by default; that reasoning would pollute the JSON
-   the marker parser expects, so we turn it off for any deepseek model. */
-const isDeepSeek = (m) => /deepseek/i.test(m || '');
+/* Reasoning models ("deepseek", Nemotron) think out loud by default; that
+   reasoning would pollute the JSON the parser expects, so turn it off. */
+const isReasoner = (m) => /deepseek|nemotron/i.test(m || '');
 
 function pickModel(mode, settings){
   // Generation is all Qwen for now — it returns clean structured output and is
@@ -526,6 +526,7 @@ function friendlyApiError(e){
   if (/no API key/i.test(m)) return 'Add your NVIDIA API key under the You tab to turn this on.';
   if (/\b401\b/.test(m) || /\b403\b/.test(m)) return 'Your NVIDIA key was rejected — check it under the You tab (it should start with nvapi-).';
   if (/\b404\b/.test(m)) return 'That model wasn\'t found — it may have been removed from NVIDIA\'s catalog. ' + m;
+  if (/\b410\b/.test(m)) return 'This AI model was retired by NVIDIA — the app needs a quick update to point at a current one. ' + m;
   if (/\b429\b/.test(m)) return 'Rate limited (NVIDIA\'s free tier allows ~40 requests/min) — wait a moment and try again.';
   if (/timed out/i.test(m)) return 'That took too long and timed out — try again in a moment.';
   if (/no images/i.test(m)) return m;
@@ -541,13 +542,13 @@ async function postMessages(content, maxTokens, model){
   const body = {
     model,
     messages: [{ role: 'user', content }],
-    temperature: isDeepSeek(model) ? 0.6 : 0.7,
+    temperature: isReasoner(model) ? 0.6 : 0.7,
     top_p: 0.9,
     max_tokens: maxTokens,
     stream: false,
   };
-  // DeepSeek: switch off chain-of-thought so replies are clean JSON, not prose.
-  if (isDeepSeek(model)) body.chat_template_kwargs = { thinking: false };
+  // Reasoning models: switch off chain-of-thought so replies are clean JSON.
+  if (isReasoner(model)) body.chat_template_kwargs = { thinking: false };
 
   // Never let a slow model spin the UI forever — abort after 60s so the caller
   // gets a real error it can show instead of an endless "Marking…" spinner.

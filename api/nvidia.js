@@ -43,6 +43,9 @@ export default async function handler(req, res) {
     // client keeps seeing NVIDIA's own error details (detail / error.message)
     // on failures instead of a generic wrapper.
     const text = await upstream.text();
+    // Log real NVIDIA failures to the Vercel runtime logs so the cause (e.g. a
+    // 410 "model reached end of life") is visible without the browser.
+    if (!upstream.ok) console.error('NVIDIA ' + upstream.status + ': ' + text.slice(0, 500));
     res.status(upstream.status);
     res.setHeader('Content-Type', 'application/json');
     return res.send(text);
