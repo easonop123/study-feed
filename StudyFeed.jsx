@@ -489,17 +489,18 @@ ${source}`;
 }
 
 /* Models served free (rate-limited) by NVIDIA Build (build.nvidia.com), called
-   through their OpenAI-compatible endpoint. Everything text runs on Nemotron:
-   with reasoning turned off it's fast (~7s), returns clean JSON, and follows
-   "return only JSON" well.
+   through their OpenAI-compatible endpoint. Everything text runs on gpt-oss-20b:
+   fast (a full ~15-card batch in ~11s), returns clean JSON, handles long-answer
+   cards, and stays well under the 60s timeout — the 49B Nemotron model was too
+   slow on the free tier and hit the timeout on big generates.
    NOTE: NVIDIA retires free models with little notice — qwen3-next-80b-a3b was
-   EOL'd 2026-07-27 and started returning HTTP 410 "Gone". If generation starts
-   failing with 410, the model here has been retired: pick a live one from
-   build.nvidia.com and swap the id below. */
+   EOL'd 2026-07-27 and returned HTTP 410 "Gone". If generation starts failing
+   with 410, the model here was retired: pick a live one at build.nvidia.com and
+   swap the id below (and re-check its speed against the 60s cap). */
 const NVIDIA_BASE = 'https://integrate.api.nvidia.com/v1/chat/completions';
-const MODEL_SMART = 'nvidia/llama-3.3-nemotron-super-49b-v1';   // marking + hints
-const MODEL_CHEAP = 'nvidia/llama-3.3-nemotron-super-49b-v1';
-const MODEL_GEN   = 'nvidia/llama-3.3-nemotron-super-49b-v1';   // generation
+const MODEL_SMART = 'openai/gpt-oss-20b';   // marking + hints
+const MODEL_CHEAP = 'openai/gpt-oss-20b';
+const MODEL_GEN   = 'openai/gpt-oss-20b';   // generation
 /* Vision model for reading slide images (diagrams, photos of notes). It accepts
    only ONE image per request, so images are transcribed to text one at a time
    and that text is fed to the text model — same card quality as typed notes. */
