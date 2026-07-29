@@ -163,7 +163,25 @@ async function save(key, value){
 
 /* longMix = what % of your cards should be long (extended-response) answers.
    Drives both what gets generated and how the feed is blended. */
-const DEFAULT_SETTINGS = { interleave: true, newPerDay: 12, capNew: false, longMix: 30, theme: 'system', name: '', examDate: '' };
+const DEFAULT_SETTINGS = { interleave: true, newPerDay: 12, capNew: false, longMix: 30, theme: 'system', name: '', examDate: '', lastSeenVersion: '', onboarded: false, dismissedTips: {} };
+
+/* ---- version + changelog -------------------------------------------------
+   APP_VERSION is the id we compare against settings.lastSeenVersion to decide
+   whether to pop the "What's new" note. Bump it whenever PATCH_NOTES gains an
+   entry. Newest first; the first element is the current release. */
+const APP_VERSION = '1.1.0';
+const PATCH_NOTES = [
+  { v: '1.1.0', date: '2026-07-29', title: 'Decks, quizzes & PDFs', items: [
+    'Study one deck at a time — pick it from the top of your feed instead of always getting the full mix.',
+    'Quiz mode: a quick, graded test built from any deck. A fast way to check yourself before an exam.',
+    'Upload PDFs too, alongside Word, PowerPoint, images and text.',
+    'Keep cards strictly to your notes — turn on “Only my material” so nothing extra is added.',
+    'Stuck on a long answer? A second, bigger nudge now gives you sentence starters when writing points aren’t enough.',
+    'Little tips for finding your way around, and this “What’s new” note.',
+    'Send a feature request straight from the You tab.',
+  ] },
+];
+const dismissedTip = (settings, id) => !!(settings && settings.dismissedTips && settings.dismissedTips[id]);
 const longMixOf = (s) => (s && s.longMix != null) ? s.longMix : 30;
 const isLongCard = (c) => c.type === 'extended';
 
@@ -414,17 +432,21 @@ function batchText(text, size = 12000){
   return batches.length ? batches : [text];
 }
 
-function flipPrompt(source, level){
+/* When the student wants cards drawn ONLY from what they uploaded — no outside
+   knowledge padded in. Appended to whichever prompt is used. */
+const STRICT_CLAUSE = '\n\nSTRICT SOURCE MODE — this overrides everything else: use ONLY facts, terms, examples and figures that are written explicitly in the material below. Do not add outside knowledge, extra context, or anything you happen to know that is not on the page. If the material is thin, make fewer cards rather than inventing content. Every card must be traceable to a specific line in the material.';
+
+function flipPrompt(source, level, strict){
   return `You write flashcards for a ${level} student. From the material below, produce fast-recall cards for definitions, formulae, key facts and vocabulary.
 Return ONLY lines of the form:  question | answer
 One card per line. No numbering, no extra prose. Keep answers tight.
-Do not invent facts not supported by the material.
+Do not invent facts not supported by the material.${strict ? STRICT_CLAUSE : ''}
 
 MATERIAL:
 ${source}`;
 }
 
-function extendedPrompt(source, level){
+function extendedPrompt(source, level, strict){
   return `You are an expert ${level} examiner. From the material below, write EXTENDED-RESPONSE exam questions that reward how an answer is CONSTRUCTED, not single-word recall.
 
 Return ONLY a JSON array. Each element:
@@ -438,7 +460,7 @@ Return ONLY a JSON array. Each element:
   "skeleton": the sentence pattern that earns the marks,
   "pitfall": the SPECIFIC mark-losing error for THIS question }
 
-Rules: the verb sets the grade ceiling; the three answers differ in depth not length; Excellence must refer to the actual scenario. Science: claim -> mechanism -> link to context. Maths: show working; method marks independent of the answer; state units; Excellence justifies the method. English: point -> evidence -> analysis of technique -> connection to purpose. Do NOT invent NZQA codes. No JSON outside the array.
+Rules: the verb sets the grade ceiling; the three answers differ in depth not length; Excellence must refer to the actual scenario. Science: claim -> mechanism -> link to context. Maths: show working; method marks independent of the answer; state units; Excellence justifies the method. English: point -> evidence -> analysis of technique -> connection to purpose. Do NOT invent NZQA codes. No JSON outside the array.${strict ? STRICT_CLAUSE : ''}
 
 MATERIAL:
 ${source}`;
@@ -458,7 +480,7 @@ function mixTargets(pctLong){
   };
 }
 
-function mixedPrompt(source, level, pctLong){
+function mixedPrompt(source, level, pctLong, strict){
   const t = mixTargets(pctLong);
   const longRule = t.long === 0
     ? 'Do NOT include any "extended" cards in this reply — the student has asked for short answers only.'
@@ -482,7 +504,7 @@ ${quickRule}
 
 Emit in this order: extended, then mcq, then quick.
 
-Ground everything in the material. Do NOT invent NZQA codes. No JSON outside the array.
+Ground everything in the material. Do NOT invent NZQA codes. No JSON outside the array.${strict ? STRICT_CLAUSE : ''}
 
 MATERIAL:
 ${source}`;
@@ -524,8 +546,8 @@ const noteApiError = (e) => { lastApiError = (e && e.message) ? String(e.message
    common one on the website is simply "no key yet". */
 function friendlyApiError(e){
   const m = (e && e.message) ? e.message : '';
-  if (/no API key/i.test(m)) return 'Add your NVIDIA API key under the You tab to turn this on.';
-  if (/\b401\b/.test(m) || /\b403\b/.test(m)) return 'Your NVIDIA key was rejected — check it under the You tab (it should start with nvapi-).';
+  if (/no API key|not set on the server/i.test(m)) return 'The AI isn\'t switched on for this site yet — the owner needs to add the API key.';
+  if (/\b401\b/.test(m) || /\b403\b/.test(m)) return 'The AI key was rejected by NVIDIA — the site owner needs to check it.';
   if (/\b404\b/.test(m)) return 'That model wasn\'t found — it may have been removed from NVIDIA\'s catalog. ' + m;
   if (/\b410\b/.test(m)) return 'This AI model was retired by NVIDIA — the app needs a quick update to point at a current one. ' + m;
   if (/\b429\b/.test(m)) return 'Rate limited (NVIDIA\'s free tier allows ~40 requests/min) — wait a moment and try again.';
@@ -591,10 +613,10 @@ async function describeImage(img){
   return postMessages(content, 1500, MODEL_VISION);
 }
 
-function promptFor(mode, source, level, pctLong){
-  if (mode === 'flip') return flipPrompt(source, level);
-  if (mode === 'extended') return extendedPrompt(source, level);
-  return mixedPrompt(source, level, pctLong);
+function promptFor(mode, source, level, pctLong, strict){
+  if (mode === 'flip') return flipPrompt(source, level, strict);
+  if (mode === 'extended') return extendedPrompt(source, level, strict);
+  return mixedPrompt(source, level, pctLong, strict);
 }
 function parseReply(mode, reply){
   if (mode === 'flip'){
@@ -611,13 +633,13 @@ function parseReply(mode, reply){
   return cardsFromJson(parseJsonArray(reply));
 }
 
-async function genText(source, mode, level, onProgress, model, pctLong){
+async function genText(source, mode, level, onProgress, model, pctLong, strict){
   const batches = batchText(source);
   let cards = [];
   for (let i = 0; i < batches.length; i++){
     onProgress && onProgress(i + 1, batches.length, 'text');
     let reply = '';
-    try { reply = await callModel(promptFor(mode, batches[i], level, pctLong), 4000, model); }
+    try { reply = await callModel(promptFor(mode, batches[i], level, pctLong, strict), 4000, model); }
     catch (e){ noteApiError(e); continue; }
     cards = cards.concat(parseReply(mode, reply));
   }
@@ -686,6 +708,29 @@ async function getHints(card, level){
   return Array.isArray(arr) ? arr.map(String).filter(Boolean).slice(0, 6) : [];
 }
 
+/* The BIGGER nudge — for when the writing points weren't enough. Gives real
+   sentence starters (the frame, with a blank where the key idea goes) so the
+   student can push the pen forward without being handed the finished answer. */
+function bigHintPrompt(card, level){
+  return `A ${level} student is REALLY stuck on this exam question — the general pointers didn't get them writing. Give them sentence starters to build the answer, but still leave the actual thinking to them.
+
+COMMAND VERB: ${card.verb}
+QUESTION (${card.marks} marks): ${card.prompt}
+
+Write ${Math.min(4, Math.max(2, Math.round(card.marks / 2)))} sentence STARTERS that map to how the marks are earned. Each one:
+- gives the opening of a sentence, then a blank "____" exactly where the key term, value or idea belongs
+- follows the order the marks follow (state -> explain -> link/evaluate)
+- e.g. "The rate increases because ____, which means ____." or "This links to ____ since ____."
+Do NOT fill in the blanks. Do NOT give the finished answer, the actual terms, or the values — the student fills every ____ themselves.
+
+Return ONLY a JSON array of short strings. No prose outside it.`;
+}
+async function getBigHint(card, level){
+  const reply = await callModel(bigHintPrompt(card, level), 700, MODEL_SMART);
+  const arr = parseJsonArray(reply);
+  return Array.isArray(arr) ? arr.map(String).filter(Boolean).slice(0, 5) : [];
+}
+
 function parseManual(text){
   const seen = new Set();
   const cards = [];
@@ -729,6 +774,63 @@ async function loadJSZip(){
   if (!isZipLib(window.JSZip)) throw new Error('Unzip helper unavailable.');
   _jszip = window.JSZip;
   return _jszip;
+}
+/* pdf.js, loaded from the CDN the same way JSZip is (it isn't in the bundle).
+   The UMD build sets window.pdfjsLib; the worker keeps parsing off the main
+   thread so a big PDF doesn't freeze the page. */
+let _pdfjs = null;
+const PDFJS_CDN = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174';
+async function loadPdfJs(){
+  if (_pdfjs) return _pdfjs;
+  if (!window.pdfjsLib){
+    await new Promise((res, rej) => {
+      const s = document.createElement('script');
+      s.src = PDFJS_CDN + '/pdf.min.js';
+      s.onload = res;
+      s.onerror = () => rej(new Error('Could not load the PDF reader — check your connection.'));
+      document.head.appendChild(s);
+    });
+  }
+  if (!window.pdfjsLib) throw new Error('PDF reader unavailable.');
+  try { window.pdfjsLib.GlobalWorkerOptions.workerSrc = PDFJS_CDN + '/pdf.worker.min.js'; } catch {}
+  _pdfjs = window.pdfjsLib;
+  return _pdfjs;
+}
+/* A page whose text layer is basically empty is a scan or an image-only slide;
+   render it to a bitmap so the vision model can read it, like embedded images. */
+const MAX_PDF_PAGES = 40;
+async function renderPdfPage(page, maxPx = 1500){
+  const base = page.getViewport({ scale: 1 });
+  const scale = Math.min(2, maxPx / Math.max(base.width, base.height, 1));
+  const viewport = page.getViewport({ scale: scale > 0 ? scale : 1 });
+  const canvas = document.createElement('canvas');
+  canvas.width = Math.max(1, Math.round(viewport.width));
+  canvas.height = Math.max(1, Math.round(viewport.height));
+  await page.render({ canvasContext: canvas.getContext('2d'), viewport }).promise;
+  return await new Promise(res => canvas.toBlob(b => res(b), 'image/jpeg', 0.85));
+}
+async function extractPdf(file){
+  const pdfjs = await loadPdfJs();
+  const buf = await file.arrayBuffer();
+  const doc = await pdfjs.getDocument({ data: buf }).promise;
+  const n = Math.min(doc.numPages, MAX_PDF_PAGES);
+  const parts = [];
+  const images = [];
+  for (let i = 1; i <= n; i++){
+    const page = await doc.getPage(i);
+    let pageText = '';
+    try {
+      const content = await page.getTextContent();
+      pageText = content.items.map(it => (it && it.str) ? it.str : '').join(' ').replace(/\s+/g, ' ').trim();
+    } catch {}
+    if (pageText.length >= 40) parts.push(pageText);
+    else if (images.length < MAX_EMBEDDED_IMAGES){
+      try { const b = await renderPdfPage(page); if (b) images.push(b); } catch {}
+    }
+  }
+  const text = parts.join('\n\n').trim();
+  if (!text && !images.length) throw new Error('This PDF had no readable text — if it is a scan, try clearer pages or a photo.');
+  return { text, images };
 }
 async function resizeImage(blob, maxPx = 1500, quality = 0.82){
   const bmp = await createImageBitmap(blob);
@@ -775,6 +877,7 @@ async function extractFile(file){
   // A bare photo/image file goes straight to the vision path.
   if (type.startsWith('image/')) return { text: '', images: [file] };
   if (name.endsWith('.txt') || type === 'text/plain') return { text: (await file.text()).trim(), images: [] };
+  if (name.endsWith('.pdf') || type === 'application/pdf') return await extractPdf(file);
 
   const JSZip = await loadJSZip();
   const zip = await JSZip.loadAsync(file);
@@ -799,7 +902,7 @@ async function extractFile(file){
     if (!text && !images.length) throw new Error('This PowerPoint had no readable text or images.');
     return { text, images };
   }
-  throw new Error('Use a Word, PowerPoint, image or text file, or paste your notes.');
+  throw new Error('Use a PDF, Word, PowerPoint, image or text file, or paste your notes.');
 }
 
 /* ==========================================================================
@@ -816,6 +919,24 @@ function Chip({ children, colour = T.accent, solid, style }){
     <span style={{ display: 'inline-block', fontFamily: SANS, fontSize: 12, fontWeight: 600,
       color: solid ? '#fff' : colour, background: solid ? colour : rgba(colour, 0.12),
       borderRadius: R.pill, padding: '4px 10px', whiteSpace: 'nowrap', ...style }}>{children}</span>
+  );
+}
+
+/* A soft, dismissible hint. Dismissing it (by id) remembers the choice in
+   settings.dismissedTips so the same nudge never nags twice. */
+function Tip({ id, settings, onSettings, icon, tone, children }){
+  if (dismissedTip(settings, id)) return null;
+  const c = tone || T.accent;
+  const dismiss = () => onSettings({ ...settings, dismissedTips: { ...(settings.dismissedTips || {}), [id]: true } });
+  return (
+    <div style={{ display: 'flex', alignItems: 'flex-start', gap: 10, background: rgba(c, 0.09),
+      border: `1px solid ${rgba(c, 0.18)}`, borderRadius: R.well, padding: '11px 13px' }}>
+      <span style={{ fontSize: 15, lineHeight: '20px', flexShrink: 0 }}>{icon || '💡'}</span>
+      <div style={{ flex: 1, fontFamily: SANS, fontSize: 13, lineHeight: 1.5, color: T.ink }}>{children}</div>
+      <button className="sf-tap" onClick={dismiss} aria-label="Dismiss tip"
+        style={{ background: 'none', border: 'none', cursor: 'pointer', color: T.faint, fontSize: 18,
+          lineHeight: '16px', padding: '0 2px', flexShrink: 0 }}>×</button>
+    </div>
   );
 }
 
@@ -1145,6 +1266,9 @@ function ExtendedFace({ card, phase, deck, onReveal }){
   const [hints, setHints] = useState(null);      // null = not asked, [] = none, [..] = points
   const [hintBusy, setHintBusy] = useState(false);
   const [hintErr, setHintErr] = useState('');
+  const [big, setBig] = useState(null);          // tier-2: sentence starters, same shape
+  const [bigBusy, setBigBusy] = useState(false);
+  const [bigErr, setBigErr] = useState('');
 
   const taRef = useRef(null);
   const selRef = useRef({ start: 0, end: 0 });    // last caret/selection in the answer box
@@ -1172,7 +1296,7 @@ function ExtendedFace({ card, phase, deck, onReveal }){
     setAnswer(val.slice(0, start) + sym + val.slice(end));
   };
 
-  useEffect(() => { setAnswer(''); setResult(null); setErr(''); setHints(null); setHintErr(''); selRef.current = { start: 0, end: 0 }; }, [card.id]);
+  useEffect(() => { setAnswer(''); setResult(null); setErr(''); setHints(null); setHintErr(''); setBig(null); setBigErr(''); selRef.current = { start: 0, end: 0 }; }, [card.id]);
 
   const doHints = async () => {
     setHintBusy(true); setHintErr('');
@@ -1182,6 +1306,16 @@ function ExtendedFace({ card, phase, deck, onReveal }){
       else setHintErr('Could not fetch points. Try again.');
     } catch (e){ setHintErr(friendlyApiError(e)); }
     finally { setHintBusy(false); }
+  };
+
+  const doBigHint = async () => {
+    setBigBusy(true); setBigErr('');
+    try {
+      const h = await getBigHint(card, deck.standard || 'NCEA Level 1');
+      if (h.length) setBig(h);
+      else setBigErr('Could not fetch starters. Try again.');
+    } catch (e){ setBigErr(friendlyApiError(e)); }
+    finally { setBigBusy(false); }
   };
 
   const doMark = async () => {
@@ -1252,6 +1386,30 @@ function ExtendedFace({ card, phase, deck, onReveal }){
                   </div>
                 ))}
               </div>
+
+              {/* second, bigger nudge — real sentence frames with blanks to fill */}
+              {big === null ? (
+                <button className="sf-tap" onClick={doBigHint} disabled={bigBusy}
+                  style={{ background: 'none', border: 'none', cursor: bigBusy ? 'default' : 'pointer',
+                    padding: '12px 2px 0', fontFamily: SANS, fontSize: 13, fontWeight: 700,
+                    color: bigBusy ? T.faint : T.accentInk }}>
+                  {bigBusy ? 'Writing you some starters…' : 'Still stuck? Give me sentence starters →'}
+                </button>
+              ) : (
+                <div style={{ marginTop: 12, paddingTop: 12, borderTop: `1px dashed ${rgba(T.amber, 0.4)}` }}>
+                  <div className="flex items-center justify-between" style={{ marginBottom: 8 }}>
+                    <Chip colour={T.accent}>Sentence starters</Chip>
+                    <Sub style={{ fontSize: 11.5 }}>Fill each blank yourself</Sub>
+                  </div>
+                  <div className="flex flex-col gap-2">
+                    {big.map((h, i) => (
+                      <div key={i} style={{ fontFamily: SANS, fontSize: 14.5, lineHeight: 1.55, color: T.ink,
+                        background: T.surface, border: `1px solid ${T.border}`, borderRadius: R.input, padding: '9px 12px' }}>{h}</div>
+                    ))}
+                  </div>
+                </div>
+              )}
+              {bigErr && <Sub style={{ marginTop: 8, color: T.red }}>{bigErr}</Sub>}
             </div>
           )}
           {hintErr && <Sub style={{ marginTop: 8, color: T.red }}>{hintErr}</Sub>}
@@ -1366,12 +1524,54 @@ function buildQueue(decks, progress, settings, stats){
   return blendByRatio(long, quick, longMixOf(settings));
 }
 
-function Feed({ decks, progress, settings, stats, onGrade, reduceMotion }){
+/* The row above the feed: choose which deck you're studying (or "All decks"),
+   with a quiz shortcut for whatever's in focus. Pills scroll; the quiz button
+   stays put. Selection lifts state up to App, which re-keys the feed. */
+function DeckBar({ decks, progress, focus, setFocus, onQuiz }){
+  const today = TODAY();
+  const dueOf = (d) => d.cards.filter(c => { const p = progress[c.id]; return p && p.seen && p.due <= today; }).length;
+  const many = decks.length > 1;
+  return (
+    <div style={{ display: 'flex', gap: 8, alignItems: 'center', marginBottom: 12 }}>
+      {many && (
+        <div style={{ display: 'flex', gap: 8, overflowX: 'auto', flex: 1, padding: '2px 2px 6px', WebkitOverflowScrolling: 'touch' }}>
+          {[{ id: 'all', label: 'All decks', colour: T.accent, due: 0 }].concat(
+            decks.map(d => ({ id: d.id, label: d.topic || d.subject || 'Untitled', colour: subjectColour(d.subject), due: dueOf(d) }))
+          ).map(p => {
+            const active = focus === p.id;
+            return (
+              <button key={p.id} className="sf-tap" onClick={() => setFocus(p.id)}
+                style={{ flexShrink: 0, display: 'flex', alignItems: 'center', gap: 7, cursor: 'pointer',
+                  background: active ? T.surface : T.well, border: `1.5px solid ${active ? rgba(p.colour, 0.5) : 'transparent'}`,
+                  borderRadius: R.pill, padding: '7px 13px', boxShadow: active ? SH.pop : 'none' }}>
+                <span style={{ width: 8, height: 8, borderRadius: 8, background: p.colour, flexShrink: 0 }} />
+                <span style={{ fontFamily: SANS, fontSize: 13, fontWeight: active ? 700 : 550, color: active ? T.ink : T.muted,
+                  whiteSpace: 'nowrap', maxWidth: 150, overflow: 'hidden', textOverflow: 'ellipsis' }}>{p.label}</span>
+                {p.due > 0 && <span style={{ fontFamily: SANS, fontSize: 11, fontWeight: 700, color: active ? T.accentInk : T.faint }}>{p.due}</span>}
+              </button>
+            );
+          })}
+        </div>
+      )}
+      <button className="sf-tap" onClick={() => onQuiz(focus)}
+        style={{ flexShrink: 0, marginLeft: many ? 0 : 'auto', display: 'flex', alignItems: 'center', gap: 6, cursor: 'pointer',
+          background: rgba(T.green, 0.12), border: `1px solid ${rgba(T.green, 0.25)}`, color: T.green,
+          borderRadius: R.pill, padding: '8px 14px', fontFamily: SANS, fontSize: 13, fontWeight: 700 }}>
+        ◎ Quiz
+      </button>
+    </div>
+  );
+}
+
+function Feed({ decks, progress, settings, stats, onGrade, reduceMotion, focus, setFocus, onSettings, onQuiz }){
+  const fdecks = useMemo(() => (focus === 'all' ? decks : decks.filter(d => d.id === focus)), [decks, focus]);
+  const focusDeck = focus === 'all' ? null : decks.find(d => d.id === focus);
+
   const allItems = useMemo(() => {
     const out = [];
-    for (const d of decks) for (const c of d.cards) out.push({ card: c, deck: d });
+    for (const d of fdecks) for (const c of d.cards) out.push({ card: c, deck: d });
     return out;
-  }, [decks]);
+  }, [fdecks]);
 
   // practice pool: shuffled, then blended to the same long/quick ratio
   const mixedPool = useCallback(() => {
@@ -1379,13 +1579,14 @@ function Feed({ decks, progress, settings, stats, onGrade, reduceMotion }){
     return blendByRatio(s.filter(it => isLongCard(it.card)), s.filter(it => !isLongCard(it.card)), longMixOf(settings));
   }, [allItems, settings]);
 
-  const [queue, setQueue] = useState(() => buildQueue(decks, progress, settings, stats));
+  const [queue, setQueue] = useState(() => buildQueue(fdecks, progress, settings, stats));
   const [reviewed, setReviewed] = useState(0);
   const [pool, setPool] = useState([]);
   const [pIdx, setPIdx] = useState(0);
 
   const scheduledLeft = queue.length;
   const inPractice = scheduledLeft === 0;
+  const bar = <DeckBar decks={decks} progress={progress} focus={focus} setFocus={setFocus} onQuiz={onQuiz} />;
 
   useEffect(() => {
     if (inPractice && pool.length === 0 && allItems.length > 0){
@@ -1419,11 +1620,14 @@ function Feed({ decks, progress, settings, stats, onGrade, reduceMotion }){
 
   if (allItems.length === 0){
     return (
-      <Card style={{ padding: '44px 24px', textAlign: 'center' }}>
-        <div style={{ fontSize: 40, marginBottom: 12 }}>🗂️</div>
-        <Title>No cards yet</Title>
-        <Sub style={{ marginTop: 6 }}>Head to <b>Create</b> to make your first deck.</Sub>
-      </Card>
+      <div>
+        {bar}
+        <Card style={{ padding: '44px 24px', textAlign: 'center' }}>
+          <div style={{ fontSize: 40, marginBottom: 12 }}>🗂️</div>
+          <Title>{focusDeck ? 'This deck is empty' : 'No cards yet'}</Title>
+          <Sub style={{ marginTop: 6 }}>{focusDeck ? 'Add cards to it, or pick another deck above.' : <>Head to <b>Create</b> to make your first deck.</>}</Sub>
+        </Card>
+      </div>
     );
   }
 
@@ -1432,8 +1636,9 @@ function Feed({ decks, progress, settings, stats, onGrade, reduceMotion }){
     if (!it) return <div style={{ minHeight: 420 }} />;
     return (
       <div>
+        {bar}
         <div className="flex items-center justify-between" style={{ marginBottom: 12, padding: '0 4px' }}>
-          <Chip colour={T.green}>Extra practice</Chip>
+          <Chip colour={T.green}>{focusDeck ? 'Extra practice · ' + (focusDeck.topic || focusDeck.subject || 'this deck') : 'Extra practice'}</Chip>
           <Sub style={{ fontSize: 12.5 }}>{reviewed} done today</Sub>
         </div>
         <StudyCard key={it.card.id + ':' + pIdx} card={it.card} deck={it.deck} onGrade={gradePractice}
@@ -1446,6 +1651,14 @@ function Feed({ decks, progress, settings, stats, onGrade, reduceMotion }){
   const pct = (done + scheduledLeft) ? (done / (done + scheduledLeft)) * 100 : 0;
   return (
     <div>
+      {bar}
+      {decks.length > 1 && focus === 'all' && (
+        <div style={{ marginBottom: 12 }}>
+          <Tip id="feed-pick-deck" settings={settings} onSettings={onSettings}>
+            Studying everything at once? Tap a deck above to drill just one subject.
+          </Tip>
+        </div>
+      )}
       <div className="flex items-center gap-3" style={{ marginBottom: 12, padding: '0 4px' }}>
         <div style={{ flex: 1, height: 8, background: T.well, borderRadius: R.pill, overflow: 'hidden' }}>
           <div style={{ height: '100%', width: `${pct}%`, background: T.green, borderRadius: R.pill,
@@ -1477,7 +1690,9 @@ function Create({ onSave, settings, onSettings, onPending }){
   const [meta, setMeta] = useState({ subject: '', topic: '', standard: 'NCEA Level 1' });
   const [attaching, setAttaching] = useState('');
   const [images, setImages] = useState([]);
+  const [strictSource, setStrictSource] = useState(false);
   const fileRef = useRef(null);
+  const hasMaterial = source.trim().length > 0 || images.length > 0;
 
   // let the nav badge the Create tab while cards are sitting unsaved
   useEffect(() => {
@@ -1514,7 +1729,7 @@ function Create({ onSave, settings, onSettings, onPending }){
       setDrafts(cards.map(c => ({ ...c, keep: true })));
       return;
     }
-    if (!source.trim() && !images.length){ setErr('Paste notes, type a topic, or attach a Word/PowerPoint/text file first.'); return; }
+    if (!source.trim() && !images.length){ setErr('Paste notes, type a topic, or attach a PDF, Word, PowerPoint or text file first.'); return; }
 
     setBusy(true); setErr(''); setProg(null);
     lastApiError = '';
@@ -1522,7 +1737,8 @@ function Create({ onSave, settings, onSettings, onPending }){
       const model = pickModel(cardType, settings);
       let cards = [];
       const pctLong = longMixOf(settings);
-      if (source.trim()) cards = cards.concat(await genText(source, cardType, lvl, (i, n, phase) => setProg({ i, n, phase }), model, pctLong));
+      const strict = strictSource;
+      if (source.trim()) cards = cards.concat(await genText(source, cardType, lvl, (i, n, phase) => setProg({ i, n, phase }), model, pctLong, strict));
       if (images.length){
         setProg({ i: 0, n: 0, phase: 'prep' });
         const shrunk = [];
@@ -1530,7 +1746,7 @@ function Create({ onSave, settings, onSettings, onPending }){
         if (shrunk.length){
           // read each image into study text, then make cards from that text
           const imgText = await transcribeImages(shrunk, (i, n) => setProg({ i, n, phase: 'images' }));
-          if (imgText.trim()) cards = cards.concat(await genText(imgText, cardType, lvl, (i, n, phase) => setProg({ i, n, phase }), model, pctLong));
+          if (imgText.trim()) cards = cards.concat(await genText(imgText, cardType, lvl, (i, n, phase) => setProg({ i, n, phase }), model, pctLong, strict));
           else if (!cards.length){ setErr('Could not read those images. Try a clearer photo.'); setBusy(false); setProg(null); return; }
         } else if (!cards.length){ setErr('Could not read those images. Try a clearer photo.'); setBusy(false); setProg(null); return; }
       }
@@ -1578,14 +1794,39 @@ function Create({ onSave, settings, onSettings, onPending }){
       )}
 
       {mode === 'generate' && (
+        <div style={{ marginTop: 10 }}>
+          <Tip id="create-time" settings={settings} onSettings={onSettings} icon="⏳">
+            Generating can take 15–30 seconds while the AI writes each card. Nothing saves until you've looked them over.
+          </Tip>
+        </div>
+      )}
+
+      {mode === 'generate' && (
         <Card style={{ padding: 14, marginTop: 14, boxShadow: SH.raised }}>
-          <input ref={fileRef} type="file" accept=".docx,.pptx,.txt,image/*" multiple onChange={onFiles} style={{ display: 'none' }} />
+          <input ref={fileRef} type="file" accept=".pdf,.docx,.pptx,.txt,application/pdf,image/*" multiple onChange={onFiles} style={{ display: 'none' }} />
           <Btn full kind="soft" onClick={() => fileRef.current && fileRef.current.click()}>
-            📎  Add Word, PowerPoint, image or text file
+            📎  Add PDF, Word, PowerPoint, image or text
           </Btn>
           {attaching && <Sub style={{ marginTop: 10, textAlign: 'center' }}>{attaching}</Sub>}
           {!attaching && (
-            <Sub style={{ marginTop: 10, textAlign: 'center', fontSize: 12.5 }}>Reads the text and the images/diagrams in your file.</Sub>
+            <Sub style={{ marginTop: 10, textAlign: 'center', fontSize: 12.5 }}>Reads the text and the images, diagrams and scanned pages inside.</Sub>
+          )}
+        </Card>
+      )}
+
+      {mode === 'generate' && (
+        <Card style={{ padding: '13px 15px', marginTop: 10, boxShadow: SH.raised }}>
+          <div className="flex items-center justify-between" style={{ gap: 12 }}>
+            <div style={{ paddingRight: 6 }}>
+              <div style={{ fontFamily: SANS, fontSize: 14, fontWeight: 700, color: T.ink }}>Only my material</div>
+              <Sub style={{ fontSize: 12.5, marginTop: 2 }}>Sticks to what you paste or upload — nothing extra gets added.</Sub>
+            </div>
+            <Toggle on={strictSource} onClick={() => setStrictSource(v => !v)} />
+          </div>
+          {strictSource && !hasMaterial && (
+            <Sub style={{ fontSize: 12, marginTop: 9, color: T.amber, fontWeight: 600 }}>
+              Add some notes or a file for this — a bare topic has nothing to pull from.
+            </Sub>
           )}
         </Card>
       )}
@@ -1714,13 +1955,14 @@ function DraftReview({ drafts, setDrafts, meta, setMeta, onSave, onCancel }){
 /* ==========================================================================
    DECKS
    ========================================================================== */
-function Decks({ decks, progress, onEditCard, onDeleteCard, onDeleteDeck, onRenameDeck }){
+function Decks({ decks, progress, onEditCard, onDeleteCard, onDeleteDeck, onRenameDeck, onStudyDeck, onQuiz }){
   const [openId, setOpenId] = useState(null);
   const open = decks.find(d => d.id === openId);
 
   if (open){
     return <DeckEditor deck={open} progress={progress} onBack={() => setOpenId(null)}
       onEditCard={onEditCard} onDeleteCard={onDeleteCard} onRenameDeck={onRenameDeck}
+      onStudyDeck={onStudyDeck} onQuiz={onQuiz}
       onDeleteDeck={() => { onDeleteDeck(open.id); setOpenId(null); }} />;
   }
 
@@ -1764,7 +2006,7 @@ function Decks({ decks, progress, onEditCard, onDeleteCard, onDeleteDeck, onRena
   );
 }
 
-function DeckEditor({ deck, progress, onBack, onEditCard, onDeleteCard, onDeleteDeck, onRenameDeck }){
+function DeckEditor({ deck, progress, onBack, onEditCard, onDeleteCard, onDeleteDeck, onRenameDeck, onStudyDeck, onQuiz }){
   const [confirmDeck, setConfirmDeck] = useState(false);
   const [editId, setEditId] = useState(null);
   const [renaming, setRenaming] = useState(false);
@@ -1815,6 +2057,13 @@ function DeckEditor({ deck, progress, onBack, onEditCard, onDeleteCard, onDelete
         )}
       </div>
       {shared && <Sub style={{ color: T.green, fontWeight: 600, marginBottom: 12 }}>{shared}</Sub>}
+
+      {!renaming && (onStudyDeck || onQuiz) && (
+        <div className="flex gap-2" style={{ marginBottom: 16 }}>
+          {onStudyDeck && <Btn full kind="primary" onClick={() => onStudyDeck(deck.id)}>Study this deck</Btn>}
+          {onQuiz && <Btn full kind="soft" onClick={() => onQuiz(deck.id)} style={{ maxWidth: onStudyDeck ? 130 : undefined }}>◎ Quiz</Btn>}
+        </div>
+      )}
 
       {renaming && (
         <Card style={{ padding: 15, marginBottom: 14, borderColor: T.accent, borderWidth: 1.5 }}>
@@ -2106,7 +2355,7 @@ function TransferCard({ library, progress, onImport }){
   );
 }
 
-function Settings({ settings, onChange, library, progress, onImport }){
+function Settings({ settings, onChange, library, progress, onImport, onShowNews }){
   const set = (patch) => onChange({ ...settings, ...patch });
   return (
     <div>
@@ -2164,6 +2413,20 @@ function Settings({ settings, onChange, library, progress, onImport }){
           </div>
         )}
       </Card>
+
+      <div style={{ marginTop: 10 }}>
+        <FeedbackForm />
+      </div>
+
+      <Card style={{ padding: 15, marginTop: 10, boxShadow: SH.raised }}>
+        <div className="flex items-center justify-between">
+          <div>
+            <div style={{ fontFamily: SANS, fontSize: 15, fontWeight: 700, color: T.ink }}>About</div>
+            <Sub style={{ fontSize: 12.5, marginTop: 2 }}>Study Feed · version {APP_VERSION}</Sub>
+          </div>
+          <Btn kind="soft" onClick={onShowNews} style={{ fontSize: 13, padding: '9px 15px' }}>What's new</Btn>
+        </div>
+      </Card>
     </div>
   );
 }
@@ -2185,7 +2448,7 @@ function longDate(){
   catch { return TODAY(); }
 }
 
-function Home({ library, progress, stats, settings, due, onStart, onCreate, onDecks }){
+function Home({ library, progress, stats, settings, due, onStart, onCreate, onDecks, onStudyDeck, onQuiz, onSettings }){
   const today = TODAY();
   const decks = library.decks;
   const totalCards = decks.reduce((s, d) => s + d.cards.length, 0);
@@ -2238,14 +2501,37 @@ function Home({ library, progress, stats, settings, due, onStart, onCreate, onDe
       </div>
 
       {totalCards === 0 ? (
-        <Card style={{ padding: '40px 24px', textAlign: 'center' }}>
-          <div style={{ fontSize: 38, marginBottom: 10 }}>👋</div>
-          <Title>Welcome to Study Feed</Title>
-          <Sub style={{ marginTop: 6, marginBottom: 18 }}>Make your first deck from your notes, a file, or just a topic.</Sub>
-          <Btn kind="primary" onClick={onCreate}>Make your first cards</Btn>
+        <Card style={{ padding: '32px 24px 26px' }}>
+          <div style={{ textAlign: 'center' }}>
+            <div style={{ fontSize: 38, marginBottom: 10 }}>👋</div>
+            <Title>Welcome to Study Feed</Title>
+            <Sub style={{ marginTop: 6, marginBottom: 20 }}>Turn your notes into cards, then review a few whenever you've got a minute. Here's the gist:</Sub>
+          </div>
+          <div className="flex flex-col gap-3" style={{ marginBottom: 22, textAlign: 'left' }}>
+            {[
+              ['1', 'Make a deck', 'Paste notes, upload a PDF, Word, PowerPoint or photo, or just type a topic — the AI writes the cards.'],
+              ['2', 'Study your feed', 'Swipe through what\'s due. Rate each card so it comes back at the right time.'],
+              ['3', 'Check yourself', 'Take a quick quiz before a test, and export your decks to keep them safe.'],
+            ].map(([n, t, s]) => (
+              <div key={n} className="flex gap-3" style={{ alignItems: 'flex-start' }}>
+                <span style={{ width: 26, height: 26, borderRadius: R.pill, background: rgba(T.accent, 0.12), color: T.accentInk,
+                  display: 'grid', placeItems: 'center', fontFamily: SANS, fontSize: 13, fontWeight: 800, flexShrink: 0 }}>{n}</span>
+                <div>
+                  <div style={{ fontFamily: SANS, fontSize: 14.5, fontWeight: 700, color: T.ink }}>{t}</div>
+                  <Sub style={{ fontSize: 13, marginTop: 1 }}>{s}</Sub>
+                </div>
+              </div>
+            ))}
+          </div>
+          <Btn full kind="primary" onClick={onCreate}>Make your first cards</Btn>
         </Card>
       ) : (
         <>
+          <div style={{ marginBottom: 16 }}>
+            <Tip id="home-backup" settings={settings} onSettings={onSettings} icon="💾" tone={T.green}>
+              Your decks are saved on this device only. Use <b>You → Backup &amp; transfer</b> to export them so a cleared browser can't wipe your work.
+            </Tip>
+          </div>
           {/* hero — what to do now */}
           <Card style={{ padding: '22px 24px', marginBottom: 16, display: 'flex', alignItems: 'center', gap: 22, flexWrap: 'wrap' }}>
             <div style={{ flex: '1 1 260px' }}>
@@ -2296,7 +2582,7 @@ function Home({ library, progress, stats, settings, due, onStart, onCreate, onDe
               {deckRows.slice(0, 5).map(({ d, dueN, pct }, i) => {
                 const c = subjectColour(d.subject);
                 return (
-                  <button key={d.id} className="sf-tap" onClick={onDecks}
+                  <button key={d.id} className="sf-tap" onClick={() => onStudyDeck(d.id)}
                     style={{ display: 'flex', alignItems: 'center', gap: 13, width: '100%', textAlign: 'left', cursor: 'pointer',
                       background: 'none', border: 'none', borderTop: i ? `1px solid ${T.border}` : 'none', padding: '11px 0' }}>
                     <Tile colour={c} glyph={(d.subject || '?').trim().charAt(0).toUpperCase()} size={38} />
@@ -2352,6 +2638,7 @@ function Home({ library, progress, stats, settings, due, onStart, onCreate, onDe
               flagged > 0
                 ? { icon: '✳', t: 'Review your tricky ones', s: `${flagged} card${flagged > 1 ? 's' : ''} keep tripping you up`, on: onStart }
                 : { icon: '◧', t: 'Study your feed', s: 'Review what\'s due today', on: onStart },
+              { icon: '◎', t: 'Take a quiz', s: 'A quick graded test from your cards', on: () => onQuiz('all') },
             ].map((q, i) => (
               <button key={i} className="sf-tap" onClick={q.on}
                 style={{ flex: '1 1 220px', display: 'flex', alignItems: 'center', gap: 12, textAlign: 'left', cursor: 'pointer',
@@ -2370,6 +2657,373 @@ function Home({ library, progress, stats, settings, due, onStart, onCreate, onDe
   );
 }
 
+/* ==========================================================================
+   QUIZ  —  a quick, finite, self-graded test built from a deck's own cards.
+   No API cost: multiple-choice, correct answer from the card, distractors
+   pulled from other cards in the pool. Extended (essay) cards sit this out.
+   ========================================================================== */
+function quizAnswerText(c){
+  if (c.type === 'mcq') return (c.options && c.options[c.answer] != null) ? String(c.options[c.answer]) : '';
+  return String(c.back != null ? c.back : '');
+}
+function quizQuestionText(c){
+  return String((c.front != null ? c.front : c.prompt) || '');
+}
+const quizUsable = (c) => c.type !== 'extended' && quizQuestionText(c).trim() && quizAnswerText(c).trim();
+const QUIZ_MIN = 4;
+
+function buildQuiz(cards, count){
+  const usable = cards.filter(quizUsable);
+  const answerPool = Array.from(new Set(usable.map(quizAnswerText)));
+  const chosen = shuffle(usable).slice(0, count);
+  const out = [];
+  for (const c of chosen){
+    if (c.type === 'mcq' && c.options && c.options.length >= 2){
+      const correctText = String(c.options[c.answer] != null ? c.options[c.answer] : c.options[0]);
+      const options = shuffle(c.options.map(String));
+      out.push({ cardId: c.id, q: quizQuestionText(c), options, answer: options.indexOf(correctText) });
+    } else {
+      const correct = quizAnswerText(c);
+      const distractors = shuffle(answerPool.filter(a => a !== correct)).slice(0, 3);
+      const options = shuffle([correct].concat(distractors));
+      out.push({ cardId: c.id, q: quizQuestionText(c), options, answer: options.indexOf(correct) });
+    }
+  }
+  return out;
+}
+
+function Quiz({ decks, deckId, onClose, onDone }){
+  const [scope, setScope] = useState(deckId && deckId !== 'all' && decks.some(d => d.id === deckId) ? deckId : 'all');
+  const [phase, setPhase] = useState('setup');
+  const [want, setWant] = useState(10);
+  const [questions, setQuestions] = useState([]);
+  const [idx, setIdx] = useState(0);
+  const [answers, setAnswers] = useState([]);
+  const [picked, setPicked] = useState(null);
+  const doneRef = useRef(false);
+
+  const scopeDecks = scope === 'all' ? decks : decks.filter(d => d.id === scope);
+  const scopeCards = useMemo(() => { const o = []; for (const d of scopeDecks) for (const c of d.cards) o.push(c); return o; }, [scope, decks]);
+  const usableCount = useMemo(() => scopeCards.filter(quizUsable).length, [scopeCards]);
+  const subject = scope === 'all' ? '' : ((scopeDecks[0] && scopeDecks[0].subject) || '');
+
+  const lenOpts = [];
+  if (usableCount > 10) lenOpts.push({ v: 10, label: '10' });
+  if (usableCount > 20) lenOpts.push({ v: 20, label: '20' });
+  lenOpts.push({ v: 'all', label: 'All ' + usableCount });
+  useEffect(() => { if (want !== 'all' && want > usableCount) setWant('all'); }, [usableCount]);
+
+  const start = () => {
+    const n = want === 'all' ? usableCount : Math.min(want, usableCount);
+    const qs = buildQuiz(scopeCards, n);
+    if (!qs.length) return;
+    doneRef.current = false;
+    setQuestions(qs); setAnswers(new Array(qs.length).fill(null)); setIdx(0); setPicked(null); setPhase('run');
+  };
+  const choose = (i) => {
+    if (picked !== null) return;
+    setPicked(i);
+    setAnswers(a => { const b = a.slice(); b[idx] = i; return b; });
+  };
+  const next = () => { if (idx + 1 >= questions.length) setPhase('done'); else { setIdx(idx + 1); setPicked(null); } };
+
+  const score = answers.reduce((s, a, i) => s + ((a != null && questions[i] && a === questions[i].answer) ? 1 : 0), 0);
+  const pct = questions.length ? Math.round((score / questions.length) * 100) : 0;
+
+  useEffect(() => { if (phase === 'done' && !doneRef.current){ doneRef.current = true; onDone(questions.length, subject); } }, [phase]);
+
+  const closeBtn = (
+    <button onClick={onClose} className="sf-tap" aria-label="Close quiz"
+      style={{ width: 38, height: 38, borderRadius: R.pill, background: T.surface, border: `1px solid ${T.border}`,
+        cursor: 'pointer', fontSize: 15, color: T.muted, boxShadow: SH.raised, flexShrink: 0 }}>✕</button>
+  );
+
+  return (
+    <div style={{ position: 'fixed', inset: 0, zIndex: 50, background: T.bg, overflowY: 'auto' }}>
+      <div style={{ width: '100%', maxWidth: 560, margin: '0 auto', padding: '16px 16px 64px' }}>
+        <div className="flex items-center justify-between" style={{ marginBottom: 20 }}>
+          <div style={{ fontFamily: SANS, fontSize: 20, fontWeight: 800, color: T.ink, letterSpacing: '-0.02em' }}>Quiz</div>
+          {closeBtn}
+        </div>
+
+        {phase === 'setup' && (
+          <div style={{ animation: 'sf-in 260ms cubic-bezier(.2,.8,.3,1)' }}>
+            <Title style={{ fontSize: 23, marginBottom: 6 }}>Test yourself</Title>
+            <Sub style={{ marginBottom: 18 }}>A quick multiple-choice check built from your cards. It's graded but never changes your review schedule.</Sub>
+
+            {decks.length > 1 && (
+              <Card style={{ padding: 15, marginBottom: 12, boxShadow: SH.raised }}>
+                <div style={{ fontFamily: SANS, fontSize: 13, fontWeight: 700, color: T.muted, marginBottom: 10 }}>Which deck?</div>
+                <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+                  {[{ id: 'all', label: 'All decks', colour: T.accent }].concat(
+                    decks.map(d => ({ id: d.id, label: d.topic || d.subject || 'Untitled', colour: subjectColour(d.subject) }))
+                  ).map(o => {
+                    const active = scope === o.id;
+                    return (
+                      <button key={o.id} className="sf-tap" onClick={() => setScope(o.id)}
+                        style={{ display: 'flex', alignItems: 'center', gap: 7, cursor: 'pointer',
+                          background: active ? T.surface : T.well, border: `1.5px solid ${active ? rgba(o.colour, 0.5) : 'transparent'}`,
+                          borderRadius: R.pill, padding: '8px 13px', boxShadow: active ? SH.pop : 'none' }}>
+                        <span style={{ width: 8, height: 8, borderRadius: 8, background: o.colour }} />
+                        <span style={{ fontFamily: SANS, fontSize: 13, fontWeight: active ? 700 : 550, color: active ? T.ink : T.muted,
+                          whiteSpace: 'nowrap', maxWidth: 160, overflow: 'hidden', textOverflow: 'ellipsis' }}>{o.label}</span>
+                      </button>
+                    );
+                  })}
+                </div>
+              </Card>
+            )}
+
+            {usableCount < QUIZ_MIN ? (
+              <Card style={{ padding: '30px 22px', textAlign: 'center' }}>
+                <div style={{ fontSize: 34, marginBottom: 10 }}>🧩</div>
+                <Title style={{ fontSize: 18 }}>Not enough to quiz yet</Title>
+                <Sub style={{ marginTop: 6 }}>A quiz needs at least {QUIZ_MIN} quick or multiple-choice cards. Long-answer cards sit quizzes out — make a few more and come back.</Sub>
+              </Card>
+            ) : (
+              <>
+                <Card style={{ padding: 15, marginBottom: 16, boxShadow: SH.raised }}>
+                  <div style={{ fontFamily: SANS, fontSize: 13, fontWeight: 700, color: T.muted, marginBottom: 10 }}>How many questions?</div>
+                  <Segmented value={want} onChange={setWant} options={lenOpts} />
+                </Card>
+                <Btn full kind="primary" onClick={start}>Start quiz →</Btn>
+              </>
+            )}
+          </div>
+        )}
+
+        {phase === 'run' && questions[idx] && (() => {
+          const q = questions[idx];
+          const answered = picked !== null;
+          return (
+            <div style={{ animation: 'sf-in 220ms cubic-bezier(.2,.8,.3,1)' }} key={idx}>
+              <div className="flex items-center gap-3" style={{ marginBottom: 14 }}>
+                <div style={{ flex: 1, height: 8, background: T.well, borderRadius: R.pill, overflow: 'hidden' }}>
+                  <div style={{ height: '100%', width: `${Math.round(((idx + (answered ? 1 : 0)) / questions.length) * 100)}%`,
+                    background: T.accent, borderRadius: R.pill, transition: 'width 300ms cubic-bezier(.2,.8,.3,1)' }} />
+                </div>
+                <Sub style={{ fontSize: 12.5, fontWeight: 600 }}>{idx + 1} / {questions.length}</Sub>
+              </div>
+
+              <Card style={{ padding: '22px 20px', minHeight: 120, marginBottom: 14 }}>
+                <div style={{ fontFamily: SANS, fontSize: 19, fontWeight: 650, color: T.ink, lineHeight: 1.4, letterSpacing: '-0.01em' }}>{q.q}</div>
+              </Card>
+
+              <div className="flex flex-col gap-2">
+                {q.options.map((opt, i) => {
+                  const isCorrect = i === q.answer;
+                  const isPicked = i === picked;
+                  let bg = T.surface, bd = T.border, col = T.ink, mark = null;
+                  if (answered){
+                    if (isCorrect){ bg = rgba(T.green, 0.12); bd = rgba(T.green, 0.5); col = T.ink; mark = '✓'; }
+                    else if (isPicked){ bg = rgba(T.red, 0.1); bd = rgba(T.red, 0.45); col = T.ink; mark = '✗'; }
+                    else { col = T.faint; }
+                  }
+                  return (
+                    <button key={i} className="sf-tap" onClick={() => choose(i)} disabled={answered}
+                      style={{ display: 'flex', alignItems: 'center', gap: 12, textAlign: 'left', width: '100%',
+                        cursor: answered ? 'default' : 'pointer', background: bg, border: `1.5px solid ${bd}`,
+                        borderRadius: R.well, padding: '15px 16px', boxShadow: answered ? 'none' : SH.raised }}>
+                      <span style={{ flex: 1, fontFamily: SANS, fontSize: 15.5, fontWeight: 550, color: col, lineHeight: 1.4 }}>{opt}</span>
+                      {mark && <span style={{ fontSize: 16, fontWeight: 800, color: isCorrect ? T.green : T.red }}>{mark}</span>}
+                    </button>
+                  );
+                })}
+              </div>
+
+              {answered && (
+                <div style={{ marginTop: 16, animation: 'sf-reveal 240ms cubic-bezier(.2,.8,.3,1)' }}>
+                  <div style={{ fontFamily: SANS, fontSize: 14, fontWeight: 700, color: picked === q.answer ? T.green : T.red, marginBottom: 12, textAlign: 'center' }}>
+                    {picked === q.answer ? 'Nice — that\'s right' : 'Not quite'}
+                  </div>
+                  <Btn full kind="primary" onClick={next}>{idx + 1 >= questions.length ? 'See results →' : 'Next →'}</Btn>
+                </div>
+              )}
+            </div>
+          );
+        })()}
+
+        {phase === 'done' && (() => {
+          const missed = questions.map((q, i) => ({ q, i })).filter(({ q, i }) => answers[i] !== q.answer);
+          const ring = pct >= 80 ? T.green : pct >= 50 ? T.amber : T.red;
+          const line = pct >= 80 ? 'Strong — you know this well.' : pct >= 50 ? 'Getting there. Review the misses below.' : 'Worth another look — the misses are below.';
+          return (
+            <div style={{ animation: 'sf-in 260ms cubic-bezier(.2,.8,.3,1)' }}>
+              <Card style={{ padding: '26px 22px', marginBottom: 16, display: 'flex', alignItems: 'center', gap: 20, flexWrap: 'wrap' }}>
+                <div style={{ position: 'relative', width: 108, height: 108, borderRadius: '50%', flexShrink: 0,
+                  background: `conic-gradient(${ring} 0 ${pct}%, ${T.well} 0)` }}>
+                  <div style={{ position: 'absolute', inset: 10, borderRadius: '50%', background: T.surface }} />
+                  <div style={{ position: 'absolute', inset: 0, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center' }}>
+                    <div style={{ fontFamily: SANS, fontSize: 26, fontWeight: 800, lineHeight: 1, color: T.ink }}>{pct}%</div>
+                    <div style={{ fontFamily: SANS, fontSize: 11, color: T.faint, marginTop: 3 }}>{score}/{questions.length}</div>
+                  </div>
+                </div>
+                <div style={{ flex: '1 1 200px' }}>
+                  <Title style={{ fontSize: 21 }}>Quiz done</Title>
+                  <Sub style={{ marginTop: 5 }}>{line}</Sub>
+                </div>
+              </Card>
+
+              {missed.length > 0 && (
+                <div style={{ marginBottom: 16 }}>
+                  <div style={{ fontFamily: SANS, fontSize: 13, fontWeight: 700, color: T.muted, margin: '0 2px 8px' }}>
+                    {missed.length} to review
+                  </div>
+                  <div className="flex flex-col gap-2">
+                    {missed.map(({ q, i }) => (
+                      <Card key={i} style={{ padding: 14, boxShadow: SH.raised }}>
+                        <div style={{ fontFamily: SANS, fontSize: 14.5, fontWeight: 650, color: T.ink, lineHeight: 1.4, marginBottom: 8 }}>{q.q}</div>
+                        {answers[i] != null && (
+                          <div style={{ fontFamily: SANS, fontSize: 13.5, color: T.red, marginBottom: 3 }}>
+                            ✗ You said: {q.options[answers[i]]}
+                          </div>
+                        )}
+                        <div style={{ fontFamily: SANS, fontSize: 13.5, color: T.green, fontWeight: 600 }}>✓ {q.options[q.answer]}</div>
+                      </Card>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              <div className="flex gap-2">
+                <Btn full kind="primary" onClick={start}>Retake</Btn>
+                <Btn full kind="soft" onClick={onClose}>Done</Btn>
+              </div>
+            </div>
+          );
+        })()}
+      </div>
+    </div>
+  );
+}
+
+/* ==========================================================================
+   OVERLAYS  —  What's new, and the feature-request form
+   ========================================================================== */
+function ModalScrim({ onClose, children, maxW = 460 }){
+  useEffect(() => {
+    const onKey = (e) => { if (e.key === 'Escape') onClose(); };
+    document.addEventListener('keydown', onKey);
+    return () => document.removeEventListener('keydown', onKey);
+  }, [onClose]);
+  return (
+    <div onClick={onClose} style={{ position: 'fixed', inset: 0, zIndex: 60, background: 'rgba(15,17,25,0.5)',
+      backdropFilter: 'blur(3px)', WebkitBackdropFilter: 'blur(3px)', display: 'flex', alignItems: 'center',
+      justifyContent: 'center', padding: 16 }}>
+      <div onClick={e => e.stopPropagation()} style={{ width: '100%', maxWidth: maxW, maxHeight: '86vh', overflowY: 'auto',
+        background: T.surface, borderRadius: R.card, border: `1px solid ${T.border}`, boxShadow: SH.card,
+        animation: 'sf-in 240ms cubic-bezier(.2,.8,.3,1)' }}>
+        {children}
+      </div>
+    </div>
+  );
+}
+
+function WhatsNew({ onClose }){
+  return (
+    <ModalScrim onClose={onClose} maxW={480}>
+      <div style={{ padding: '22px 22px 20px' }}>
+        <div className="flex items-center justify-between" style={{ marginBottom: 4 }}>
+          <Chip colour={T.accent} solid>What's new</Chip>
+          <button onClick={onClose} className="sf-tap" aria-label="Close"
+            style={{ background: 'none', border: 'none', cursor: 'pointer', color: T.faint, fontSize: 20, lineHeight: '18px', padding: 2 }}>✕</button>
+        </div>
+        {PATCH_NOTES.map((rel, ri) => (
+          <div key={rel.v} style={{ marginTop: ri ? 22 : 16 }}>
+            <div className="flex items-baseline gap-2">
+              <Title style={{ fontSize: 19 }}>{rel.title}</Title>
+              <Sub style={{ fontSize: 12 }}>v{rel.v}</Sub>
+            </div>
+            <div className="flex flex-col gap-2" style={{ marginTop: 12 }}>
+              {rel.items.map((it, i) => (
+                <div key={i} className="flex gap-3" style={{ alignItems: 'flex-start' }}>
+                  <span style={{ color: T.green, fontWeight: 800, fontSize: 14, lineHeight: '20px', flexShrink: 0 }}>›</span>
+                  <span style={{ fontFamily: SANS, fontSize: 14, lineHeight: 1.5, color: T.ink }}>{it}</span>
+                </div>
+              ))}
+            </div>
+          </div>
+        ))}
+        <div style={{ marginTop: 22 }}>
+          <Btn full kind="primary" onClick={onClose}>Got it</Btn>
+        </div>
+      </div>
+    </ModalScrim>
+  );
+}
+
+const FEEDBACK_TO = 'eason.op123@gmail.com';
+function FeedbackForm(){
+  const [type, setType] = useState('feature');
+  const [name, setName] = useState('');
+  const [email, setEmail] = useState('');
+  const [message, setMessage] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [state, setState] = useState('');   // '', 'sent', 'mailto', 'error'
+
+  const openMailto = () => {
+    const subject = `Study Feed ${type} from ${name || 'a student'}`;
+    const body = `Type: ${type}\nName: ${name}\nEmail: ${email}\n\n${message}`;
+    const href = `mailto:${FEEDBACK_TO}?subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(body)}`;
+    try { window.location.href = href; } catch {}
+  };
+
+  const submit = async () => {
+    if (!message.trim()) return;
+    setBusy(true); setState('');
+    try {
+      const res = await fetch('/api/feedback', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ type, name, email, message }),
+      });
+      if (res.ok){ setState('sent'); setMessage(''); }
+      else { openMailto(); setState('mailto'); }
+    } catch { openMailto(); setState('mailto'); }
+    finally { setBusy(false); }
+  };
+
+  if (state === 'sent'){
+    return (
+      <Card style={{ padding: 16, marginBottom: 10, boxShadow: SH.raised }}>
+        <div style={{ fontFamily: SANS, fontSize: 15, fontWeight: 700, color: T.green }}>Thanks — sent ✓</div>
+        <Sub style={{ fontSize: 13, marginTop: 4 }}>Your note is on its way. Want to add another?</Sub>
+        <Btn kind="soft" onClick={() => setState('')} style={{ marginTop: 12, fontSize: 14 }}>Send another</Btn>
+      </Card>
+    );
+  }
+
+  const labelStyle = { fontFamily: SANS, fontSize: 12.5, fontWeight: 700, color: T.muted, marginBottom: 5 };
+  return (
+    <Card style={{ padding: 15, marginBottom: 10, boxShadow: SH.raised }}>
+      <div style={{ fontFamily: SANS, fontSize: 15, fontWeight: 700, color: T.ink }}>Request a feature</div>
+      <Sub style={{ fontSize: 12.5, marginTop: 2, marginBottom: 12 }}>Something you wish it did, or a bug you hit? Tell the maker directly.</Sub>
+
+      <div style={{ marginBottom: 10 }}>
+        <div style={labelStyle}>This is a…</div>
+        <Segmented value={type} onChange={setType}
+          options={[{ v: 'feature', label: 'Feature' }, { v: 'bug', label: 'Bug' }, { v: 'other', label: 'Other' }]} />
+      </div>
+      <div className="grid grid-cols-2 gap-2" style={{ marginBottom: 10 }}>
+        <div>
+          <div style={labelStyle}>Name</div>
+          <input value={name} onChange={e => setName(e.target.value)} placeholder="Your name" style={{ ...INPUT, fontSize: 14 }} />
+        </div>
+        <div>
+          <div style={labelStyle}>Email <span style={{ fontWeight: 500, color: T.faint }}>(so they can reply)</span></div>
+          <input value={email} onChange={e => setEmail(e.target.value)} placeholder="you@example.com" style={{ ...INPUT, fontSize: 14 }} />
+        </div>
+      </div>
+      <div style={{ marginBottom: 12 }}>
+        <div style={labelStyle}>Your message</div>
+        <textarea value={message} onChange={e => setMessage(e.target.value)} rows={4}
+          placeholder="What would you like to see?" style={{ ...INPUT, fontSize: 14, resize: 'vertical' }} />
+      </div>
+      {state === 'mailto' && <Sub style={{ fontSize: 12.5, color: T.amber, fontWeight: 600, marginBottom: 10 }}>Opening your email app to send it — just hit send there.</Sub>}
+      <Btn full kind="primary" onClick={submit} disabled={busy || !message.trim()}>{busy ? 'Sending…' : 'Send to the maker'}</Btn>
+    </Card>
+  );
+}
+
 export default function App(){
   const [ready, setReady] = useState(false);
   const [tab, setTab] = useState('home');
@@ -2378,7 +3032,18 @@ export default function App(){
   const [stats, setStats] = useState(DEFAULT_STATS);
   const [settings, setSettings] = useState(DEFAULT_SETTINGS);
   const [pendingCount, setPendingCount] = useState(0);   // unsaved drafts waiting on Create
+  const [focus, setFocus] = useState('all');             // which deck the feed is showing: 'all' or a deck id
+  const [quiz, setQuiz] = useState(null);                // { deckId } while a quiz is open, else null
+  const [showNews, setShowNews] = useState(false);       // "What's new" note after an update
   const reduceMotion = useRef(false);
+
+  // a focused deck that then gets deleted shouldn't leave the feed stuck empty
+  useEffect(() => {
+    if (focus !== 'all' && ready && !library.decks.some(d => d.id === focus)) setFocus('all');
+  }, [library, focus, ready]);
+
+  const startDeck = (deckId) => { setFocus(deckId); setTab('feed'); };
+  const openQuiz = (deckId) => setQuiz({ deckId: deckId || 'all' });
 
   useEffect(() => {
     (async () => {
@@ -2391,11 +3056,23 @@ export default function App(){
       setLibrary(lib && lib.decks ? lib : { decks: [] });
       setProgress(prog || {});
       setStats({ ...DEFAULT_STATS, ...st });
-      setSettings({ ...DEFAULT_SETTINGS, ...se });
+      const merged = { ...DEFAULT_SETTINGS, ...se };
+      /* Show "What's new" to someone who's used an OLDER version. A brand-new
+         user (no version stamped yet) is on the newest build already, so mark
+         it seen silently rather than showing them a changelog for nothing. */
+      if (merged.lastSeenVersion && merged.lastSeenVersion !== APP_VERSION) setShowNews(true);
+      else if (!merged.lastSeenVersion){ merged.lastSeenVersion = APP_VERSION; save('settings:main', merged); }
+      setSettings(merged);
       try { reduceMotion.current = window.matchMedia('(prefers-reduced-motion: reduce)').matches; } catch {}
       setReady(true);
     })();
   }, []);
+
+  const dismissNews = () => {
+    setShowNews(false);
+    const s = { ...settings, lastSeenVersion: APP_VERSION };
+    setSettings(s); save('settings:main', s);
+  };
 
   /* Apply the chosen theme to <html>: 'system' follows the OS, otherwise force
      light/dark. The palette itself lives in THEME_CSS (data-theme selectors). */
@@ -2453,6 +3130,21 @@ export default function App(){
     return { reinsert };
   };
 
+  /* A finished quiz counts as practice — it keeps the streak and today's
+     activity honest without touching the SM-2 schedule. */
+  const recordQuiz = (total, subject) => {
+    if (!total) return;
+    const today = TODAY();
+    const s = { ...stats, practiceByDate: { ...stats.practiceByDate }, bySubject: { ...stats.bySubject } };
+    s.practiceByDate[today] = (s.practiceByDate[today] || 0) + total;
+    if (subject) s.bySubject[subject] = (s.bySubject[subject] || 0) + total;
+    if (s.lastDay !== today){
+      s.streak = (s.lastDay === addDays(today, -1)) ? (s.streak || 0) + 1 : 1;
+      s.lastDay = today;
+    }
+    persistStats(s);
+  };
+
   const editCard = (deckId, cardId, patch) => {
     persistLibrary({ decks: library.decks.map(d => d.id !== deckId ? d
       : { ...d, cards: d.cards.map(c => c.id === cardId ? { ...c, ...patch } : c) }) });
@@ -2486,14 +3178,18 @@ export default function App(){
   if (!ready) return <Shell><Sub style={{ padding: 40, textAlign: 'center' }}>Loading…</Sub></Shell>;
 
   return (
+    <>
     <Shell tab={tab} setTab={setTab} due={dueCount} pending={pendingCount}>
       {tab !== 'home' && <Masthead due={dueCount} streak={stats.streak || 0} />}
       <div style={{ minHeight: 440 }}>
         {tab === 'home' && <Home library={library} progress={progress} stats={stats} settings={settings}
-          due={dueCount} onStart={() => setTab('feed')} onCreate={() => setTab('create')} onDecks={() => setTab('decks')} />}
-        {/* key includes the mix so moving the slider rebuilds the queue at the new ratio */}
-        {tab === 'feed' && <Feed key={'feed-' + cardCount + '-' + longMixOf(settings)} decks={library.decks} progress={progress} settings={settings}
-          stats={stats} onGrade={gradeCard} reduceMotion={reduceMotion.current} />}
+          due={dueCount} onStart={() => { setFocus('all'); setTab('feed'); }} onCreate={() => setTab('create')}
+          onDecks={() => setTab('decks')} onStudyDeck={startDeck} onQuiz={openQuiz} onSettings={persistSettings} />}
+        {/* key includes focus + mix so switching deck or moving the slider rebuilds the queue */}
+        {tab === 'feed' && <Feed key={'feed-' + focus + '-' + cardCount + '-' + longMixOf(settings)}
+          decks={library.decks} progress={progress} settings={settings} stats={stats} onGrade={gradeCard}
+          reduceMotion={reduceMotion.current} focus={focus} setFocus={setFocus}
+          onSettings={persistSettings} onQuiz={openQuiz} />}
         {/* Create stays MOUNTED and is hidden instead — unmounting it threw away
             unsaved drafts, pasted notes and attached photos the moment you
             switched tabs, and those drafts cost real API usage to produce. */}
@@ -2501,12 +3197,16 @@ export default function App(){
           <Create onSave={saveDeck} settings={settings} onSettings={persistSettings} onPending={setPendingCount} />
         </div>
         {tab === 'decks' && <Decks decks={library.decks} progress={progress} onEditCard={editCard}
-          onDeleteCard={deleteCard} onDeleteDeck={deleteDeck} onRenameDeck={renameDeck} />}
+          onDeleteCard={deleteCard} onDeleteDeck={deleteDeck} onRenameDeck={renameDeck}
+          onStudyDeck={startDeck} onQuiz={openQuiz} />}
         {tab === 'stats' && <Stats decks={library.decks} progress={progress} stats={stats} />}
         {tab === 'settings' && <Settings settings={settings} onChange={persistSettings}
-          library={library} progress={progress} onImport={importLibrary} />}
+          library={library} progress={progress} onImport={importLibrary} onShowNews={() => setShowNews(true)} />}
       </div>
     </Shell>
+    {quiz && <Quiz decks={library.decks} deckId={quiz.deckId} onClose={() => setQuiz(null)} onDone={recordQuiz} />}
+    {showNews && <WhatsNew onClose={dismissNews} />}
+    </>
   );
 }
 
