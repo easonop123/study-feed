@@ -1035,6 +1035,8 @@ function Icon({ name, active }){
   if (name === 'create') return <svg {...common}><circle cx="12" cy="12" r="8.5" /><path d="M12 8.5v7M8.5 12h7" /></svg>;
   if (name === 'decks') return <svg {...common}><path d="M3 7.5A2.5 2.5 0 0 1 5.5 5h3.2l2 2.2h7.8A2.5 2.5 0 0 1 21 9.7v7.8a2.5 2.5 0 0 1-2.5 2.5h-13A2.5 2.5 0 0 1 3 17.5z" /></svg>;
   if (name === 'stats') return <svg {...common}><path d="M5.5 19.5V12M12 19.5V5M18.5 19.5v-5.5" /></svg>;
+  if (name === 'changelog') return <svg {...common}><path d="M6 4.5A6 6 0 0 1 18 4.5c0 5 2 6.5 2 6.5H4s2-1.5 2-6.5" /><path d="M10 15a2 2 0 0 0 4 0" /></svg>;
+  if (name === 'feedback') return <svg {...common}><path d="M20 12a7.5 7.5 0 0 1-10.9 6.7L4.5 20l1.3-4.4A7.5 7.5 0 1 1 20 12z" /></svg>;
   return <svg {...common}><path d="M4 8h16M4 16h16" /><circle cx="9.5" cy="8" r="2.2" fill={T.surface} /><circle cx="15" cy="16" r="2.2" fill={T.surface} /></svg>;
 }
 
@@ -2355,7 +2357,7 @@ function TransferCard({ library, progress, onImport }){
   );
 }
 
-function Settings({ settings, onChange, library, progress, onImport, onShowNews }){
+function Settings({ settings, onChange, library, progress, onImport }){
   const set = (patch) => onChange({ ...settings, ...patch });
   return (
     <div>
@@ -2373,7 +2375,7 @@ function Settings({ settings, onChange, library, progress, onImport, onShowNews 
         <Sub style={{ fontSize: 12.5, marginTop: 2, marginBottom: 12 }}>Used to greet you and count down to your exam on the Home screen.</Sub>
         <div style={{ marginBottom: 10 }}>
           <div style={{ fontFamily: SANS, fontSize: 12.5, fontWeight: 700, color: T.muted, marginBottom: 5 }}>Name <span style={{ fontWeight: 500, color: T.faint }}>(optional)</span></div>
-          <input value={settings.name || ''} onChange={e => set({ name: e.target.value })} placeholder="e.g. Eason"
+          <input value={settings.name || ''} onChange={e => set({ name: e.target.value })} placeholder="Your first name"
             style={{ ...INPUT, fontSize: 14.5 }} />
         </div>
         <div>
@@ -2414,18 +2416,9 @@ function Settings({ settings, onChange, library, progress, onImport, onShowNews 
         )}
       </Card>
 
-      <div style={{ marginTop: 10 }}>
-        <FeedbackForm />
-      </div>
-
       <Card style={{ padding: 15, marginTop: 10, boxShadow: SH.raised }}>
-        <div className="flex items-center justify-between">
-          <div>
-            <div style={{ fontFamily: SANS, fontSize: 15, fontWeight: 700, color: T.ink }}>About</div>
-            <Sub style={{ fontSize: 12.5, marginTop: 2 }}>Study Feed · version {APP_VERSION}</Sub>
-          </div>
-          <Btn kind="soft" onClick={onShowNews} style={{ fontSize: 13, padding: '9px 15px' }}>What's new</Btn>
-        </div>
+        <div style={{ fontFamily: SANS, fontSize: 15, fontWeight: 700, color: T.ink }}>About</div>
+        <Sub style={{ fontSize: 12.5, marginTop: 2 }}>Study Feed · version {APP_VERSION}. See <b>Updates</b> for what's new.</Sub>
       </Card>
     </div>
   );
@@ -2919,36 +2912,70 @@ function ModalScrim({ onClose, children, maxW = 460 }){
   );
 }
 
+/* Shared changelog markup — used by both the pop-up (WhatsNew) and the tab
+   (Changelog) so there's one source of truth for how releases are shown. */
+function PatchNotesList(){
+  return (
+    <div>
+      {PATCH_NOTES.map((rel, ri) => (
+        <div key={rel.v} style={{ marginTop: ri ? 22 : 0 }}>
+          <div className="flex items-baseline gap-2">
+            <Title style={{ fontSize: 19 }}>{rel.title}</Title>
+            <Sub style={{ fontSize: 12 }}>v{rel.v} · {rel.date}</Sub>
+          </div>
+          <div className="flex flex-col gap-2" style={{ marginTop: 12 }}>
+            {rel.items.map((it, i) => (
+              <div key={i} className="flex gap-3" style={{ alignItems: 'flex-start' }}>
+                <span style={{ color: T.green, fontWeight: 800, fontSize: 14, lineHeight: '20px', flexShrink: 0 }}>›</span>
+                <span style={{ fontFamily: SANS, fontSize: 14, lineHeight: 1.5, color: T.ink }}>{it}</span>
+              </div>
+            ))}
+          </div>
+        </div>
+      ))}
+    </div>
+  );
+}
+
 function WhatsNew({ onClose }){
   return (
     <ModalScrim onClose={onClose} maxW={480}>
       <div style={{ padding: '22px 22px 20px' }}>
-        <div className="flex items-center justify-between" style={{ marginBottom: 4 }}>
+        <div className="flex items-center justify-between" style={{ marginBottom: 16 }}>
           <Chip colour={T.accent} solid>What's new</Chip>
           <button onClick={onClose} className="sf-tap" aria-label="Close"
             style={{ background: 'none', border: 'none', cursor: 'pointer', color: T.faint, fontSize: 20, lineHeight: '18px', padding: 2 }}>✕</button>
         </div>
-        {PATCH_NOTES.map((rel, ri) => (
-          <div key={rel.v} style={{ marginTop: ri ? 22 : 16 }}>
-            <div className="flex items-baseline gap-2">
-              <Title style={{ fontSize: 19 }}>{rel.title}</Title>
-              <Sub style={{ fontSize: 12 }}>v{rel.v}</Sub>
-            </div>
-            <div className="flex flex-col gap-2" style={{ marginTop: 12 }}>
-              {rel.items.map((it, i) => (
-                <div key={i} className="flex gap-3" style={{ alignItems: 'flex-start' }}>
-                  <span style={{ color: T.green, fontWeight: 800, fontSize: 14, lineHeight: '20px', flexShrink: 0 }}>›</span>
-                  <span style={{ fontFamily: SANS, fontSize: 14, lineHeight: 1.5, color: T.ink }}>{it}</span>
-                </div>
-              ))}
-            </div>
-          </div>
-        ))}
+        <PatchNotesList />
         <div style={{ marginTop: 22 }}>
           <Btn full kind="primary" onClick={onClose}>Got it</Btn>
         </div>
       </div>
     </ModalScrim>
+  );
+}
+
+/* Full-page version of the changelog (its own nav tab). */
+function Changelog(){
+  return (
+    <div>
+      <Title style={{ marginBottom: 6 }}>What's new</Title>
+      <Sub style={{ marginBottom: 16 }}>Every update to Study Feed, newest first.</Sub>
+      <Card style={{ padding: 18, boxShadow: SH.raised }}>
+        <PatchNotesList />
+      </Card>
+    </div>
+  );
+}
+
+/* The feature-request screen (its own nav tab). FeedbackForm carries its own
+   heading, so the page just gives it room. */
+function FeatureRequest(){
+  return (
+    <div>
+      <Title style={{ marginBottom: 14 }}>Ideas &amp; requests</Title>
+      <FeedbackForm />
+    </div>
   );
 }
 
@@ -3057,11 +3084,11 @@ export default function App(){
       setProgress(prog || {});
       setStats({ ...DEFAULT_STATS, ...st });
       const merged = { ...DEFAULT_SETTINGS, ...se };
-      /* Show "What's new" to someone who's used an OLDER version. A brand-new
-         user (no version stamped yet) is on the newest build already, so mark
-         it seen silently rather than showing them a changelog for nothing. */
-      if (merged.lastSeenVersion && merged.lastSeenVersion !== APP_VERSION) setShowNews(true);
-      else if (!merged.lastSeenVersion){ merged.lastSeenVersion = APP_VERSION; save('settings:main', merged); }
+      /* Pop "What's new" as soon as the site opens for anyone who hasn't seen
+         THIS version yet — first-time visitors included. Once they dismiss it,
+         lastSeenVersion is stamped so it won't reappear until the next update.
+         The changelog also has its own tab for reopening any time. */
+      if (merged.lastSeenVersion !== APP_VERSION) setShowNews(true);
       setSettings(merged);
       try { reduceMotion.current = window.matchMedia('(prefers-reduced-motion: reduce)').matches; } catch {}
       setReady(true);
@@ -3200,8 +3227,10 @@ export default function App(){
           onDeleteCard={deleteCard} onDeleteDeck={deleteDeck} onRenameDeck={renameDeck}
           onStudyDeck={startDeck} onQuiz={openQuiz} />}
         {tab === 'stats' && <Stats decks={library.decks} progress={progress} stats={stats} />}
+        {tab === 'changelog' && <Changelog />}
+        {tab === 'feedback' && <FeatureRequest />}
         {tab === 'settings' && <Settings settings={settings} onChange={persistSettings}
-          library={library} progress={progress} onImport={importLibrary} onShowNews={() => setShowNews(true)} />}
+          library={library} progress={progress} onImport={importLibrary} />}
       </div>
     </Shell>
     {quiz && <Quiz decks={library.decks} deckId={quiz.deckId} onClose={() => setQuiz(null)} onDone={recordQuiz} />}
@@ -3285,7 +3314,7 @@ function Shell({ children, tab, setTab, due, pending }){
   );
 }
 
-const NAV_ITEMS = [['home','Home'],['feed','Study'],['create','Create'],['decks','Decks'],['stats','Stats'],['settings','You']];
+const NAV_ITEMS = [['home','Home'],['feed','Study'],['create','Create'],['decks','Decks'],['stats','Stats'],['changelog','Updates'],['feedback','Ideas'],['settings','You']];
 
 function NavBadge({ k, due, pending }){
   if (k === 'feed' && due > 0){
