@@ -169,8 +169,14 @@ const DEFAULT_SETTINGS = { interleave: true, newPerDay: 12, capNew: false, longM
    APP_VERSION is the id we compare against settings.lastSeenVersion to decide
    whether to pop the "What's new" note. Bump it whenever PATCH_NOTES gains an
    entry. Newest first; the first element is the current release. */
-const APP_VERSION = '1.1.0';
+const APP_VERSION = '1.2.0';
 const PATCH_NOTES = [
+  { v: '1.2.0', date: '2026-07-31', title: 'Ask, explain & upgrade', items: [
+    'Ask anything, anywhere — a study helper sits in the corner of every screen, and it can see the card you\'re on.',
+    'Didn\'t get the answer? Tap “Explain this further” on any card for the reasoning behind it — and “Simpler” or “Go deeper” if that wasn\'t the right level.',
+    'After marking a long answer, tap “How do I get to Merit?” for the exact moves to make on YOUR answer — where to change it and what the better sentence looks like.',
+    'Export one deck on its own, or pick exactly which decks go into a backup, instead of always exporting everything.',
+  ] },
   { v: '1.1.0', date: '2026-07-29', title: 'Decks, quizzes & PDFs', items: [
     'Study one deck at a time — pick it from the top of your feed instead of always getting the full mix.',
     'Quiz mode: a quick, graded test built from any deck. A fast way to check yourself before an exam.',
@@ -294,6 +300,16 @@ function downloadJson(obj, filename){
     return true;
   } catch { return false; }
 }
+
+/* A filename that survives every OS and every browser: lowercase letters,
+   digits and dashes, nothing else. */
+function safeFileName(s, fallback){
+  const base = String(s || '').trim().toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+/, '').replace(/-+$/, '');
+  return base || fallback;
+}
+const exportName = (decks) => decks.length === 1
+  ? 'study-feed-' + safeFileName(decks[0].topic || decks[0].subject, 'deck') + '-' + TODAY() + '.json'
+  : 'study-feed-' + TODAY() + '.json';
 
 async function copyText(text){
   try { await navigator.clipboard.writeText(text); return true; }
@@ -557,14 +573,15 @@ function friendlyApiError(e){
 }
 
 /* Send an OpenAI-compatible chat request through our own serverless proxy
-   (api/nvidia.js on Vercel). `content` is either a plain string (text prompt)
-   or an OpenAI-style content array (for images). The proxy holds the NVIDIA
-   key server-side and adds the Authorization header, so the browser never
-   sees the key and there's no cross-origin (CORS) problem. */
-async function postMessages(content, maxTokens, model){
+   (api/nvidia.js on Vercel). `messages` is the usual role/content list — a
+   message's content is either a plain string (text prompt) or an OpenAI-style
+   content array (for images). The proxy holds the NVIDIA key server-side and
+   adds the Authorization header, so the browser never sees the key and there's
+   no cross-origin (CORS) problem. */
+async function postChat(messages, maxTokens, model){
   const body = {
     model,
-    messages: [{ role: 'user', content }],
+    messages,
     temperature: isReasoner(model) ? 0.6 : 0.7,
     top_p: 0.9,
     max_tokens: maxTokens,
@@ -600,6 +617,8 @@ async function postMessages(content, maxTokens, model){
   const msg = data && data.choices && data.choices[0] && data.choices[0].message;
   return (msg && msg.content) ? msg.content : '';
 }
+/* Everything except the chat helper sends exactly one user turn. */
+const postMessages = (content, maxTokens, model) => postChat([{ role: 'user', content }], maxTokens, model);
 const callModel = (prompt, maxTokens = 1000, model = MODEL_GEN) => postMessages(prompt, maxTokens, model);
 /* Read ONE slide/photo with the vision model and return it as plain study text
    (all wording transcribed, diagrams/graphs/formulae described). `img` is a
@@ -729,6 +748,128 @@ async function getBigHint(card, level){
   const reply = await callModel(bigHintPrompt(card, level), 700, MODEL_SMART);
   const arr = parseJsonArray(reply);
   return Array.isArray(arr) ? arr.map(String).filter(Boolean).slice(0, 5) : [];
+}
+
+/* ---- explain this further ------------------------------------------------
+   Seeing the right answer isn't the same as understanding it. Any card can be
+   unfolded into the reasoning behind it, and the depth is the student's call:
+   the same idea again but simpler, or the mechanism underneath it. */
+
+/* One card flattened to question + answer text, whatever its type — used by
+   the explainer and by the chat helper's "what am I looking at" context. */
+function cardQA(card){
+  if (card.type === 'mcq'){
+    const opts = (card.options || []).map((o, i) => (i === card.answer ? '(correct) ' : '(wrong) ') + o).join('\n');
+    return { q: String(card.front || ''), a: 'Options:\n' + opts + (card.why ? '\nCard\'s reason: ' + card.why : '') };
+  }
+  if (card.type === 'extended'){
+    return {
+      q: String(card.prompt || ''),
+      a: 'Achieved: ' + (card.achieved || '—') + '\nMerit: ' + (card.merit || '—') +
+         '\nExcellence: ' + (card.excellence || '—') + (card.pitfall ? '\nCommon trap: ' + card.pitfall : ''),
+    };
+  }
+  return { q: String(card.front || ''), a: String(card.back || '') };
+}
+
+const EXPLAIN_STYLE = {
+  normal: 'Assume they know the subject basics but not this particular idea.',
+  simple: 'The first explanation did NOT land. Go simpler: everyday words, short sentences, and one concrete example or analogy from ordinary life.',
+  deeper: 'They already follow the basic version. Go deeper: the mechanism underneath, why it works that way, and how it connects to the rest of the topic.',
+};
+function explainPrompt(card, level, depth){
+  const qa = cardQA(card);
+  return `You are a patient ${level} tutor. A student has just seen the answer to this card and wants to actually understand it.
+
+QUESTION: ${qa.q}
+
+THE CARD'S ANSWER: ${qa.a}
+
+${EXPLAIN_STYLE[depth] || EXPLAIN_STYLE.normal}
+
+Return ONLY JSON:
+{ "plain": "2-3 sentences explaining the idea itself, in plain language (define any term you use)",
+  "steps": [ 2-4 short lines showing the reasoning that gets from the question to that answer ],
+  "watch": "one sentence naming the mistake students usually make here" }
+Explain the card's own answer — don't contradict it, and don't invent facts, values or NZQA codes that aren't implied by it.`;
+}
+async function getExplain(card, level, depth){
+  const reply = await callModel(explainPrompt(card, level, depth), 900, MODEL_SMART);
+  const objs = rescueObjects(reply);
+  return objs[0] || null;
+}
+
+/* ---- how do I get a higher grade ----------------------------------------
+   The marking says WHAT is missing. This says HOW: the moves to make on the
+   answer they actually wrote, anchored to their own sentences. */
+const NEXT_GRADE = { 'Not yet': 'Achieved', 'Achieved': 'Merit', 'Merit': 'Excellence', 'Excellence': 'Excellence' };
+const nextGradeUp = (g) => NEXT_GRADE[g] || 'Merit';
+function upgradePrompt(card, answer, result, level){
+  const target = nextGradeUp(result.grade);
+  const bar = target === 'Achieved' ? card.achieved : target === 'Merit' ? card.merit : card.excellence;
+  const atTop = result.grade === 'Excellence';
+  const missing = Array.isArray(result.missing) ? result.missing.join('; ') : '';
+  return `You are a ${level} examiner sitting next to the student with THEIR answer in front of you.
+
+QUESTION (${card.marks} marks, command verb "${card.verb}"): ${card.prompt}
+WHAT ${target.toUpperCase()} LOOKS LIKE: ${bar || '—'}
+
+THEIR ANSWER:
+${answer}
+
+YOU MARKED IT: ${result.grade}${missing ? '. Still missing: ' + missing : ''}
+
+${atTop
+  ? 'They are already at Excellence. Show them how to make it airtight — the weakest links in what they wrote, and how to tighten them.'
+  : 'They have already been told WHAT is missing. Now show them HOW — the exact edits to make to THIS answer to reach ' + target + '.'}
+
+Return ONLY JSON:
+{ "target": "${target}",
+  "steps": [ 2-4 objects, each { "move": "the edit to make, as an instruction (start with a verb)", "where": "which part of THEIR answer it applies to — quote 3-6 of their own words", "example": "that part rewritten the way it should read, one sentence, using the real subject content" } ],
+  "habit": "one sentence: the habit that would earn this grade next time without being told" }
+Quote their real words in "where". Write "example" as a finished sentence they could have written — this is feedback after marking, so showing the better version is the point. Do not invent data, quotes or NZQA codes.`;
+}
+async function getUpgrade(card, answer, result, level){
+  const reply = await callModel(upgradePrompt(card, answer, result, level), 1100, MODEL_SMART);
+  const objs = rescueObjects(reply);
+  return objs[0] || null;
+}
+
+/* ---- ask anything --------------------------------------------------------
+   A tutor you can interrupt with. It knows the card on screen (studyContext,
+   set by StudyCard) so "why is that the answer?" works without retyping it. */
+let studyContext = null;
+const setStudyContext = (c) => { studyContext = c; };
+
+const CHAT_SYSTEM = `You are the study helper built into Study Feed, an app a high-school student uses to revise their own notes.
+
+- Answer the question they asked, in plain language, as short as it can be answered well: 2-5 sentences, or a short list.
+- Teach, don't just assert: give the reasoning or a quick example so they could work it out themselves next time.
+- If they ask you to write an assessment, essay or homework FOR them, help them build it themselves instead — structure, prompts, feedback on their attempt.
+- Never invent facts, figures, quotes or NZQA standard codes. If you aren't sure, say so.
+- Plain text. A short "- " list is fine and **bold** for a key term, but no headings, tables or code blocks.`;
+
+function chatContextBlock(){
+  if (!studyContext) return '';
+  const card = studyContext.card, deck = studyContext.deck;
+  const qa = cardQA(card);
+  const where = (deck.subject || 'their notes') + (deck.topic ? ' · ' + deck.topic : '');
+  const block = `\n\n[Context — the card on their screen right now (${where}). Use it if their question is about "this"; otherwise ignore it.]\nQ: ${qa.q}\nA: ${qa.a}`;
+  return block.length > 1400 ? block.slice(0, 1400) + '…' : block;
+}
+
+/* history is [{ role: 'user'|'assistant', text }]. Only the tail is sent —
+   long threads cost tokens and the free tier is rate-limited. */
+async function askHelper(history){
+  const tail = history.slice(-10);
+  const msgs = [{ role: 'system', content: CHAT_SYSTEM }];
+  for (let i = 0; i < tail.length; i++){
+    const m = tail[i];
+    const isLast = i === tail.length - 1;
+    msgs.push({ role: m.role, content: m.text + (isLast && m.role === 'user' ? chatContextBlock() : '') });
+  }
+  const reply = await postChat(msgs, 800, MODEL_SMART);
+  return (reply || '').trim();
 }
 
 function parseManual(text){
@@ -922,6 +1063,36 @@ function Chip({ children, colour = T.accent, solid, style }){
   );
 }
 
+/* The model replies in light markdown — **bold**, "- " bullets, blank lines.
+   Render exactly that much, so replies read as prose instead of raw asterisks
+   without pulling in a markdown library. */
+function inlineBold(text, keyBase){
+  return String(text).split('**').map((p, i) =>
+    i % 2 ? <b key={keyBase + i}>{p}</b> : <span key={keyBase + i}>{p}</span>);
+}
+function RichText({ text, style }){
+  const out = [];
+  let bullets = [];
+  const flush = (k) => {
+    if (!bullets.length) return;
+    const items = bullets;
+    bullets = [];
+    out.push(
+      <ul key={'u' + k} style={{ margin: '2px 0 8px', paddingLeft: 18 }}>
+        {items.map((b, i) => <li key={i} style={{ marginBottom: 3 }}>{inlineBold(b, 'b' + k + i)}</li>)}
+      </ul>
+    );
+  };
+  String(text || '').split('\n').forEach((raw, i) => {
+    const line = raw.trim();
+    if (line.slice(0, 2) === '- ' || line.slice(0, 2) === '* '){ bullets.push(line.slice(2)); return; }
+    flush(i);
+    if (line) out.push(<div key={'p' + i} style={{ marginBottom: 7 }}>{inlineBold(line, 'i' + i)}</div>);
+  });
+  flush('end');
+  return <div style={{ fontFamily: SANS, fontSize: 14.5, lineHeight: 1.55, color: T.ink, ...style }}>{out}</div>;
+}
+
 /* A soft, dismissible hint. Dismissing it (by id) remembers the choice in
    settings.dismissedTips so the same nudge never nags twice. */
 function Tip({ id, settings, onSettings, icon, tone, children }){
@@ -1052,6 +1223,13 @@ function StudyCard({ card, deck, onGrade, reduceMotion, prog, practice }){
 
   useEffect(() => { setPhase('attempt'); setPick(null); }, [card.id]);
 
+  /* Tell the ask-anything helper what's on screen, so "why is that the answer?"
+     works without retyping the question. Cleared when the feed unmounts. */
+  useEffect(() => {
+    setStudyContext({ card, deck });
+    return () => setStudyContext(null);
+  }, [card.id, deck.id]);
+
   const committedWrong = isMcq && pick !== null && pick !== card.answer;
 
   const previews = useMemo(() => {
@@ -1091,9 +1269,9 @@ function StudyCard({ card, deck, onGrade, reduceMotion, prog, practice }){
       )}
 
       {isLong ? <ExtendedFace card={card} phase={phase} deck={deck} onReveal={() => setPhase('reveal')} />
-        : isMcq ? <McqFace card={card} phase={phase} pick={pick} onPick={(i) => { setPick(i); setPhase('reveal'); }} />
-        : card.type === 'short' ? <ShortFace card={card} phase={phase} />
-        : <FlipFace card={card} phase={phase} />}
+        : isMcq ? <McqFace card={card} phase={phase} deck={deck} pick={pick} onPick={(i) => { setPick(i); setPhase('reveal'); }} />
+        : card.type === 'short' ? <ShortFace card={card} phase={phase} deck={deck} />
+        : <FlipFace card={card} phase={phase} deck={deck} />}
 
       <div style={{ flex: 1, minHeight: 16 }} />
 
@@ -1184,16 +1362,94 @@ function SymbolBar({ onInsert }){
   );
 }
 
-function FlipFace({ card, phase }){
+/* Seeing the right answer is not the same as understanding it. Once the answer
+   is on screen this unfolds the reasoning behind it — and the LEVEL is the
+   student's call: Simpler starts over in everyday words, Go deeper goes at the
+   mechanism. Asked for on demand, so a card you already get costs nothing. */
+function ExplainMore({ card, deck, compact }){
+  const [got, setGot] = useState(null);      // { depth, data } once fetched
+  const [busy, setBusy] = useState('');      // depth currently loading, '' when idle
+  const [err, setErr] = useState('');
+  const level = (deck && deck.standard) ? deck.standard : 'NCEA Level 1';
+
+  useEffect(() => { setGot(null); setBusy(''); setErr(''); }, [card.id]);
+
+  const run = async (depth) => {
+    setBusy(depth); setErr('');
+    try {
+      const r = await getExplain(card, level, depth);
+      if (r && (r.plain || r.steps)) setGot({ depth, data: r });
+      else setErr('Could not read that explanation. Try again.');
+    } catch (e){ setErr(friendlyApiError(e)); }
+    finally { setBusy(''); }
+  };
+
+  if (!got){
+    return (
+      <div style={{ marginTop: compact ? 10 : 14 }}>
+        <button className="sf-tap" onClick={() => run('normal')} disabled={!!busy}
+          style={{ background: 'none', border: 'none', cursor: busy ? 'default' : 'pointer', padding: '2px 2px',
+            fontFamily: SANS, fontSize: 13.5, fontWeight: 600, color: busy ? T.faint : T.accent }}>
+          {busy ? 'Working it out…' : '🔍 Explain this further'}
+        </button>
+        {err && <Sub style={{ marginTop: 6, color: T.red }}>{err}</Sub>}
+      </div>
+    );
+  }
+
+  const d = got.data;
+  const steps = Array.isArray(d.steps) ? d.steps : [];
+  const tierLabel = got.depth === 'simple' ? 'In simpler terms' : got.depth === 'deeper' ? 'Going deeper' : 'The reasoning';
   return (
-    <div>
-      <div style={QUESTION}>{card.front}</div>
-      {phase === 'reveal' && <div style={{ ...REVEAL, ...ANSWER }}>{card.back}</div>}
+    <div style={{ ...PANEL, marginTop: 14, background: rgba(T.accent, 0.07),
+      animation: 'sf-reveal 260ms cubic-bezier(.2,.8,.3,1)' }}>
+      <Chip colour={T.accent} style={{ marginBottom: 9 }}>{tierLabel}</Chip>
+      {d.plain && <RichText text={d.plain} />}
+      {steps.length > 0 && (
+        <div className="flex flex-col gap-2" style={{ marginTop: 4 }}>
+          {steps.map((s, i) => (
+            <div key={i} className="flex gap-2" style={{ alignItems: 'flex-start' }}>
+              <span style={{ fontFamily: SANS, fontSize: 12, fontWeight: 800, color: T.accent,
+                lineHeight: '22px', flexShrink: 0 }}>{i + 1}</span>
+              <span style={{ fontFamily: SANS, fontSize: 14.5, lineHeight: 1.5, color: T.ink }}>{String(s)}</span>
+            </div>
+          ))}
+        </div>
+      )}
+      {d.watch && (
+        <div style={{ marginTop: 11, paddingTop: 10, borderTop: `1px dashed ${rgba(T.accent, 0.3)}`,
+          fontFamily: SANS, fontSize: 13.5, lineHeight: 1.5, color: T.muted }}>
+          <b style={{ color: T.amber }}>Watch out:</b> {d.watch}
+        </div>
+      )}
+      <div className="flex gap-2" style={{ marginTop: 12 }}>
+        <Btn kind="soft" disabled={!!busy} onClick={() => run('simple')} style={{ fontSize: 13, padding: '9px 14px' }}>
+          {busy === 'simple' ? 'Rethinking…' : 'Simpler'}
+        </Btn>
+        <Btn kind="soft" disabled={!!busy} onClick={() => run('deeper')} style={{ fontSize: 13, padding: '9px 14px' }}>
+          {busy === 'deeper' ? 'Digging in…' : 'Go deeper'}
+        </Btn>
+      </div>
+      {err && <Sub style={{ marginTop: 8, color: T.red }}>{err}</Sub>}
     </div>
   );
 }
 
-function ShortFace({ card, phase }){
+function FlipFace({ card, phase, deck }){
+  return (
+    <div>
+      <div style={QUESTION}>{card.front}</div>
+      {phase === 'reveal' && (
+        <div style={REVEAL}>
+          <div style={ANSWER}>{card.back}</div>
+          <ExplainMore card={card} deck={deck} />
+        </div>
+      )}
+    </div>
+  );
+}
+
+function ShortFace({ card, phase, deck }){
   return (
     <div>
       <div style={QUESTION}>{card.front}</div>
@@ -1201,13 +1457,14 @@ function ShortFace({ card, phase }){
         <div style={REVEAL}>
           <Chip colour={T.green} style={{ marginBottom: 8 }}>Model answer</Chip>
           <div style={ANSWER}>{card.back}</div>
+          <ExplainMore card={card} deck={deck} />
         </div>
       )}
     </div>
   );
 }
 
-function McqFace({ card, phase, pick, onPick }){
+function McqFace({ card, phase, pick, onPick, deck }){
   const letters = ['A','B','C','D','E','F'];
   const revealed = phase === 'reveal';
   return (
@@ -1237,9 +1494,10 @@ function McqFace({ card, phase, pick, onPick }){
           );
         })}
       </div>
-      {revealed && card.why && (
+      {revealed && (
         <div style={{ ...REVEAL }}>
-          <div style={{ ...PANEL, ...ANSWER, fontSize: 14.5 }}>{card.why}</div>
+          {card.why && <div style={{ ...PANEL, ...ANSWER, fontSize: 14.5 }}>{card.why}</div>}
+          <ExplainMore card={card} deck={deck} compact={!card.why} />
         </div>
       )}
     </div>
@@ -1418,7 +1676,7 @@ function ExtendedFace({ card, phase, deck, onReveal }){
         </div>
       )}
 
-      {result && <MarkResult r={result} />}
+      {result && <MarkResult r={result} card={card} answer={answer} level={deck.standard || 'NCEA Level 1'} />}
 
       {phase === 'reveal' && (
         <div style={REVEAL}>
@@ -1437,13 +1695,90 @@ function ExtendedFace({ card, phase, deck, onReveal }){
               <div style={{ fontFamily: SANS, fontSize: 14.5, color: T.muted, lineHeight: 1.5 }}>{card.pitfall}</div>
             </div>
           )}
+          <ExplainMore card={card} deck={deck} />
         </div>
       )}
     </div>
   );
 }
 
-function MarkResult({ r }){
+/* The marking says WHAT is missing; this says HOW. Asked for after you've read
+   the mark, because the answer is already written — so it can quote your own
+   sentences back and show the upgraded version of them. */
+function UpgradePath({ card, answer, r, level }){
+  const [got, setGot] = useState(null);
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState('');
+  const target = nextGradeUp(r.grade);
+  const atTop = r.grade === 'Excellence';
+
+  const run = async () => {
+    setBusy(true); setErr('');
+    try {
+      const u = await getUpgrade(card, answer, r, level);
+      if (u && (Array.isArray(u.steps) || u.habit)) setGot(u);
+      else setErr('Could not read that. Try again.');
+    } catch (e){ setErr(friendlyApiError(e)); }
+    finally { setBusy(false); }
+  };
+
+  if (!got){
+    return (
+      <div style={{ marginTop: 12 }}>
+        <Btn full kind="soft" onClick={run} disabled={busy} style={{ fontSize: 14 }}>
+          {busy ? 'Working out how…' : atTop ? '↑ How do I make this airtight?' : `↑ How do I get to ${target}?`}
+        </Btn>
+        {err && <Sub style={{ marginTop: 8, color: T.red }}>{err}</Sub>}
+      </div>
+    );
+  }
+
+  const steps = Array.isArray(got.steps) ? got.steps : [];
+  return (
+    <div style={{ marginTop: 12, paddingTop: 12, borderTop: `1px dashed ${T.border}`,
+      animation: 'sf-reveal 260ms cubic-bezier(.2,.8,.3,1)' }}>
+      <div className="flex items-center justify-between" style={{ marginBottom: 10 }}>
+        <Chip colour={T.green} solid>{atTop ? 'Making it airtight' : 'Getting to ' + (got.target || target)}</Chip>
+        <Sub style={{ fontSize: 11.5 }}>Changes to YOUR answer</Sub>
+      </div>
+      <div className="flex flex-col gap-2">
+        {steps.map((s, i) => {
+          const move = typeof s === 'string' ? s : (s && s.move) || '';
+          const where = (s && s.where) || '';
+          const example = (s && s.example) || '';
+          return (
+            <div key={i} style={{ background: T.surface, border: `1px solid ${T.border}`,
+              borderRadius: R.input, padding: '11px 13px' }}>
+              <div className="flex gap-2" style={{ alignItems: 'flex-start' }}>
+                <span style={{ fontFamily: SANS, fontSize: 12, fontWeight: 800, color: T.green,
+                  lineHeight: '21px', flexShrink: 0 }}>{i + 1}</span>
+                <span style={{ fontFamily: SANS, fontSize: 14.5, fontWeight: 600, lineHeight: 1.5, color: T.ink }}>{move}</span>
+              </div>
+              {where && (
+                <div style={{ marginTop: 6, paddingLeft: 20, fontFamily: SANS, fontSize: 13, color: T.muted, lineHeight: 1.5 }}>
+                  Where: <span style={{ fontStyle: 'italic' }}>{where}</span>
+                </div>
+              )}
+              {example && (
+                <div style={{ marginTop: 8, marginLeft: 20, borderLeft: `2.5px solid ${rgba(T.green, 0.55)}`,
+                  paddingLeft: 10, fontFamily: SANS, fontSize: 14, lineHeight: 1.55, color: T.ink }}>
+                  {example}
+                </div>
+              )}
+            </div>
+          );
+        })}
+      </div>
+      {got.habit && (
+        <div style={{ marginTop: 11, fontFamily: SANS, fontSize: 13.5, lineHeight: 1.5, color: T.muted }}>
+          <b style={{ color: T.ink }}>Next time:</b> {got.habit}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function MarkResult({ r, card, answer, level }){
   const gc = r.grade === 'Excellence' ? T.green : r.grade === 'Merit' ? T.accent : r.grade === 'Achieved' ? T.muted : T.red;
   return (
     <div style={{ ...PANEL, marginTop: 12, animation: 'sf-reveal 260ms cubic-bezier(.2,.8,.3,1)' }}>
@@ -1465,6 +1800,7 @@ function MarkResult({ r }){
         </div>
       )}
       {r.lift && <div style={{ marginTop: 10, fontFamily: SANS, fontSize: 15, fontWeight: 600, color: T.ink, lineHeight: 1.5 }}>{r.lift}</div>}
+      {card && answer && <UpgradePath card={card} answer={answer} r={r} level={level} />}
     </div>
   );
 }
@@ -2012,20 +2348,26 @@ function DeckEditor({ deck, progress, onBack, onEditCard, onDeleteCard, onDelete
   const [confirmDeck, setConfirmDeck] = useState(false);
   const [editId, setEditId] = useState(null);
   const [renaming, setRenaming] = useState(false);
+  const [exporting, setExporting] = useState(false);
+  const [withProgress, setWithProgress] = useState(false);
   const [shared, setShared] = useState('');
+  const [shareBad, setShareBad] = useState(false);
   const [draftMeta, setDraftMeta] = useState({ subject: deck.subject, topic: deck.topic, standard: deck.standard });
   const colour = subjectColour(deck.subject);
 
-  /* one deck on its own — the shareable unit. Progress is left out on purpose:
-     nobody wants to inherit someone else's revision schedule. */
-  const shareDeck = () => {
-    const payload = buildExport([deck], {});
-    copyText(JSON.stringify(payload)).then(ok => {
-      if (ok) setShared('Copied — they paste it under You → Import.');
-      else setShared(downloadJson(payload, `${(deck.topic || deck.subject || 'deck')}.json`)
-        ? 'Downloaded — send them the file.' : 'Could not share this deck.');
-      setTimeout(() => setShared(''), 6000);
-    });
+  /* One deck on its own — a backup of just this topic, or something to hand a
+     friend. Your review schedule is left OUT by default (nobody wants to
+     inherit someone else's due dates) but a backup of your own can keep it. */
+  const say = (m, bad) => { setShared(m); setShareBad(!!bad); setTimeout(() => setShared(''), 6000); };
+  const exportDeck = (mode) => {
+    const payload = buildExport([deck], withProgress ? progress : {});
+    if (mode === 'file'){
+      const ok = downloadJson(payload, exportName([deck]));
+      say(ok ? 'Downloaded — that file holds this deck only.' : 'Download blocked here — use Copy instead.', !ok);
+    } else {
+      copyText(JSON.stringify(payload)).then(ok =>
+        say(ok ? 'Copied — paste it under You → Import.' : 'Could not copy. Try the file instead.', !ok));
+    }
   };
 
   const startRename = () => {
@@ -2054,11 +2396,32 @@ function DeckEditor({ deck, progress, onBack, onEditCard, onDeleteCard, onDelete
         {!renaming && (
           <div className="flex gap-2" style={{ flexShrink: 0 }}>
             <Btn kind="soft" onClick={startRename} style={{ fontSize: 13, padding: '9px 14px' }}>Rename</Btn>
-            <Btn kind="soft" onClick={shareDeck} style={{ fontSize: 13, padding: '9px 14px' }}>Share</Btn>
+            <Btn kind={exporting ? 'primary' : 'soft'} onClick={() => setExporting(v => !v)}
+              style={{ fontSize: 13, padding: '9px 14px' }}>Export</Btn>
           </div>
         )}
       </div>
-      {shared && <Sub style={{ color: T.green, fontWeight: 600, marginBottom: 12 }}>{shared}</Sub>}
+
+      {exporting && !renaming && (
+        <Card style={{ padding: 15, marginBottom: 14, boxShadow: SH.raised }}>
+          <div style={{ fontFamily: SANS, fontSize: 15, fontWeight: 700, color: T.ink }}>Export just this deck</div>
+          <Sub style={{ fontSize: 12.5, marginTop: 2, marginBottom: 12 }}>
+            {deck.cards.length} card{deck.cards.length === 1 ? '' : 's'} from <b>{deck.topic || deck.subject || 'this deck'}</b> — none of your other decks.
+          </Sub>
+          <div className="flex items-center justify-between" style={{ marginBottom: 12 }}>
+            <div style={{ paddingRight: 12 }}>
+              <div style={{ fontFamily: SANS, fontSize: 13.5, fontWeight: 600, color: T.ink }}>Include my review progress</div>
+              <Sub style={{ fontSize: 12 }}>Leave off when sending it to someone else</Sub>
+            </div>
+            <Toggle on={withProgress} onClick={() => setWithProgress(v => !v)} />
+          </div>
+          <div className="flex gap-2">
+            <Btn full kind="soft" onClick={() => exportDeck('copy')} style={{ fontSize: 14 }}>Copy as text</Btn>
+            <Btn full kind="soft" onClick={() => exportDeck('file')} style={{ fontSize: 14 }}>Download file</Btn>
+          </div>
+        </Card>
+      )}
+      {shared && <Sub style={{ color: shareBad ? T.red : T.green, fontWeight: 600, marginBottom: 12 }}>{shared}</Sub>}
 
       {!renaming && (onStudyDeck || onQuiz) && (
         <div className="flex gap-2" style={{ marginBottom: 16 }}>
@@ -2285,16 +2648,25 @@ function TransferCard({ library, progress, onImport }){
   const [text, setText] = useState('');
   const [msg, setMsg] = useState('');
   const [bad, setBad] = useState(false);
+  const [picking, setPicking] = useState(false);   // false = whole library
+  const [picked, setPicked] = useState([]);        // deck ids, only while picking
   const fileRef = useRef(null);
-  const total = library.decks.reduce((s, d) => s + d.cards.length, 0);
 
   const say = (m, isBad) => { setMsg(m); setBad(!!isBad); };
 
+  /* Exporting everything is the right default for a backup, but a deck is the
+     unit you actually hand around — so you can narrow it to the ones you mean. */
+  const chosen = picking ? library.decks.filter(d => picked.indexOf(d.id) >= 0) : library.decks;
+  const chosenCards = chosen.reduce((s, d) => s + d.cards.length, 0);
+  const startPicking = () => { setPicked(library.decks.map(d => d.id)); setPicking(true); };
+  const togglePick = (id) => setPicked(p => p.indexOf(id) >= 0 ? p.filter(x => x !== id) : p.concat([id]));
+
   const doExport = (mode) => {
     if (!library.decks.length) return say('Nothing to export yet.', true);
-    const payload = buildExport(library.decks, progress);
+    if (!chosen.length) return say('Pick at least one deck.', true);
+    const payload = buildExport(chosen, progress);
     if (mode === 'file'){
-      const ok = downloadJson(payload, `study-feed-${TODAY()}.json`);
+      const ok = downloadJson(payload, exportName(chosen));
       say(ok ? 'Downloaded.' : 'Download blocked here — use Copy instead.', !ok);
     } else {
       copyText(JSON.stringify(payload)).then(ok =>
@@ -2325,9 +2697,43 @@ function TransferCard({ library, progress, onImport }){
         Move decks between the app and the website, or to a friend — without paying to generate them twice.
       </Sub>
 
-      <Sub style={{ fontSize: 12.5, fontWeight: 700, color: T.ink, marginBottom: 7 }}>
-        Export {total > 0 ? `(${library.decks.length} deck${library.decks.length > 1 ? 's' : ''} · ${total} card${total > 1 ? 's' : ''})` : ''}
-      </Sub>
+      <div className="flex items-center justify-between" style={{ marginBottom: 7 }}>
+        <Sub style={{ fontSize: 12.5, fontWeight: 700, color: T.ink }}>
+          Export {chosenCards > 0 ? `(${chosen.length} deck${chosen.length > 1 ? 's' : ''} · ${chosenCards} card${chosenCards > 1 ? 's' : ''})` : ''}
+        </Sub>
+        {library.decks.length > 1 && (
+          <button className="sf-tap" onClick={() => picking ? setPicking(false) : startPicking()}
+            style={{ background: 'none', border: 'none', cursor: 'pointer', padding: 0,
+              fontFamily: SANS, fontSize: 12.5, fontWeight: 700, color: T.accent }}>
+            {picking ? 'Export all' : 'Choose decks'}
+          </button>
+        )}
+      </div>
+
+      {picking && (
+        <div style={{ background: T.well, borderRadius: R.well, padding: 8, marginBottom: 10 }}>
+          {library.decks.map(d => {
+            const on = picked.indexOf(d.id) >= 0;
+            return (
+              <button key={d.id} className="sf-tap" onClick={() => togglePick(d.id)}
+                style={{ display: 'flex', alignItems: 'center', gap: 10, width: '100%', textAlign: 'left',
+                  background: 'none', border: 'none', cursor: 'pointer', padding: '8px 6px' }}>
+                <span style={{ width: 20, height: 20, borderRadius: 6, flexShrink: 0,
+                  border: `1.5px solid ${on ? T.accent : T.border}`, background: on ? T.accent : T.surface,
+                  color: '#fff', fontFamily: SANS, fontSize: 13, fontWeight: 800, lineHeight: '18px', textAlign: 'center' }}>
+                  {on ? '✓' : ''}
+                </span>
+                <span style={{ flex: 1, minWidth: 0, fontFamily: SANS, fontSize: 14, fontWeight: 600, color: T.ink,
+                  overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                  {d.topic || d.subject || 'Untitled'}
+                </span>
+                <Sub style={{ fontSize: 12, flexShrink: 0 }}>{d.cards.length}</Sub>
+              </button>
+            );
+          })}
+        </div>
+      )}
+
       <div className="flex gap-2" style={{ marginBottom: 14 }}>
         <Btn full kind="soft" onClick={() => doExport('copy')} style={{ fontSize: 14 }}>Copy as text</Btn>
         <Btn full kind="soft" onClick={() => doExport('file')} style={{ fontSize: 14 }}>Download file</Btn>
@@ -3051,6 +3457,158 @@ function FeedbackForm(){
   );
 }
 
+/* ==========================================================================
+   ASK  —  the helper that sits beside everything. Same model as the rest of
+   the app, but a real back-and-forth, and it's handed the card on screen so
+   "why is that the answer?" works without retyping the question. The thread
+   is memory-only: it isn't revision material worth a storage slot, and a
+   fresh start is usually what you want next session anyway.
+   ========================================================================== */
+function AskIcon({ size = 24 }){
+  return (
+    <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor"
+      strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round">
+      <path d="M20.5 11.5a7.5 7.5 0 0 1-11 6.6L4.5 19.5l1.4-4.6a7.5 7.5 0 1 1 14.6-3.4z" />
+      <path d="M12 8.2l.85 2.05 2.05.85-2.05.85L12 14l-.85-2.05L9.1 11.1l2.05-.85z" />
+    </svg>
+  );
+}
+
+function AskFab({ onClick }){
+  return (
+    <button className="sf-fab sf-btn" onClick={onClick} aria-label="Ask anything"
+      style={{ width: 54, height: 54, borderRadius: R.pill, border: 'none', cursor: 'pointer',
+        background: T.accent, color: '#fff', boxShadow: SH.accent,
+        display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+      <AskIcon size={25} />
+    </button>
+  );
+}
+
+const ASK_GENERIC = ['What\'s the difference between…?', 'Give me an example of…', 'Why does that happen?'];
+
+function AskPanel({ thread, setThread, onClose }){
+  const [text, setText] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState('');
+  const endRef = useRef(null);
+  const hasCard = !!studyContext;
+
+  useEffect(() => {
+    const onKey = (e) => { if (e.key === 'Escape') onClose(); };
+    document.addEventListener('keydown', onKey);
+    return () => document.removeEventListener('keydown', onKey);
+  }, [onClose]);
+
+  // keep the newest message in view as the thread grows
+  useEffect(() => {
+    if (endRef.current){ try { endRef.current.scrollIntoView({ block: 'end' }); } catch {} }
+  }, [thread, busy]);
+
+  const send = async (raw) => {
+    const q = String(raw != null ? raw : text).trim();
+    if (!q || busy) return;
+    const next = thread.concat([{ role: 'user', text: q }]);
+    setThread(next); setText(''); setErr(''); setBusy(true);
+    try {
+      const reply = await askHelper(next);
+      if (reply) setThread(next.concat([{ role: 'assistant', text: reply }]));
+      else setErr('Nothing came back. Try asking again.');
+    } catch (e){ setErr(friendlyApiError(e)); }
+    finally { setBusy(false); }
+  };
+
+  const onKeyDown = (e) => {
+    if (e.key === 'Enter' && !e.shiftKey){ e.preventDefault(); send(); }
+  };
+
+  const starters = (hasCard ? ['Explain the card I\'m on, simply'] : []).concat(ASK_GENERIC).slice(0, 4);
+  /* A starter with a "…" is half a question — drop it in the box for them to
+     finish. A complete one is sent straight away. */
+  const useStarter = (s) => {
+    if (s.indexOf('…') < 0){ send(s); return; }
+    setText(s.replace('…?', ' ').replace('…', ' '));
+  };
+
+  return (
+    <div className="sf-ask">
+      <div className="flex items-center justify-between"
+        style={{ padding: '12px 14px', borderBottom: `1px solid ${T.border}`, flexShrink: 0 }}>
+        <div className="flex items-center gap-2" style={{ minWidth: 0 }}>
+          <span style={{ color: T.accent, display: 'flex' }}><AskIcon size={20} /></span>
+          <div style={{ minWidth: 0 }}>
+            <div style={{ fontFamily: SANS, fontSize: 15, fontWeight: 700, color: T.ink }}>Ask anything</div>
+            {hasCard && <Sub style={{ fontSize: 11.5 }}>It can see the card you're on</Sub>}
+          </div>
+        </div>
+        <div className="flex items-center gap-1" style={{ flexShrink: 0 }}>
+          {thread.length > 0 && (
+            <button className="sf-tap" onClick={() => { setThread([]); setErr(''); }}
+              style={{ background: 'none', border: 'none', cursor: 'pointer', padding: '4px 8px',
+                fontFamily: SANS, fontSize: 12.5, fontWeight: 600, color: T.muted }}>Clear</button>
+          )}
+          <button className="sf-tap" onClick={onClose} aria-label="Close"
+            style={{ background: 'none', border: 'none', cursor: 'pointer', color: T.faint,
+              fontSize: 19, lineHeight: '18px', padding: '4px 6px' }}>✕</button>
+        </div>
+      </div>
+
+      <div style={{ flex: 1, overflowY: 'auto', padding: 14 }}>
+        {thread.length === 0 && (
+          <div>
+            <Sub style={{ marginBottom: 12 }}>
+              Stuck on something? Ask it here — a definition, a worked step, why an answer is what it is.
+              {hasCard ? ' It already knows the card you\'re looking at.' : ''}
+            </Sub>
+            <div className="flex flex-col gap-2">
+              {starters.map((s, i) => (
+                <button key={i} className="sf-tap" onClick={() => useStarter(s)}
+                  style={{ textAlign: 'left', background: T.well, border: 'none', borderRadius: R.well,
+                    padding: '11px 13px', cursor: 'pointer', fontFamily: SANS, fontSize: 14, color: T.ink }}>
+                  {s}
+                </button>
+              ))}
+            </div>
+          </div>
+        )}
+
+        {thread.map((m, i) => m.role === 'user' ? (
+          <div key={i} style={{ display: 'flex', justifyContent: 'flex-end', marginBottom: 12 }}>
+            <div style={{ maxWidth: '86%', background: T.accent, color: '#fff', borderRadius: '16px 16px 5px 16px',
+              padding: '9px 13px', fontFamily: SANS, fontSize: 14.5, lineHeight: 1.5, whiteSpace: 'pre-wrap' }}>{m.text}</div>
+          </div>
+        ) : (
+          <div key={i} style={{ background: T.well, borderRadius: '16px 16px 16px 5px', padding: '11px 13px', marginBottom: 12 }}>
+            <RichText text={m.text} />
+          </div>
+        ))}
+
+        {busy && <Sub style={{ padding: '2px 4px' }}>Thinking…</Sub>}
+        {err && <Sub style={{ color: T.red, padding: '2px 4px' }}>{err}</Sub>}
+        <div ref={endRef} />
+      </div>
+
+      <div style={{ borderTop: `1px solid ${T.border}`, flexShrink: 0,
+        padding: '10px 10px calc(10px + env(safe-area-inset-bottom))' }}>
+        <div className="flex gap-2" style={{ alignItems: 'flex-end' }}>
+          <textarea value={text} onChange={e => setText(e.target.value)} onKeyDown={onKeyDown} rows={1}
+            placeholder="Ask a question…"
+            style={{ flex: 1, background: T.well, color: T.ink, border: `1px solid ${T.border}`,
+              borderRadius: R.well, padding: '11px 13px', fontFamily: SANS, fontSize: 15, lineHeight: 1.45,
+              resize: 'none', outline: 'none', maxHeight: 120 }} />
+          <button className="sf-btn" onClick={() => send()} disabled={busy || !text.trim()} aria-label="Send"
+            style={{ width: 44, height: 44, borderRadius: R.pill, border: 'none', flexShrink: 0,
+              background: T.accent, color: '#fff', fontSize: 19, fontWeight: 700,
+              cursor: (busy || !text.trim()) ? 'default' : 'pointer', opacity: (busy || !text.trim()) ? 0.45 : 1 }}>↑</button>
+        </div>
+        <Sub style={{ fontSize: 11, marginTop: 7, textAlign: 'center' }}>
+          It can be wrong — check anything that matters against your notes.
+        </Sub>
+      </div>
+    </div>
+  );
+}
+
 export default function App(){
   const [ready, setReady] = useState(false);
   const [tab, setTab] = useState('home');
@@ -3062,6 +3620,8 @@ export default function App(){
   const [focus, setFocus] = useState('all');             // which deck the feed is showing: 'all' or a deck id
   const [quiz, setQuiz] = useState(null);                // { deckId } while a quiz is open, else null
   const [showNews, setShowNews] = useState(false);       // "What's new" note after an update
+  const [askOpen, setAskOpen] = useState(false);         // the ask-anything helper
+  const [thread, setThread] = useState([]);              // its conversation, this session only
   const reduceMotion = useRef(false);
 
   // a focused deck that then gets deleted shouldn't leave the feed stuck empty
@@ -3235,6 +3795,10 @@ export default function App(){
     </Shell>
     {quiz && <Quiz decks={library.decks} deckId={quiz.deckId} onClose={() => setQuiz(null)} onDone={recordQuiz} />}
     {showNews && <WhatsNew onClose={dismissNews} />}
+    {/* the helper is available on every screen — except where something else
+        already owns the whole screen (a quiz, the update note) */}
+    {askOpen && <AskPanel thread={thread} setThread={setThread} onClose={() => setAskOpen(false)} />}
+    {!askOpen && !quiz && !showNews && <AskFab onClick={() => setAskOpen(true)} />}
     </>
   );
 }
@@ -3297,6 +3861,19 @@ function Shell({ children, tab, setTab, due, pending }){
           .sf-navside   { display: flex; }
           .sf-page      { padding-left: 232px; }
         }
+
+        /* ---- ask helper --------------------------------------------------
+           Full screen on a phone (a 390px panel floating over a 375px screen
+           is just a worse full screen), a docked panel once there's room.
+           The button clears the bottom nav until the nav moves to the side. */
+        .sf-fab { position: fixed; right: 16px; bottom: 84px; z-index: 55; }
+        .sf-ask { position: fixed; inset: 0; z-index: 65; display: flex; flex-direction: column;
+          background: ${T.surface}; animation: sf-in 220ms cubic-bezier(.2,.8,.3,1); }
+        @media (min-width: 720px) {
+          .sf-ask { inset: auto 20px 20px auto; width: 390px; height: min(620px, 78vh);
+            border: 1px solid ${T.border}; border-radius: 20px; box-shadow: ${SH.card}; overflow: hidden; }
+        }
+        @media (min-width: 1024px) { .sf-fab { right: 26px; bottom: 26px; } }
 
         /* one column on a phone, two once there's room */
         .sf-grid2 { display: grid; grid-template-columns: 1fr; gap: 10px; }
