@@ -1,0 +1,35 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+  <title>Study Feed</title>
+  <meta name="description" content="Turns dead time into revision." />
+
+  <!-- installs to the home screen as a proper full-screen app -->
+  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-status-bar-style" content="default" />
+  <meta name="apple-mobile-web-app-title" content="Study Feed" />
+  <meta name="theme-color" content="#F6F8FB" />
+  <link rel="manifest" href="../manifest.webmanifest" />
+  <link rel="apple-touch-icon" href="../icon.png" />
+
+  <!-- Typefaces. StudyFeed.jsx picks between them via --sf-font (data-font on
+       <html>); system-ui is the fallback, so the Artifact build — which can't
+       reach these — still renders deliberately. -->
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link rel="stylesheet"
+    href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&family=Inter:wght@400;500;600;700;800&display=swap" />
+
+  <!-- the app uses Tailwind core utilities for layout only -->
+  <script src="https://cdn.tailwindcss.com"></script>
+  <style>
+    html, body { margin: 0; background: #F6F8FB; -webkit-font-smoothing: antialiased; }
+  </style>
+</head>
+<body>
+  <div id="root"></div>
+  <script type="module" src="../app.js"></script>
+</body>
+</html>

@@ -1,35 +1,595 @@
 <!doctype html>
 <html lang="en">
 <head>
-  <meta charset="utf-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
-  <title>Study Feed</title>
-  <meta name="description" content="Turns dead time into revision." />
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+<title>Study Feed — study like you scroll</title>
+<meta name="description" content="Study Feed turns your own notes into a feed of exam questions. It marks what you write, shows you how to reach the next grade, and brings back whatever you're about to forget. Free, no account." />
+<meta name="theme-color" content="#F4F2FD" />
+<link rel="apple-touch-icon" href="icon.png" />
 
-  <!-- installs to the home screen as a proper full-screen app -->
-  <meta name="apple-mobile-web-app-capable" content="yes" />
-  <meta name="apple-mobile-web-app-status-bar-style" content="default" />
-  <meta name="apple-mobile-web-app-title" content="Study Feed" />
-  <meta name="theme-color" content="#F6F8FB" />
-  <link rel="manifest" href="manifest.webmanifest" />
-  <link rel="apple-touch-icon" href="icon.png" />
+<meta property="og:type" content="website" />
+<meta property="og:title" content="Study Feed — study like you scroll" />
+<meta property="og:description" content="Your notes, turned into a feed of exam questions that marks your answers and remembers what you forget." />
+<meta name="twitter:card" content="summary_large_image" />
 
-  <!-- Typefaces. StudyFeed.jsx picks between them via --sf-font (data-font on
-       <html>); system-ui is the fallback, so the Artifact build — which can't
-       reach these — still renders deliberately. -->
-  <link rel="preconnect" href="https://fonts.googleapis.com" />
-  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
-  <link rel="stylesheet"
-    href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&family=Inter:wght@400;500;600;700;800&display=swap" />
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&display=swap" />
 
-  <!-- the app uses Tailwind core utilities for layout only -->
-  <script src="https://cdn.tailwindcss.com"></script>
-  <style>
-    html, body { margin: 0; background: #F6F8FB; -webkit-font-smoothing: antialiased; }
-  </style>
+<style>
+/* ============================================================================
+   Study Feed — landing page. Standalone: no framework, no build step, one file.
+   Marketing pages live or die on how fast they paint, and this one is ~15KB.
+   Palette and type are the app's own (indigo #6472F0, Plus Jakarta Sans) so
+   arriving in the app doesn't feel like a different product.
+   ========================================================================== */
+:root{
+  color-scheme: light;                 /* a marketing page commits to one look */
+  --ink:#1F2230; --muted:#5C6274; --faint:#8A90A0;
+  --accent:#6472F0; --accent-ink:#4E5AD6; --accent-soft:#EEF0FE;
+  --green:#37B98C; --amber:#E1A63E; --red:#E06B62;
+  --surface:#FFFFFF; --line:#E9EBF2; --well:#F4F6FA;
+  --r:18px; --pill:999px;
+  --sh-card:0 1px 2px rgba(30,34,50,.04), 0 18px 40px -22px rgba(30,34,50,.28);
+  --sh-pop:0 10px 30px -12px rgba(100,114,240,.45);
+  --font:"Plus Jakarta Sans", system-ui, -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+}
+*{ box-sizing:border-box; -webkit-tap-highlight-color:transparent; }
+html,body{ margin:0; padding:0; }
+body{
+  font-family:var(--font); color:var(--ink); background:#FDFDFE;
+  -webkit-font-smoothing:antialiased; overflow-x:hidden;
+}
+a{ color:inherit; text-decoration:none; }
+
+/* ---- the wash ------------------------------------------------------------
+   A single tall gradient behind the hero that fades to the page colour, with
+   a faint grain over it so the large flat area doesn't band on cheap panels. */
+.wash{ position:absolute; inset:0 0 auto; height:760px; z-index:-2;
+  background:
+    radial-gradient(1100px 520px at 78% -8%, rgba(140,116,240,.34), transparent 62%),
+    radial-gradient(900px 460px at 12% 2%,  rgba(100,114,240,.24), transparent 58%),
+    linear-gradient(180deg, #EFE9FC 0%, #F4F3FD 34%, #FDFDFE 100%);
+}
+.grain{ position:absolute; inset:0 0 auto; height:760px; z-index:-1; opacity:.4; pointer-events:none;
+  background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='140' height='140'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='.85' numOctaves='3'/%3E%3C/filter%3E%3Crect width='140' height='140' filter='url(%23n)' opacity='.5'/%3E%3C/svg%3E"); }
+
+.wrap{ width:100%; max-width:1180px; margin:0 auto; padding:0 24px; }
+
+/* ---- nav ----------------------------------------------------------------- */
+nav{ position:sticky; top:0; z-index:20; padding:16px 0;
+  backdrop-filter:blur(12px); -webkit-backdrop-filter:blur(12px);
+  transition:background .3s, box-shadow .3s, border-color .3s;
+  border-bottom:1px solid transparent; }
+nav.stuck{ background:rgba(253,253,254,.82); border-bottom-color:var(--line); }
+.nav-in{ display:flex; align-items:center; gap:20px; }
+.brand{ display:flex; align-items:center; gap:10px; font-weight:800; font-size:17.5px; letter-spacing:-.03em; }
+.brand svg{ display:block; }
+.nav-links{ margin-left:auto; display:flex; align-items:center; gap:26px; }
+.nav-links a{ font-size:14.5px; font-weight:600; color:var(--muted); transition:color .2s; }
+.nav-links a:hover{ color:var(--ink); }
+@media (max-width:720px){ .nav-links a.hide-sm{ display:none; } }
+
+.btn{ display:inline-flex; align-items:center; justify-content:center; gap:8px;
+  font-family:var(--font); font-weight:700; border:none; cursor:pointer;
+  border-radius:var(--pill); transition:transform .16s cubic-bezier(.3,.8,.4,1), box-shadow .25s, background .2s; }
+.btn:active{ transform:scale(.975); }
+.btn-primary{ background:var(--accent); color:#fff; box-shadow:var(--sh-pop); }
+.btn-primary:hover{ background:var(--accent-ink); box-shadow:0 14px 34px -10px rgba(100,114,240,.6); transform:translateY(-1px); }
+.btn-ghost{ background:var(--surface); color:var(--ink); box-shadow:0 1px 2px rgba(30,34,50,.06); border:1px solid var(--line); }
+.btn-ghost:hover{ border-color:#D5D9E6; }
+.btn-sm{ font-size:14px; padding:10px 18px; }
+.btn-lg{ font-size:18px; padding:19px 38px; }
+
+/* ---- hero ---------------------------------------------------------------- */
+.hero{ display:grid; grid-template-columns:1fr; gap:48px; align-items:center; padding:64px 0 90px; }
+@media (min-width:960px){ .hero{ grid-template-columns:1.02fr 1fr; gap:60px; padding:88px 0 120px; } }
+
+h1{ margin:0; font-size:clamp(42px,7.2vw,72px); line-height:1.02; letter-spacing:-.045em; font-weight:800; }
+h1 .accent{ color:var(--accent); }
+.lede{ margin:22px 0 0; font-size:clamp(16.5px,2.2vw,19px); line-height:1.55; color:var(--muted); max-width:34ch; }
+.cta-row{ margin-top:34px; display:flex; flex-direction:column; align-items:flex-start; gap:12px; }
+.cta-note{ font-size:14px; color:var(--faint); font-weight:500; padding-left:4px; }
+
+/* staggered entrance */
+.rise{ opacity:0; transform:translateY(16px); animation:rise .78s cubic-bezier(.2,.8,.25,1) forwards; }
+.d1{ animation-delay:.06s } .d2{ animation-delay:.16s } .d3{ animation-delay:.26s } .d4{ animation-delay:.36s } .d5{ animation-delay:.46s }
+@keyframes rise{ to{ opacity:1; transform:none; } }
+
+/* ---- the demo card — the centrepiece --------------------------------------
+   Loops through the actual product: files come in, cards get written, a card
+   gets answered. Everything is CSS; one small script advances the scene. */
+.demo{ position:relative; background:var(--surface); border-radius:26px; padding:22px;
+  box-shadow:var(--sh-card); border:1px solid rgba(255,255,255,.7); min-height:430px;
+  display:flex; flex-direction:column; }
+.demo-head{ display:flex; align-items:center; gap:7px; padding:2px 4px 16px; }
+.dot{ width:9px; height:9px; border-radius:9px; background:#E4E7EF; }
+.demo-stage{ position:relative; flex:1; }
+.scene{ position:absolute; inset:0; opacity:0; transform:translateY(10px); pointer-events:none;
+  transition:opacity .5s ease, transform .5s cubic-bezier(.2,.8,.3,1); }
+.scene.on{ opacity:1; transform:none; }
+
+.filerow{ display:flex; align-items:center; gap:12px; background:var(--well);
+  border:1px solid var(--line); border-radius:13px; padding:12px 14px; margin-bottom:10px;
+  opacity:0; transform:translateY(10px) scale(.98); }
+.scene.on .filerow{ animation:pop .5s cubic-bezier(.2,.8,.3,1) forwards; }
+.scene.on .filerow:nth-child(1){ animation-delay:.08s } .scene.on .filerow:nth-child(2){ animation-delay:.24s }
+.scene.on .filerow:nth-child(3){ animation-delay:.4s }  .scene.on .filerow:nth-child(4){ animation-delay:.56s }
+@keyframes pop{ to{ opacity:1; transform:none; } }
+.filerow .ft{ width:32px; height:32px; border-radius:9px; display:grid; place-items:center; flex-shrink:0; font-size:10px; font-weight:800; color:#fff; letter-spacing:.02em; }
+.filerow .fname{ font-size:14.5px; font-weight:600; }
+.filerow .fmeta{ font-size:12px; color:var(--faint); margin-top:1px; }
+.tick{ margin-left:auto; color:var(--green); opacity:0; }
+.scene.on .filerow .tick{ animation:rise .4s ease forwards; animation-delay:1s; }
+
+/* generating */
+.gen{ display:flex; flex-direction:column; align-items:center; justify-content:center; height:100%; gap:20px; }
+.rings{ position:relative; width:96px; height:96px; animation:breathe 4s ease-in-out infinite; }
+.ring{ position:absolute; inset:0; border-radius:50%; }
+@keyframes breathe{ 0%,100%{ transform:scale(1) } 50%{ transform:scale(1.03) } }
+@keyframes spin{ to{ transform:rotate(360deg) } }
+@keyframes spinr{ to{ transform:rotate(-360deg) } }
+.genbar{ width:190px; height:7px; border-radius:99px; background:var(--well); overflow:hidden; }
+.genbar i{ display:block; height:100%; width:0; border-radius:99px; background:var(--accent); }
+.scene.on .genbar i{ animation:fill 2.6s cubic-bezier(.35,.7,.4,1) forwards; }
+@keyframes fill{ to{ width:100% } }
+
+/* the study card */
+.qcard{ background:var(--surface); border:1px solid var(--line); border-radius:16px; padding:18px; box-shadow:0 1px 2px rgba(30,34,50,.05); }
+.qtop{ display:flex; align-items:center; gap:10px; margin-bottom:14px; }
+.tile{ width:32px; height:32px; border-radius:9px; background:rgba(100,114,240,.14); color:var(--accent);
+  display:grid; place-items:center; font-weight:800; font-size:13px; flex-shrink:0; }
+.chip{ display:inline-flex; align-items:center; gap:6px; font-size:11.5px; font-weight:700; padding:4px 10px; border-radius:var(--pill); }
+.chip-mut{ background:var(--well); color:var(--muted); margin-left:auto; }
+.chip-green{ background:rgba(55,185,140,.14); color:#1E8C67; }
+.chip-amber{ background:var(--amber); color:#fff; }
+.qtext{ font-size:18px; font-weight:700; line-height:1.35; letter-spacing:-.02em; }
+.qans{ margin-top:14px; padding-top:14px; border-top:1px solid var(--line); font-size:14.5px; line-height:1.55; color:var(--muted); opacity:0; }
+.scene.on .qans{ animation:rise .5s ease forwards; animation-delay:1.5s; }
+.grades{ display:grid; grid-template-columns:repeat(4,1fr); gap:7px; margin-top:16px; opacity:0; }
+.scene.on .grades{ animation:rise .5s ease forwards; animation-delay:1.8s; }
+.grade{ border-radius:12px; padding:11px 4px; text-align:center; font-size:12.5px; font-weight:800; }
+.grade small{ display:block; font-size:9.5px; font-weight:600; color:var(--faint); margin-top:3px; }
+.g0{ background:rgba(224,107,98,.11); color:var(--red) } .g1{ background:rgba(225,166,62,.13); color:#B07C1C }
+.g2{ background:rgba(55,185,140,.13); color:#1E8C67 } .g3{ background:rgba(100,114,240,.11); color:var(--accent) }
+.scene.on .g2{ animation:tap .5s ease forwards; animation-delay:2.6s; }
+@keyframes tap{ 0%{ transform:none } 40%{ transform:scale(1.09) } 100%{ transform:none } }
+.combo{ position:absolute; left:50%; top:44%; transform:translate(-50%,-50%) scale(.5); opacity:0;
+  background:var(--amber); color:#fff; font-weight:800; font-size:15px; padding:9px 18px; border-radius:var(--pill);
+  box-shadow:0 12px 30px -10px rgba(225,166,62,.7); display:flex; align-items:center; gap:7px; white-space:nowrap; }
+.scene.on .combo{ animation:combo 1.5s cubic-bezier(.2,.8,.3,1) forwards; animation-delay:2.75s; }
+@keyframes combo{
+  0%{ opacity:0; transform:translate(-50%,-50%) scale(.5) }
+  22%{ opacity:1; transform:translate(-50%,-50%) scale(1.14) }
+  36%{ transform:translate(-50%,-50%) scale(1) }
+  78%{ opacity:1; transform:translate(-50%,-58%) scale(1) }
+  100%{ opacity:0; transform:translate(-50%,-72%) scale(.94) }
+}
+.spark{ position:absolute; left:50%; top:44%; width:8px; height:8px; border-radius:8px; opacity:0; }
+.scene.on .spark{ animation:spark .85s cubic-bezier(.15,.75,.35,1) forwards; animation-delay:2.8s; }
+@keyframes spark{ 0%{ opacity:1; transform:translate(-50%,-50%) scale(.4) }
+  70%{ opacity:1 } 100%{ opacity:0; transform:translate(calc(-50% + var(--x)), calc(-50% + var(--y))) scale(1) } }
+
+.scene-dots{ display:flex; gap:6px; justify-content:center; padding-top:16px; }
+.scene-dots b{ width:6px; height:6px; border-radius:6px; background:#DFE3EE; transition:background .3s, width .3s; }
+.scene-dots b.on{ background:var(--accent); width:18px; }
+
+/* floating file glyphs above the card */
+.floaters{ position:absolute; top:-26px; left:0; right:0; display:flex; justify-content:center; gap:12px; z-index:2; }
+.floaters span{ width:46px; height:46px; border-radius:14px; background:#fff; box-shadow:0 6px 18px -6px rgba(30,34,50,.24);
+  display:grid; place-items:center; font-size:10px; font-weight:800; color:#fff; animation:bob 3.4s ease-in-out infinite; }
+.floaters span:nth-child(2){ animation-delay:.4s } .floaters span:nth-child(3){ animation-delay:.8s } .floaters span:nth-child(4){ animation-delay:1.2s }
+@keyframes bob{ 0%,100%{ transform:translateY(0) } 50%{ transform:translateY(-7px) } }
+.fbadge{ width:30px; height:30px; border-radius:9px; display:grid; place-items:center; }
+
+/* ---- proof strip --------------------------------------------------------- */
+.proof{ padding:8px 0 76px; text-align:center; }
+.proof p{ margin:0 0 20px; font-size:12px; font-weight:700; letter-spacing:.12em; text-transform:uppercase; color:var(--faint); }
+.proof ul{ list-style:none; margin:0; padding:0; display:flex; flex-wrap:wrap; justify-content:center; gap:10px 12px; }
+.proof li{ font-size:14px; font-weight:600; color:var(--muted); background:var(--surface);
+  border:1px solid var(--line); border-radius:var(--pill); padding:9px 17px; }
+
+/* ---- sections ------------------------------------------------------------ */
+section{ padding:76px 0; }
+.eyebrow{ font-size:12.5px; font-weight:800; letter-spacing:.1em; text-transform:uppercase; color:var(--accent); margin:0 0 12px; }
+h2{ margin:0; font-size:clamp(29px,4.4vw,44px); line-height:1.1; letter-spacing:-.035em; font-weight:800; }
+.sub{ margin:16px 0 0; font-size:17px; line-height:1.6; color:var(--muted); max-width:52ch; }
+.center{ text-align:center; } .center .sub{ margin-left:auto; margin-right:auto; }
+
+.feat{ display:grid; grid-template-columns:1fr; gap:36px; align-items:center; }
+@media (min-width:900px){ .feat{ grid-template-columns:1fr 1fr; gap:64px; } .feat.flip .fig{ order:-1; } }
+.fig{ background:var(--surface); border:1px solid var(--line); border-radius:22px; padding:22px; box-shadow:var(--sh-card); }
+
+.reveal{ opacity:0; transform:translateY(26px); transition:opacity .75s cubic-bezier(.2,.8,.25,1), transform .75s cubic-bezier(.2,.8,.25,1); }
+.reveal.in{ opacity:1; transform:none; }
+.reveal.s1{ transition-delay:.08s } .reveal.s2{ transition-delay:.16s } .reveal.s3{ transition-delay:.24s }
+
+.rung{ margin-bottom:12px; }
+.rung .lbl{ font-size:11.5px; font-weight:700; padding:3px 9px; border-radius:var(--pill); display:inline-block; margin-bottom:5px; }
+.rung p{ margin:0; font-size:13.5px; line-height:1.5; color:var(--muted); }
+.step{ background:var(--well); border-radius:13px; padding:12px 14px; margin-bottom:9px; }
+.step b{ display:block; font-size:14px; margin-bottom:5px; }
+.step q{ display:block; font-size:13px; color:var(--muted); font-style:italic; }
+.step em{ display:block; font-size:13.5px; line-height:1.5; margin-top:8px; padding-left:11px; border-left:2.5px solid rgba(55,185,140,.55); font-style:normal; }
+
+.bars{ display:flex; align-items:flex-end; gap:9px; height:104px; margin-top:6px; }
+.bars i{ flex:1; background:linear-gradient(180deg, var(--accent), #8E99F6); border-radius:7px 7px 3px 3px; transform-origin:bottom;
+  transform:scaleY(0); transition:transform .8s cubic-bezier(.2,.8,.25,1); }
+.reveal.in .bars i{ transform:scaleY(1); }
+.bars i:nth-child(1){ transition-delay:.05s } .bars i:nth-child(2){ transition-delay:.12s } .bars i:nth-child(3){ transition-delay:.19s }
+.bars i:nth-child(4){ transition-delay:.26s } .bars i:nth-child(5){ transition-delay:.33s } .bars i:nth-child(6){ transition-delay:.4s }
+.bars i:nth-child(7){ transition-delay:.47s }
+.bar-lbl{ display:flex; gap:9px; margin-top:9px; }
+.bar-lbl span{ flex:1; text-align:center; font-size:11px; font-weight:600; color:var(--faint); }
+
+.bubble{ border-radius:16px 16px 16px 5px; background:var(--well); padding:12px 14px; font-size:14px; line-height:1.55; color:var(--ink); margin-bottom:10px; }
+.bubble.me{ border-radius:16px 16px 5px 16px; background:var(--accent); color:#fff; margin-left:auto; max-width:82%; }
+
+/* ---- how it works -------------------------------------------------------- */
+.steps{ display:grid; grid-template-columns:1fr; gap:18px; margin-top:44px; }
+@media (min-width:800px){ .steps{ grid-template-columns:repeat(3,1fr); gap:22px; } }
+.stepcard{ background:var(--surface); border:1px solid var(--line); border-radius:20px; padding:26px 24px; box-shadow:0 1px 2px rgba(30,34,50,.05); }
+.stepno{ width:34px; height:34px; border-radius:11px; background:var(--accent-soft); color:var(--accent-ink);
+  display:grid; place-items:center; font-weight:800; font-size:15px; margin-bottom:14px; }
+.stepcard h3{ margin:0 0 7px; font-size:18px; letter-spacing:-.02em; }
+.stepcard p{ margin:0; font-size:14.5px; line-height:1.6; color:var(--muted); }
+
+/* ---- closing ------------------------------------------------------------- */
+.close{ position:relative; overflow:hidden; border-radius:30px; padding:74px 28px; text-align:center; margin:20px 0 84px;
+  background:linear-gradient(140deg,#5F6DEE 0%, #7A63E8 52%, #9A6FE4 100%); color:#fff; }
+.close::after{ content:""; position:absolute; inset:0;
+  background:radial-gradient(600px 300px at 50% -10%, rgba(255,255,255,.28), transparent 65%); }
+.close > *{ position:relative; z-index:1; }
+.close h2{ color:#fff; }
+.close p{ margin:16px auto 30px; font-size:17px; line-height:1.6; color:rgba(255,255,255,.9); max-width:46ch; }
+.btn-white{ background:#fff; color:var(--accent-ink); box-shadow:0 12px 30px -12px rgba(0,0,0,.4); }
+.btn-white:hover{ background:#F6F6FF; transform:translateY(-1px); }
+
+footer{ padding:0 0 56px; }
+.foot{ display:flex; flex-wrap:wrap; gap:16px 28px; align-items:center; padding-top:30px; border-top:1px solid var(--line); }
+.foot .brand{ font-size:15.5px; }
+.foot nav{ position:static; padding:0; margin-left:auto; display:flex; gap:24px; backdrop-filter:none; border:none; }
+.foot a{ font-size:14px; color:var(--muted); font-weight:600; }
+.foot a:hover{ color:var(--ink); }
+.foot small{ width:100%; font-size:12.5px; color:var(--faint); }
+
+@media (prefers-reduced-motion: reduce){
+  *{ animation:none !important; transition:none !important; }
+  .rise,.reveal{ opacity:1 !important; transform:none !important; }
+  .filerow,.qans,.grades,.tick{ opacity:1 !important; }
+  .bars i{ transform:scaleY(1) !important; }
+}
+</style>
+<noscript><style>
+  /* every entrance animation starts hidden — without JS, show everything */
+  .rise, .reveal{ opacity:1 !important; transform:none !important; animation:none !important; }
+  .scene{ opacity:1 !important; position:relative !important; transform:none !important; }
+  .scene[data-scene="1"], .scene[data-scene="2"]{ display:none; }
+  .filerow, .qans, .grades{ opacity:1 !important; transform:none !important; }
+  .bars i{ transform:scaleY(1) !important; }
+</style></noscript>
 </head>
 <body>
-  <div id="root"></div>
-  <script type="module" src="app.js"></script>
+<div class="wash"></div><div class="grain"></div>
+
+<nav id="nav">
+  <div class="wrap nav-in">
+    <a class="brand" href="#top">
+      <svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="#6472F0" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3 3 7.5l9 4.5 9-4.5zM3 12.5 12 17l9-4.5M3 17.2 12 21.7l9-4.5"/></svg>
+      Study Feed
+    </a>
+    <div class="nav-links">
+      <a href="#how" class="hide-sm">How it works</a>
+      <a href="#features" class="hide-sm">What it does</a>
+      <a class="btn btn-primary btn-sm" href="/app/">Open the app →</a>
+    </div>
+  </div>
+</nav>
+
+<main id="top">
+  <div class="wrap">
+    <div class="hero">
+      <div>
+        <h1 class="rise d1">Study like<br>you <span class="accent">scroll.</span></h1>
+        <p class="lede rise d2">Your own notes, turned into a feed of exam questions — marked, explained, and brought back the day before you'd forget them.</p>
+        <div class="cta-row rise d3">
+          <a class="btn btn-primary btn-lg" href="/app/">Start studying — free →</a>
+          <span class="cta-note">No account. No card. Works on your phone.</span>
+        </div>
+      </div>
+
+      <div class="rise d4" style="position:relative">
+        <div class="floaters">
+          <span style="background:#2B579A">W</span>
+          <span style="background:#D93025">PDF</span>
+          <span style="background:#D04423">PPT</span>
+          <span style="background:#6472F0">IMG</span>
+        </div>
+        <div class="demo">
+          <div class="demo-head"><i class="dot"></i><i class="dot"></i><i class="dot"></i></div>
+          <div class="demo-stage">
+
+            <!-- 1. your material goes in -->
+            <div class="scene" data-scene="0">
+              <div class="filerow">
+                <div class="ft" style="background:#D93025">PDF</div>
+                <div><div class="fname">Rates of reaction.pdf</div><div class="fmeta">14 pages · text + diagrams</div></div>
+                <svg class="tick" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"><path d="M4.8 12.5 9.7 17.4 19.2 6.9"/></svg>
+              </div>
+              <div class="filerow">
+                <div class="ft" style="background:#D04423">PPT</div>
+                <div><div class="fname">Lesson 6 slides.pptx</div><div class="fmeta">22 slides</div></div>
+                <svg class="tick" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"><path d="M4.8 12.5 9.7 17.4 19.2 6.9"/></svg>
+              </div>
+              <div class="filerow">
+                <div class="ft" style="background:#6472F0">IMG</div>
+                <div><div class="fname">Photo of the whiteboard</div><div class="fmeta">read by the vision model</div></div>
+                <svg class="tick" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"><path d="M4.8 12.5 9.7 17.4 19.2 6.9"/></svg>
+              </div>
+              <div class="filerow">
+                <div class="ft" style="background:#2B579A">W</div>
+                <div><div class="fname">Your own typed notes</div><div class="fmeta">or just a topic name</div></div>
+                <svg class="tick" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"><path d="M4.8 12.5 9.7 17.4 19.2 6.9"/></svg>
+              </div>
+            </div>
+
+            <!-- 2. cards get written -->
+            <div class="scene" data-scene="1">
+              <div class="gen">
+                <div class="rings">
+                  <div class="ring" style="background:conic-gradient(from 0deg,transparent 0deg,#6472F0 90deg,transparent 180deg);-webkit-mask:radial-gradient(circle at 50% 50%,transparent 35%,#000 37%,#000 42%,transparent 44%);mask:radial-gradient(circle at 50% 50%,transparent 35%,#000 37%,#000 42%,transparent 44%);animation:spin 3s linear infinite"></div>
+                  <div class="ring" style="background:conic-gradient(from 0deg,transparent 0deg,#4E5AD6 120deg,rgba(78,90,214,.4) 240deg,transparent 360deg);-webkit-mask:radial-gradient(circle at 50% 50%,transparent 46%,#000 48%,#000 53%,transparent 55%);mask:radial-gradient(circle at 50% 50%,transparent 46%,#000 48%,#000 53%,transparent 55%);animation:spin 2.5s cubic-bezier(.4,0,.6,1) infinite"></div>
+                  <div class="ring" style="background:conic-gradient(from 180deg,transparent 0deg,#37B98C 50deg,transparent 100deg);-webkit-mask:radial-gradient(circle at 50% 50%,transparent 57%,#000 59%,#000 63%,transparent 65%);mask:radial-gradient(circle at 50% 50%,transparent 57%,#000 59%,#000 63%,transparent 65%);animation:spinr 4s linear infinite"></div>
+                </div>
+                <div style="text-align:center">
+                  <div style="font-size:15.5px;font-weight:700;letter-spacing:-.02em">Writing your questions…</div>
+                  <div style="font-size:13.5px;color:var(--muted);margin-top:6px">Flip cards, multi-choice and full exam questions</div>
+                </div>
+                <div class="genbar"><i></i></div>
+              </div>
+            </div>
+
+            <!-- 3. you answer one -->
+            <div class="scene" data-scene="2">
+              <div class="qcard">
+                <div class="qtop">
+                  <div class="tile">C</div>
+                  <div>
+                    <div style="font-size:13.5px;font-weight:700">Chemistry</div>
+                    <div style="font-size:12px;color:var(--faint)">Rates of reaction</div>
+                  </div>
+                  <span class="chip chip-mut">Flip</span>
+                </div>
+                <div class="qtext">What is activation energy?</div>
+                <div class="qans">
+                  <span class="chip chip-green" style="margin-bottom:8px">Answer</span><br>
+                  The minimum energy colliding particles need before a reaction can happen.
+                </div>
+                <div class="grades">
+                  <div class="grade g0">Again<small>in a moment</small></div>
+                  <div class="grade g1">Hard<small>tomorrow</small></div>
+                  <div class="grade g2">Good<small>2 days</small></div>
+                  <div class="grade g3">Easy<small>4 days</small></div>
+                </div>
+              </div>
+              <div class="combo">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor" stroke="currentColor" stroke-width="2" stroke-linejoin="round"><path d="M12 3s5.2 3.6 5.2 8.4A5.2 5.2 0 0 1 12 16.6a5.2 5.2 0 0 1-5.2-5.2C6.8 8.4 9.4 7 9.4 7s-.4 2.2.9 3c1-1.6 1.7-4.3 1.7-7z"/></svg>
+                6 in a row
+              </div>
+              <i class="spark" style="--x:-58px;--y:-34px;background:#37B98C"></i>
+              <i class="spark" style="--x:52px;--y:-40px;background:#6472F0"></i>
+              <i class="spark" style="--x:-38px;--y:38px;background:#E1A63E"></i>
+              <i class="spark" style="--x:64px;--y:22px;background:#37B98C"></i>
+              <i class="spark" style="--x:6px;--y:-62px;background:#6472F0"></i>
+            </div>
+
+          </div>
+          <div class="scene-dots"><b></b><b></b><b></b></div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="wrap proof">
+    <p>Built for real revision</p>
+    <ul>
+      <li>NCEA Levels 1–3</li>
+      <li>Any subject</li>
+      <li>PDF, Word, PowerPoint, photos</li>
+      <li>Works offline once loaded</li>
+      <li>No sign-up</li>
+    </ul>
+  </div>
+
+  <!-- ---- features ------------------------------------------------------- -->
+  <div id="features"></div>
+
+  <section>
+    <div class="wrap feat">
+      <div class="reveal">
+        <p class="eyebrow">Your material, not someone else's</p>
+        <h2>Cards made from the notes you actually have.</h2>
+        <p class="sub">Drop in a PDF, a slide deck, a photo of the whiteboard, or just type a topic. Study Feed reads the text <em>and</em> the diagrams, then writes flip cards, fill-the-blanks, multi-choice and full exam questions from it. Turn on “Only my material” and nothing outside your notes gets in.</p>
+      </div>
+      <div class="fig reveal s1">
+        <div class="filerow" style="opacity:1;transform:none">
+          <div class="ft" style="background:#D93025">PDF</div>
+          <div><div class="fname">Rates of reaction.pdf</div><div class="fmeta">14 pages</div></div>
+        </div>
+        <div style="display:flex;gap:9px;flex-wrap:wrap;margin-top:14px">
+          <span class="chip chip-mut">12 flip</span>
+          <span class="chip chip-mut">6 multi-choice</span>
+          <span class="chip chip-mut">4 fill the blank</span>
+          <span class="chip chip-mut">3 exam questions</span>
+        </div>
+        <div style="margin-top:16px;height:1px;background:var(--line)"></div>
+        <div class="qtext" style="font-size:16px;margin-top:16px">Explain why grinding a solid speeds up a reaction.</div>
+        <div style="font-size:13.5px;color:var(--muted);line-height:1.55;margin-top:9px">Surface area increases, so more particles are exposed and collisions become more frequent…</div>
+      </div>
+    </div>
+  </section>
+
+  <section>
+    <div class="wrap feat flip">
+      <div class="reveal">
+        <p class="eyebrow">The bit that actually moves your grade</p>
+        <h2>It marks what you write — then shows you how to write it better.</h2>
+        <p class="sub">Write a real answer and it gets marked against Achieved, Merit and Excellence. Most apps stop at telling you what's missing. This one quotes your own sentences back and shows you the version that would have earned the higher grade.</p>
+      </div>
+      <div class="fig reveal s1">
+        <span class="chip" style="background:var(--well);color:var(--muted)">Achieved</span>
+        <div class="step" style="margin-top:14px">
+          <b>Name the mechanism, not just the outcome</b>
+          <q>“the reaction goes faster”</q>
+          <em>The reaction goes faster because the particles gain kinetic energy and collide more frequently.</em>
+        </div>
+        <div class="step">
+          <b>Link collision energy to activation energy</b>
+          <q>“they bump into each other more”</q>
+          <em>More of those collisions now exceed the activation energy, so a greater proportion are successful.</em>
+        </div>
+        <div style="font-size:13px;color:var(--muted);margin-top:12px"><b style="color:var(--ink)">Next time:</b> for every “it increases”, add the “because” that names the particle behaviour.</div>
+      </div>
+    </div>
+  </section>
+
+  <section>
+    <div class="wrap feat">
+      <div class="reveal">
+        <p class="eyebrow">Spaced repetition, quietly</p>
+        <h2>It brings a card back the day before you'd forget it.</h2>
+        <p class="sub">Every answer sets when you'll see that card next. Get it instantly and it disappears for weeks. Blank on something you were sure about and it comes straight back, flagged, until it sticks. You never plan a revision timetable — the feed already is one.</p>
+      </div>
+      <div class="fig reveal s1">
+        <div style="display:flex;justify-content:space-between;align-items:baseline;margin-bottom:4px">
+          <span style="font-size:12.5px;font-weight:700;color:var(--muted)">This week</span>
+          <span class="chip chip-amber"><svg width="12" height="12" viewBox="0 0 24 24" fill="currentColor"><path d="M12 3s5.2 3.6 5.2 8.4A5.2 5.2 0 0 1 12 16.6a5.2 5.2 0 0 1-5.2-5.2C6.8 8.4 9.4 7 9.4 7s-.4 2.2.9 3c1-1.6 1.7-4.3 1.7-7z"/></svg>12 day streak</span>
+        </div>
+        <div class="bars">
+          <i style="height:46%"></i><i style="height:72%"></i><i style="height:38%"></i>
+          <i style="height:88%"></i><i style="height:60%"></i><i style="height:96%"></i><i style="height:54%"></i>
+        </div>
+        <div class="bar-lbl"><span>M</span><span>T</span><span>W</span><span>T</span><span>F</span><span>S</span><span>S</span></div>
+      </div>
+    </div>
+  </section>
+
+  <section>
+    <div class="wrap feat flip">
+      <div class="reveal">
+        <p class="eyebrow">When a card isn't enough</p>
+        <h2>Ask it anything, without leaving the question.</h2>
+        <p class="sub">A tutor sits in the corner of every screen and it can already see the card you're on — so “why is that the answer?” just works. Stuck on something in a textbook? Photograph it and ask about the photo.</p>
+      </div>
+      <div class="fig reveal s1">
+        <div class="bubble me">Why is that the answer?</div>
+        <div class="bubble">Because the rate depends on how <b>often</b> particles collide with enough energy. Grinding the solid doesn't change the energy — it changes how many particles are exposed to collide in the first place.</div>
+        <div class="bubble me" style="max-width:60%">Explain it simpler</div>
+        <div class="bubble" style="opacity:.55">More surface, more chances to react…</div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ---- how it works ---------------------------------------------------- -->
+  <section id="how">
+    <div class="wrap">
+      <div class="center reveal">
+        <p class="eyebrow">Three steps</p>
+        <h2>From notes to revision in about a minute.</h2>
+      </div>
+      <div class="steps">
+        <div class="stepcard reveal s1"><div class="stepno">1</div><h3>Feed it your notes</h3><p>Upload a PDF, slides, a document or a photo — or type a topic and let it write from there.</p></div>
+        <div class="stepcard reveal s2"><div class="stepno">2</div><h3>Answer the feed</h3><p>Swipe through questions the way you'd scroll anything else. Write real answers to the exam ones.</p></div>
+        <div class="stepcard reveal s3"><div class="stepno">3</div><h3>Come back tomorrow</h3><p>It decides what you see next, and stops you when you're done for the day.</p></div>
+      </div>
+    </div>
+  </section>
+
+  <div class="wrap">
+    <div class="close reveal">
+      <h2>Your notes are already written.</h2>
+      <p>Put them somewhere they'll actually get used. Free, no account, and it works on the phone that's already in your hand.</p>
+      <a class="btn btn-white btn-lg" href="/app/">Start studying →</a>
+    </div>
+  </div>
+</main>
+
+<footer>
+  <div class="wrap foot">
+    <span class="brand">
+      <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="#6472F0" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3 3 7.5l9 4.5 9-4.5zM3 12.5 12 17l9-4.5M3 17.2 12 21.7l9-4.5"/></svg>
+      Study Feed
+    </span>
+    <nav>
+      <a href="/app/">Open the app</a>
+      <a href="/app/#feedback">Request a feature</a>
+      <a href="#top">Back to top</a>
+    </nav>
+    <small>Made in Auckland, New Zealand. Your decks are stored on your own device.</small>
+  </div>
+</footer>
+
+<script>
+/* Scene loop for the hero demo. Timings are per-scene because "files land"
+   needs less time than "answer a card". */
+(function(){
+  var scenes = [].slice.call(document.querySelectorAll('.scene'));
+  var dots = [].slice.call(document.querySelectorAll('.scene-dots b'));
+  var hold = [3000, 3400, 5000];
+  var i = 0, timer;
+
+  function show(n){
+    scenes.forEach(function(s, k){ s.classList.toggle('on', k === n); });
+    dots.forEach(function(d, k){ d.classList.toggle('on', k === n); });
+    /* restart the scene's own keyframes: without this the second pass through
+       the loop shows everything already in its end state */
+    var el = scenes[n];
+    el.style.display = 'none';
+    void el.offsetHeight;
+    el.style.display = '';
+    timer = setTimeout(function(){ i = (n + 1) % scenes.length; show(i); }, hold[n]);
+  }
+  show(0);
+
+  /* don't animate to an empty room */
+  document.addEventListener('visibilitychange', function(){
+    if (document.hidden) clearTimeout(timer);
+    else show(i);
+  });
+})();
+
+/* Sections fade up as they arrive.
+
+   The failsafe matters more than the effect: these start at opacity 0, so
+   anything that stops the observer from reporting — no IntersectionObserver,
+   a script error, a browser that isn't painting — would leave the whole page
+   below the hero permanently blank. If no callback has arrived within two
+   seconds, everything is shown. A missing animation is a much smaller failure
+   than a missing page. */
+(function(){
+  var els = [].slice.call(document.querySelectorAll('.reveal'));
+  var showAll = function(){ els.forEach(function(e){ e.classList.add('in'); }); };
+  if (!('IntersectionObserver' in window)){ showAll(); return; }
+
+  var reported = false;
+  var io = new IntersectionObserver(function(entries){
+    reported = true;
+    entries.forEach(function(e){
+      if (e.isIntersecting){ e.target.classList.add('in'); io.unobserve(e.target); }
+    });
+  }, { rootMargin: '0px 0px -12% 0px', threshold: 0.12 });
+  els.forEach(function(e){ io.observe(e); });
+  setTimeout(function(){ if (!reported) showAll(); }, 2000);
+})();
+
+/* The nav only grows a background once you've left the top. */
+(function(){
+  var nav = document.getElementById('nav');
+  var tick = function(){ nav.classList.toggle('stuck', window.scrollY > 12); };
+  tick();
+  window.addEventListener('scroll', tick, { passive: true });
+})();
+</script>
 </body>
 </html>

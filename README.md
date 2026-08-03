@@ -32,6 +32,25 @@ Model calls are OpenAI-compatible requests to NVIDIA Build (`integrate.api.nvidi
 
 `api/feedback.js` emails feature requests via Resend when `RESEND_API_KEY` is set (optional `FEEDBACK_TO`, `FEEDBACK_FROM`); with no key the client falls back to a `mailto:`.
 
+## Routes
+
+| Path | What | Source |
+|---|---|---|
+| `/` | Marketing landing page | `docs/index.html` — standalone, no framework, no build step |
+| `/app/` | The app itself | `docs/app/index.html` + `docs/app.js` |
+
+The landing page is deliberately not part of the React bundle: a marketing page
+lives or dies on how fast it paints, and this one is one ~20KB file with inline
+CSS and three small scripts. It shares the app's palette and typeface so
+arriving in the app doesn't feel like a different product. The PWA manifest
+points at `/app/`, so installing to the home screen opens the app, not the
+pitch.
+
+Everything on it that starts hidden (`.rise`, `.reveal`) has a failsafe: if the
+IntersectionObserver hasn't reported within two seconds the page reveals
+everything, and a `<noscript>` block does the same with JS off. A missing
+animation is a far smaller failure than a blank page.
+
 ## Build & deploy
 
 ```bash
