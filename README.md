@@ -73,7 +73,9 @@ Decks are portable: export the whole library, a chosen subset, or one deck on it
 - **Quiz mode:** a finite graded test built from a deck's own cards. No API cost — distractors come from other cards.
 - **Home dashboard:** greeting, exam countdown, due hero, streak, this-week bars, subject mastery, quick actions. All from local data.
 - **Upload:** PDF (pdf.js — text plus embedded images; text-less pages are rendered and sent to the vision model), `.docx`, `.pptx`, images, `.txt`. Office files are unzipped in the browser. Everything is shrunk to ≤1500px JPEG and only extracted content is sent, so there's no file-size ceiling. Up to 12 images per generate.
-- **Look:** "Calm" light system with full dark mode (`data-theme` on `<html>`, Light/Dark/System in Settings). Bottom nav on a phone, sidebar past 1024px.
+- **Look:** "Calm" light system with full dark mode (`data-theme` on `<html>`, Light/Dark/System in Settings). Bottom nav on a phone, sidebar past 1024px. Flip cards do a real 3D turn (two faces in one grid cell, so the card sizes to the taller side instead of needing a fixed height).
+- **Typeface:** Plus Jakarta Sans, with Inter and the system stack selectable in Settings → Appearance. `SANS` is `var(--sf-font)` and `data-font` on `<html>` swaps it, mirroring how `data-theme` swaps the palette. The webfonts are linked from `docs/index.html`; system-ui is always the last fallback so the Artifact build still looks deliberate.
+- **No emoji.** Every icon is a stroked SVG on a single weight taking `currentColor` (`ICON_PATHS` / `Ico`). Emoji rendered differently on every platform, ignored the theme, and read as clip art next to the rest of the UI.
 - **Compatibility:** avoids `??` / `?.` / `||=` — the Artifact transpiler rejects them. `jszip` and `pdf.js` load from cdnjs `<script>` when the bundler doesn't provide them. Syntax-check with:
   ```bash
   node ./node_modules/esbuild/bin/esbuild StudyFeed.jsx --loader:.jsx=jsx --bundle --external:react --format=esm --outfile=out.mjs
@@ -84,9 +86,10 @@ See the in-app **Updates** tab (`PATCH_NOTES` in `StudyFeed.jsx`) for the releas
 
 ## Credits
 
-The dropzone illustration, the loading rings and the chat composer are ports of
-components from [KokonutUI](https://kokonutui.com) (MIT) by @dorianbaffier and
-@kokonutui. They're rebuilt rather than imported: the originals are Next.js +
+The dropzone illustration, the loading rings, the chat composer and the card
+flip are ports of components from [KokonutUI](https://kokonutui.com) (MIT) by
+@dorianbaffier and @kokonutui; the labelled progress track follows the shape of
+the shadcn/ui Progress. They're rebuilt rather than imported: the originals are Next.js +
 TypeScript + Tailwind + framer-motion + shadcn/ui, and this app is one `.jsx`
 file with inline styles that also has to run in an Artifact with no bundler. The
 ports use CSS keyframes and the theme tokens instead, so they follow light/dark

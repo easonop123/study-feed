@@ -36,7 +36,18 @@ const T = {
   red:       'var(--sf-red)',
 };
 
-const SANS = 'system-ui, -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif';
+/* One indirection so the typeface is switchable at runtime (Settings →
+   Appearance). The stack itself lives in --sf-font; `data-font` on <html>
+   swaps it, exactly like data-theme swaps the palette. system-ui is always the
+   last fallback, so the Artifact — which can't load webfonts — still looks
+   deliberate rather than broken. */
+const SANS = 'var(--sf-font)';
+const SYSTEM_STACK = 'system-ui, -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif';
+const FONTS = [
+  { v: 'jakarta', label: 'Rounded', stack: `"Plus Jakarta Sans", ${SYSTEM_STACK}`, note: 'Friendly and geometric — the default' },
+  { v: 'inter',   label: 'Neutral', stack: `"Inter", ${SYSTEM_STACK}`, note: 'Plainer, tuned for small sizes' },
+  { v: 'system',  label: 'System',  stack: SYSTEM_STACK, note: 'Whatever your phone or laptop uses' },
+];
 
 /* translucent colour that works for hex (#rrggbb) AND CSS vars / any colour
    (via color-mix) — so one helper covers subject hues and theme tokens. */
@@ -63,6 +74,11 @@ const HUES = ['#6472F0','#E1A63E','#37B98C','#9B7EDE','#3BA9C4','#E285B4','#8B84
    the OS preference AND an explicit data-theme="dark" (the toggle), while
    data-theme="light" forces light even on a dark OS. */
 const THEME_CSS = `
+  :root{
+    --sf-font: "Plus Jakarta Sans", ${SYSTEM_STACK};
+  }
+  :root[data-font="inter"]{  --sf-font: "Inter", ${SYSTEM_STACK}; }
+  :root[data-font="system"]{ --sf-font: ${SYSTEM_STACK}; }
   :root{
     --sf-bg:#F6F8FB; --sf-surface:#FFFFFF; --sf-well:#F1F4F9; --sf-border:#EBEEF3;
     --sf-ink:#2B2F3A; --sf-muted:#6E7482; --sf-faint:#A6ABB7;
@@ -98,7 +114,9 @@ const THEME_CSS = `
       --sf-sh-accent:0 6px 18px -6px rgba(90,105,240,.5);
     }
   }
-  html,body{ background:var(--sf-bg); }
+  /* Tailwind's preflight sets its own stack on body; ours has to win, so any
+     text that isn't explicitly given SANS still inherits the chosen face. */
+  html,body{ background:var(--sf-bg); font-family:var(--sf-font); }
 `;
 function subjectColour(name){
   const s = (name || '').trim().toLowerCase();
@@ -163,7 +181,7 @@ async function save(key, value){
 
 /* longMix = what % of your cards should be long (extended-response) answers.
    Drives both what gets generated and how the feed is blended. */
-const DEFAULT_SETTINGS = { interleave: true, newPerDay: 12, capNew: false, longMix: 30, theme: 'system', name: '', examDate: '', lastSeenVersion: '', onboarded: false, dismissedTips: {}, sound: true };
+const DEFAULT_SETTINGS = { interleave: true, newPerDay: 12, capNew: false, longMix: 30, theme: 'system', name: '', examDate: '', lastSeenVersion: '', onboarded: false, dismissedTips: {}, sound: true, font: 'jakarta' };
 
 /* ---- sound ---------------------------------------------------------------
    Synthesised, not sampled. Three reasons: a card grade fires 30+ times in a
@@ -204,8 +222,22 @@ function tone(c, freq, when, dur, type, peak){
   o.stop(t0 + dur + 0.03);
 }
 
-/* `step` is the current combo — right answers climb the scale as the streak
-   builds, then sit at the top rather than turning shrill. */
+/* Nothing repeats exactly. A grade fires 30+ times a session, and the fastest
+   way to make a chime irritating is to play the identical waveform every time,
+   so three things vary:
+
+   - WEIGHT. At a combo of 0-1 you get one short quiet note — a confirmation,
+     not a fanfare. Two notes from 2, three and a sparkle from 5. The common
+     case is the subtle one and the reward grows into the streak.
+   - SHAPE. The interval between notes rotates through a few voicings instead
+     of always being the same jump.
+   - TUNING. Every note is detuned by up to ±0.4%, which is inaudible on its
+     own but means no two chimes are bit-identical. */
+const VOICINGS = [[0, 2], [0, 3], [0, 1], [0, 2, 4], [0, 3, 5], [0, 2, 5]];
+let variant = 0;
+const detune = (f) => f * (1 + (Math.random() - 0.5) * 0.008);
+const scaleAt = (i) => PENT[Math.min(Math.max(i, 0), PENT.length - 1)];
+
 function play(name, step){
   if (!soundOn) return;
   const c = audio();
@@ -213,25 +245,32 @@ function play(name, step){
   // browsers hold the audio clock suspended until a gesture; every call here
   // happens inside a tap, so this is the right moment to wake it
   if (c.state === 'suspended'){ try { c.resume(); } catch {} }
-  const i = Math.min(Math.max(step || 0, 0), 3);
+  const n = Math.max(step || 0, 0);
+
   if (name === 'right'){
-    tone(c, PENT[i], 0, 0.15, 'sine', 0.15);
-    tone(c, PENT[i + 2], 0.065, 0.24, 'sine', 0.13);
+    const root = Math.min(n, 4);                       // climbs, then holds
+    if (n < 2){                                        // the everyday case: light
+      tone(c, detune(scaleAt(root)), 0, 0.1, 'sine', 0.085);
+      return;
+    }
+    variant = (variant + 1) % VOICINGS.length;
+    const shape = VOICINGS[n >= 5 ? 3 + (variant % 3) : variant % 3];
+    shape.forEach((off, k) => tone(c, detune(scaleAt(root + off)), k * 0.055,
+      k === shape.length - 1 ? 0.24 : 0.14, 'sine', 0.13 - k * 0.008));
+    if (n >= 8) tone(c, detune(scaleAt(root + 6)), 0.16, 0.3, 'triangle', 0.045);
   } else if (name === 'ok'){
-    tone(c, PENT[1], 0, 0.18, 'sine', 0.11);
+    tone(c, detune(PENT[1]), 0, 0.14, 'sine', 0.085);
   } else if (name === 'wrong'){
-    tone(c, 174.61, 0, 0.26, 'triangle', 0.12);   // F3, soft — a nudge, not a buzzer
+    tone(c, detune(174.61), 0, 0.26, 'triangle', 0.11);   // F3, soft — a nudge, not a buzzer
   } else if (name === 'milestone'){
-    tone(c, PENT[0], 0, 0.16, 'sine', 0.15);
-    tone(c, PENT[2], 0.07, 0.16, 'sine', 0.15);
-    tone(c, PENT[4], 0.14, 0.3, 'sine', 0.15);
+    [0, 2, 4].forEach((off, k) => tone(c, detune(PENT[off]), k * 0.07, k === 2 ? 0.3 : 0.16, 'sine', 0.14));
   } else if (name === 'done'){
-    [0, 2, 3, 5].forEach((n, k) => tone(c, PENT[n], k * 0.085, 0.42, 'sine', 0.15));
-    tone(c, PENT[6], 0.34, 0.6, 'triangle', 0.08);
+    [0, 2, 3, 5].forEach((off, k) => tone(c, detune(PENT[off]), k * 0.085, 0.42, 'sine', 0.15));
+    tone(c, detune(PENT[6]), 0.34, 0.6, 'triangle', 0.08);
   } else if (name === 'excellence'){
-    [0, 2, 4, 6].forEach((n, k) => tone(c, PENT[n], k * 0.06, 0.5, 'sine', 0.14));
+    [0, 2, 4, 6].forEach((off, k) => tone(c, detune(PENT[off]), k * 0.06, 0.5, 'sine', 0.14));
   } else if (name === 'tick'){
-    tone(c, PENT[2], 0, 0.05, 'sine', 0.05);
+    tone(c, detune(PENT[2]), 0, 0.045, 'sine', 0.04);
   }
 }
 
@@ -243,8 +282,16 @@ const buzz = (ms) => { try { if (navigator.vibrate) navigator.vibrate(ms); } cat
    APP_VERSION is the id we compare against settings.lastSeenVersion to decide
    whether to pop the "What's new" note. Bump it whenever PATCH_NOTES gains an
    entry. Newest first; the first element is the current release. */
-const APP_VERSION = '1.3.0';
+const APP_VERSION = '1.4.0';
 const PATCH_NOTES = [
+  { v: '1.4.0', date: '2026-08-03', title: 'Sharper edges', items: [
+    'Flip cards actually flip now — the card turns over to show the answer.',
+    'Every emoji is gone, replaced with icons drawn to match the rest of the app.',
+    'A new typeface, and you can change it: Settings → Appearance.',
+    'The chime no longer repeats itself — it stays light for ordinary answers and only opens up as your streak grows.',
+    'Marking a long answer shows a loader instead of looking frozen.',
+    'The feed progress bar now tells you how many you\'ve done, not just how far along you are.',
+  ] },
   { v: '1.3.0', date: '2026-08-03', title: 'It feels like something now', items: [
     'Answers land: colour bursts, sound and a bit of a kick every time you grade a card.',
     'Build a streak — get them right back to back and the chime climbs with your combo.',
@@ -270,6 +317,7 @@ const PATCH_NOTES = [
   ] },
 ];
 const dismissedTip = (settings, id) => !!(settings && settings.dismissedTips && settings.dismissedTips[id]);
+const fontOf = (s) => (s && s.font) ? s.font : 'jakarta';
 const longMixOf = (s) => (s && s.longMix != null) ? s.longMix : 30;
 const isLongCard = (c) => c.type === 'extended';
 
@@ -1145,6 +1193,59 @@ function Chip({ children, colour = T.accent, solid, style }){
   );
 }
 
+/* ---- icons ---------------------------------------------------------------
+   Emoji were standing in for icons all over this app, and they never matched:
+   every platform draws them differently, they don't take the theme colour, and
+   at 14px they read as clip art next to a hand-tuned interface. These are the
+   replacements — one stroke weight, currentColor, sized in context. */
+const ICON_PATHS = {
+  bulb:     'M9 18h6M10 21h4M12 3a6 6 0 0 0-3.5 10.9c.4.3.6.7.6 1.2v.9h5.8v-.9c0-.5.2-.9.6-1.2A6 6 0 0 0 12 3z',
+  warn:     'M12 4.2 2.8 20h18.4L12 4.2zM12 10v4.2M12 17.3v.1',
+  search:   'M11 4a7 7 0 1 0 0 14 7 7 0 0 0 0-14zM16.2 16.2 21 21',
+  target:   'M12 3a9 9 0 1 0 0 18 9 9 0 0 0 0-18zM12 8.2a3.8 3.8 0 1 0 0 7.6 3.8 3.8 0 0 0 0-7.6z',
+  flame:    'M12 3s5.2 3.6 5.2 8.4A5.2 5.2 0 0 1 12 16.6a5.2 5.2 0 0 1-5.2-5.2C6.8 8.4 9.4 7 9.4 7s-.4 2.2.9 3c1-1.6 1.7-4.3 1.7-7zM12 16.6V21',
+  folder:   'M3 7.5A2.5 2.5 0 0 1 5.5 5h3.2l2 2.2h7.8A2.5 2.5 0 0 1 21 9.7v7.8a2.5 2.5 0 0 1-2.5 2.5h-13A2.5 2.5 0 0 1 3 17.5z',
+  books:    'M4 5.5A1.5 1.5 0 0 1 5.5 4H9v16H5.5A1.5 1.5 0 0 1 4 18.5zM9 4h4.5A1.5 1.5 0 0 1 15 5.5v13a1.5 1.5 0 0 1-1.5 1.5H9zM16.6 5.4l2.6.7a1.5 1.5 0 0 1 1 1.9l-3.3 12',
+  save:     'M12 3.5v10M8 10l4 3.8 4-3.8M4.5 16v2.5a2 2 0 0 0 2 2h11a2 2 0 0 0 2-2V16',
+  plus:     'M12 5.5v13M5.5 12h13',
+  stack:    'M12 3 3 7.5l9 4.5 9-4.5zM3 12.5 12 17l9-4.5M3 17.2 12 21.7l9-4.5',
+  puzzle:   'M9.5 4h5v2.2a1.8 1.8 0 1 0 3.6 0V4h1.9v5h-2.2a1.8 1.8 0 1 0 0 3.6H20v7.4h-5v-2.2a1.8 1.8 0 1 0-3.6 0V20H4v-5h2.2a1.8 1.8 0 1 0 0-3.6H4V4h5.5z',
+  image:    'M4 6a2 2 0 0 1 2-2h12a2 2 0 0 1 2 2v12a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2zM4 16l4.5-4.2 4 3.4 3.3-2.8L20 16M9 9.2v.1',
+  clip:     'M21 11.5l-8.6 8.6a5 5 0 0 1-7.1-7.1l8.6-8.6a3.4 3.4 0 0 1 4.8 4.8l-8.6 8.6a1.7 1.7 0 0 1-2.4-2.4l7.9-7.9',
+  check:    'M4.8 12.5 9.7 17.4 19.2 6.9',
+  cross:    'M6 6l12 12M18 6 6 18',
+  chevron:  'M6 9.5 12 15.5 18 9.5',
+  clock:    'M12 3a9 9 0 1 0 0 18 9 9 0 0 0 0-18zM12 7.2V12l3.2 2',
+  trophy:   'M7 4h10v5a5 5 0 0 1-10 0zM7 5.5H4.5v1.2A3.3 3.3 0 0 0 7.4 10M17 5.5h2.5v1.2A3.3 3.3 0 0 1 16.6 10M12 14v3.5M8.6 20.5h6.8l-.6-3H9.2z',
+  sparkle:  'M12 3l1.9 5.1L19 10l-5.1 1.9L12 17l-1.9-5.1L5 10l5.1-1.9zM18.5 15.5l.8 2.2 2.2.8-2.2.8-.8 2.2-.8-2.2-2.2-.8 2.2-.8z',
+  speaker:  'M11 5.5 6.8 9H4a1 1 0 0 0-1 1v4a1 1 0 0 0 1 1h2.8L11 18.5zM15.2 9.4a3.6 3.6 0 0 1 0 5.2M18 6.8a7.4 7.4 0 0 1 0 10.4',
+  muted:    'M11 5.5 6.8 9H4a1 1 0 0 0-1 1v4a1 1 0 0 0 1 1h2.8L11 18.5zM16 10l5 4M21 10l-5 4',
+};
+
+/* `fill` is only for the couple of glyphs that read better solid (the flame on
+   a streak chip). Everything else is a stroke at a single weight. */
+function Ico({ name, size = 16, weight = 1.8, fill, style }){
+  const d = ICON_PATHS[name];
+  if (!d) return null;
+  return (
+    <svg width={size} height={size} viewBox="0 0 24 24" aria-hidden="true" focusable="false"
+      fill={fill ? 'currentColor' : 'none'} stroke="currentColor" strokeWidth={weight}
+      strokeLinecap="round" strokeLinejoin="round"
+      style={{ display: 'block', flexShrink: 0, ...style }}>
+      <path d={d} />
+    </svg>
+  );
+}
+
+/* An icon that needs to sit on a text baseline rather than in a flex row. */
+function InlineIco({ name, size = 15, colour, weight, fill, style }){
+  return (
+    <span style={{ display: 'inline-flex', verticalAlign: '-0.15em', color: colour || 'inherit', ...style }}>
+      <Ico name={name} size={size} weight={weight} fill={fill} />
+    </span>
+  );
+}
+
 /* ---- reward effects ------------------------------------------------------
    Ported from the kokonutui components (MIT) into this file's idiom: no
    framer-motion, no Tailwind colour classes, no icon package — CSS keyframes
@@ -1225,6 +1326,29 @@ function Rings({ size = 92 }){
   );
 }
 
+/* A labelled progress track, in the shape of the shadcn Progress component:
+   label on the left, value on the right, bar underneath. A bare bar makes you
+   guess what it's measuring; this says so. `right` can carry something other
+   than the number — the feed puts the combo streak there. */
+function Progress({ label, value, valueText, right, colour, height = 12, reduceMotion }){
+  const pct = Math.max(0, Math.min(100, value));
+  return (
+    <div>
+      <div className="flex items-center justify-between gap-3" style={{ marginBottom: 7, minHeight: 22 }}>
+        <span style={{ fontFamily: SANS, fontSize: 12.5, fontWeight: 600, color: T.muted }}>{label}</span>
+        {right ? right : (
+          <span style={{ fontFamily: SANS, fontSize: 12.5, fontWeight: 700, color: T.ink,
+            fontVariantNumeric: 'tabular-nums' }}>{valueText}</span>
+        )}
+      </div>
+      <div style={{ height, background: T.well, borderRadius: R.pill, overflow: 'hidden' }}>
+        <div style={{ height: '100%', width: pct + '%', background: colour || T.green, borderRadius: R.pill,
+          transition: reduceMotion ? 'none' : 'width 420ms cubic-bezier(.2,.8,.3,1)' }} />
+      </div>
+    </div>
+  );
+}
+
 /* Full loading state — rings plus the two lines of copy. Used while cards are
    being generated, which is the app's one genuinely slow wait. */
 function Loading({ title, subtitle, size }){
@@ -1281,7 +1405,7 @@ function Tip({ id, settings, onSettings, icon, tone, children }){
   return (
     <div style={{ display: 'flex', alignItems: 'flex-start', gap: 10, background: rgba(c, 0.09),
       border: `1px solid ${rgba(c, 0.18)}`, borderRadius: R.well, padding: '11px 13px' }}>
-      <span style={{ fontSize: 15, lineHeight: '20px', flexShrink: 0 }}>{icon || '💡'}</span>
+      <span style={{ color: c, marginTop: 1, flexShrink: 0 }}><Ico name={icon || 'bulb'} size={16} /></span>
       <div style={{ flex: 1, fontFamily: SANS, fontSize: 13, lineHeight: 1.5, color: T.ink }}>{children}</div>
       <button className="sf-tap" onClick={dismiss} aria-label="Dismiss tip"
         style={{ background: 'none', border: 'none', cursor: 'pointer', color: T.faint, fontSize: 18,
@@ -1441,8 +1565,9 @@ function StudyCard({ card, deck, onGrade, reduceMotion, prog, practice, onFeedba
           know you have, and says so when the card comes back */}
       {prog && prog.flagged && (
         <div style={{ background: rgba(T.amber, 0.12), borderRadius: R.well, padding: '10px 13px', marginBottom: 14 }}>
-          <Sub style={{ color: '#8A5A00', fontWeight: 600, fontSize: 13 }}>
-            ⚠︎ You were sure about this one last time and got it wrong — read it properly.
+          <Sub style={{ color: '#8A5A00', fontWeight: 600, fontSize: 13, display: 'flex', gap: 8, alignItems: 'flex-start' }}>
+            <InlineIco name="warn" size={15} style={{ marginTop: 2 }} />
+            <span>You were sure about this one last time and got it wrong — read it properly.</span>
           </Sub>
         </div>
       )}
@@ -1576,7 +1701,7 @@ function ExplainMore({ card, deck, compact }){
         <button className="sf-tap" onClick={() => run('normal')} disabled={!!busy}
           style={{ background: 'none', border: 'none', cursor: busy ? 'default' : 'pointer', padding: '2px 2px',
             fontFamily: SANS, fontSize: 13.5, fontWeight: 600, color: busy ? T.faint : T.accent }}>
-          {busy ? 'Working it out…' : '🔍 Explain this further'}
+          {busy ? 'Working it out…' : <span className="flex items-center gap-2"><Ico name="search" size={15} />Explain this further</span>}
         </button>
         {err && <Sub style={{ marginTop: 6, color: T.red }}>{err}</Sub>}
       </div>
@@ -1621,16 +1746,34 @@ function ExplainMore({ card, deck, compact }){
   );
 }
 
+/* A real flip, not a fade. Ported from the kokonutui card-flip (MIT) with two
+   changes: it turns on the tap that reveals the answer rather than on hover
+   (hover doesn't exist on a phone, which is where this app lives), and the two
+   faces are stacked in a single grid cell so the card sizes itself to whichever
+   side is taller instead of needing a fixed height. */
 function FlipFace({ card, phase, deck }){
+  const flipped = phase === 'reveal';
+  const face = { gridArea: '1 / 1', backfaceVisibility: 'hidden', WebkitBackfaceVisibility: 'hidden' };
   return (
-    <div>
-      <div style={QUESTION}>{card.front}</div>
-      {phase === 'reveal' && (
-        <div style={REVEAL}>
-          <div style={ANSWER}>{card.back}</div>
+    <div style={{ perspective: 1600 }}>
+      <div style={{ display: 'grid', transformStyle: 'preserve-3d',
+        transition: 'transform 520ms cubic-bezier(.77,0,.175,1)',
+        transform: flipped ? 'rotateY(180deg)' : 'rotateY(0deg)' }}>
+
+        <div style={{ ...face, opacity: flipped ? 0 : 1, transition: 'opacity 0ms 260ms' }}>
+          <div style={QUESTION}>{card.front}</div>
+        </div>
+
+        <div style={{ ...face, transform: 'rotateY(180deg)', opacity: flipped ? 1 : 0,
+          transition: 'opacity 0ms 260ms' }}>
+          <div className="flex items-center gap-2" style={{ marginBottom: 10 }}>
+            <span style={{ color: T.green, display: 'flex' }}><Ico name="check" size={15} weight={2.4} /></span>
+            <Chip colour={T.green}>Answer</Chip>
+          </div>
+          <div style={{ ...ANSWER, color: T.ink }}>{card.back}</div>
           <ExplainMore card={card} deck={deck} />
         </div>
-      )}
+      </div>
     </div>
   );
 }
@@ -1682,8 +1825,8 @@ function McqFace({ card, phase, pick, onPick, deck }){
                 display: 'flex', alignItems: 'center', justifyContent: 'center',
                 fontFamily: SANS, fontSize: 12, fontWeight: 700, color: T.muted }}>{letters[i]}</span>
               <span style={{ fontFamily: SANS, fontSize: 15.5, lineHeight: 1.45, flex: 1, fontWeight: 500 }}>{opt}</span>
-              {revealed && isAnswer && <span style={{ color: T.green, fontSize: 16, fontWeight: 700 }}>✓</span>}
-              {revealed && isPick && !isAnswer && <span style={{ color: T.red, fontSize: 16, fontWeight: 700 }}>✕</span>}
+              {revealed && isAnswer && <span style={{ color: T.green }}><Ico name="check" size={17} weight={2.6} /></span>}
+              {revealed && isPick && !isAnswer && <span style={{ color: T.red }}><Ico name="cross" size={16} weight={2.6} /></span>}
             </button>
           );
         })}
@@ -1816,12 +1959,19 @@ function ExtendedFace({ card, phase, deck, onReveal }){
           <div className="flex items-center justify-between" style={{ marginTop: 7, marginBottom: 11 }}>
             <Sub style={{ fontSize: 12 }}>{words > 0 ? `${words} words` : 'Even a rough attempt beats reading the answer'}</Sub>
           </div>
-          <div className="flex gap-2">
-            <Btn full kind="primary" onClick={doMark} disabled={busy || !answer.trim()}>
-              {busy ? 'Marking…' : 'Mark my answer'}
-            </Btn>
-            <Btn kind="soft" onClick={() => onReveal && onReveal()} style={{ whiteSpace: 'nowrap' }}>Skip</Btn>
-          </div>
+          {/* Marking is a 10-20 second wait against the model. Without this the
+              screen just sits there and reads as frozen. */}
+          {busy ? (
+            <div style={{ ...PANEL, padding: '8px 12px' }}>
+              <Loading size={70} title="Marking your answer…"
+                subtitle="Checking it against what Achieved, Merit and Excellence need." />
+            </div>
+          ) : (
+            <div className="flex gap-2">
+              <Btn full kind="primary" onClick={doMark} disabled={!answer.trim()}>Mark my answer</Btn>
+              <Btn kind="soft" onClick={() => onReveal && onReveal()} style={{ whiteSpace: 'nowrap' }}>Skip</Btn>
+            </div>
+          )}
           {err && <Sub style={{ marginTop: 10, color: T.red }}>{err}</Sub>}
 
           {/* a nudge for when you're stuck — structure, not the answer */}
@@ -1830,7 +1980,7 @@ function ExtendedFace({ card, phase, deck, onReveal }){
               style={{ background: 'none', border: 'none', cursor: hintBusy ? 'default' : 'pointer',
                 padding: '12px 2px 0', fontFamily: SANS, fontSize: 13.5, fontWeight: 600,
                 color: hintBusy ? T.faint : T.accent }}>
-              {hintBusy ? 'Thinking of some pointers…' : '💡 Stuck? Give me some writing points'}
+              {hintBusy ? 'Thinking of some pointers…' : <span className="flex items-center gap-2"><Ico name="bulb" size={15} />Stuck? Give me some writing points</span>}
             </button>
           ) : (
             <div style={{ ...PANEL, marginTop: 14, background: rgba(T.amber, 0.09) }}>
@@ -1927,7 +2077,9 @@ function UpgradePath({ card, answer, r, level }){
     return (
       <div style={{ marginTop: 12 }}>
         <Btn full kind="soft" onClick={run} disabled={busy} style={{ fontSize: 14 }}>
-          {busy ? 'Working out how…' : atTop ? '↑ How do I make this airtight?' : `↑ How do I get to ${target}?`}
+          <span className="flex items-center justify-center gap-2">
+            {busy ? <><Rings size={17} />Working out how…</> : (atTop ? 'How do I make this airtight?' : `How do I get to ${target}?`)}
+          </span>
         </Btn>
         {err && <Sub style={{ marginTop: 8, color: T.red }}>{err}</Sub>}
       </div>
@@ -2096,7 +2248,7 @@ function DeckBar({ decks, progress, focus, setFocus, onQuiz }){
         style={{ flexShrink: 0, marginLeft: many ? 0 : 'auto', display: 'flex', alignItems: 'center', gap: 6, cursor: 'pointer',
           background: rgba(T.green, 0.12), border: `1px solid ${rgba(T.green, 0.25)}`, color: T.green,
           borderRadius: R.pill, padding: '8px 14px', fontFamily: SANS, fontSize: 13, fontWeight: 700 }}>
-        ◎ Quiz
+        <Ico name="target" size={14} />Quiz
       </button>
     </div>
   );
@@ -2109,13 +2261,17 @@ function ComboChip({ n }){
   if (n < 2) return null;
   const tier = n >= 10 ? 2 : n >= 5 ? 1 : 0;
   const c = tier === 2 ? T.green : tier === 1 ? T.amber : T.accent;
-  const label = tier === 2 ? `🔥 ${n} in a row — unreal` : tier === 1 ? `🔥 ${n} in a row` : `${n} in a row`;
+  const label = tier === 2 ? `${n} in a row — unreal` : `${n} in a row`;
   return (
     <span key={n} style={{ display: 'inline-block', fontFamily: SANS,
       fontSize: tier === 2 ? 13 : 12.5, fontWeight: 700, color: tier ? '#fff' : c,
       background: tier ? c : rgba(c, 0.14), borderRadius: R.pill,
       padding: tier === 2 ? '5px 13px' : '4px 11px', whiteSpace: 'nowrap',
-      animation: 'sf-combo-in 420ms cubic-bezier(.2,.8,.3,1)' }}>{label}</span>
+      animation: 'sf-combo-in 420ms cubic-bezier(.2,.8,.3,1)' }}>
+      <span className="flex items-center gap-1.5">
+        {tier > 0 && <Ico name="flame" size={13} weight={2} fill />}{label}
+      </span>
+    </span>
   );
 }
 
@@ -2145,14 +2301,19 @@ function FinishedCard({ done, streak, onPractice, onHome }){
       <Confetti />
       <Card style={{ padding: '40px 24px', textAlign: 'center', position: 'relative', overflow: 'hidden',
         animation: 'sf-in 300ms cubic-bezier(.2,.8,.3,1)' }}>
-        <div style={{ fontSize: 46, marginBottom: 10, animation: 'sf-float 2.6s ease-in-out infinite' }}>🎉</div>
+        <div style={{ display: 'flex', justifyContent: 'center', marginBottom: 14, color: T.green,
+          animation: 'sf-float 2.6s ease-in-out infinite' }}>
+          <Ico name="trophy" size={46} weight={1.5} />
+        </div>
         <Title style={{ fontSize: 23 }}>That's everything due</Title>
         <Sub style={{ marginTop: 8, maxWidth: 300, marginLeft: 'auto', marginRight: 'auto' }}>
           {done} card{done === 1 ? '' : 's'} reviewed. They'll come back exactly when you're about to forget them.
         </Sub>
         {streak > 0 && (
           <div style={{ marginTop: 16 }}>
-            <Chip colour={T.amber} solid>🔥 {streak} day streak</Chip>
+            <Chip colour={T.amber} solid>
+              <span className="flex items-center gap-1.5"><Ico name="flame" size={13} weight={2} fill />{streak} day streak</span>
+            </Chip>
           </div>
         )}
         <div className="flex gap-2" style={{ marginTop: 26 }}>
@@ -2263,7 +2424,7 @@ function Feed({ decks, progress, settings, stats, onGrade, reduceMotion, focus, 
       <div>
         {bar}
         <Card style={{ padding: '44px 24px', textAlign: 'center' }}>
-          <div style={{ fontSize: 40, marginBottom: 12 }}>🗂️</div>
+          <div style={{ display: 'flex', justifyContent: 'center', marginBottom: 14, color: T.faint }}><Ico name="folder" size={38} weight={1.5} /></div>
           <Title>{focusDeck ? 'This deck is empty' : 'No cards yet'}</Title>
           <Sub style={{ marginTop: 6 }}>{focusDeck ? 'Add cards to it, or pick another deck above.' : <>Head to <b>Create</b> to make your first deck.</>}</Sub>
         </Card>
@@ -2315,12 +2476,11 @@ function Feed({ decks, progress, settings, stats, onGrade, reduceMotion, focus, 
           </Tip>
         </div>
       )}
-      <div className="flex items-center gap-3" style={{ marginBottom: 12, padding: '0 4px' }}>
-        <div style={{ flex: 1, height: 8, background: T.well, borderRadius: R.pill, overflow: 'hidden' }}>
-          <div style={{ height: '100%', width: `${pct}%`, background: T.green, borderRadius: R.pill,
-            transition: reduceMotion ? 'none' : 'width 340ms cubic-bezier(.2,.8,.3,1)' }} />
-        </div>
-        {combo >= 2 ? <ComboChip n={combo} /> : <Sub style={{ fontSize: 12.5, fontWeight: 600 }}>{scheduledLeft} left</Sub>}
+      <div style={{ marginBottom: 14, padding: '0 4px' }}>
+        <Progress label={scheduledLeft === 1 ? 'Last one' : `${scheduledLeft} to go`} value={pct}
+          valueText={`${done} of ${done + scheduledLeft}`}
+          right={combo >= 2 ? <ComboChip n={combo} /> : null}
+          reduceMotion={reduceMotion} />
       </div>
       <div style={{ position: 'relative' }}>
         <StudyCard key={queue[0].card.id} card={queue[0].card} deck={queue[0].deck} onGrade={gradeScheduled}
@@ -2539,7 +2699,7 @@ function Create({ onSave, settings, onSettings, onPending }){
 
       {mode === 'generate' && (
         <div style={{ marginTop: 10 }}>
-          <Tip id="create-time" settings={settings} onSettings={onSettings} icon="⏳">
+          <Tip id="create-time" settings={settings} onSettings={onSettings} icon="clock">
             Generating can take 15–30 seconds while the AI writes each card. Nothing saves until you've looked them over.
           </Tip>
         </div>
@@ -2582,8 +2742,8 @@ function Create({ onSave, settings, onSettings, onPending }){
               {LEVEL_PRESETS.map(p => <option key={p} value={p}>{p}</option>)}
               <option value="__other">Something else…</option>
             </select>
-            <span style={{ position: 'absolute', right: 15, top: '50%', transform: 'translateY(-50%)',
-              color: T.faint, fontSize: 11, pointerEvents: 'none' }}>▼</span>
+            <span style={{ position: 'absolute', right: 14, top: '50%', transform: 'translateY(-50%)',
+              color: T.faint, pointerEvents: 'none', display: 'flex' }}><Ico name="chevron" size={15} /></span>
           </div>
           {!LEVEL_PRESETS.includes(level) && (
             <input value={level} onChange={e => setLevel(e.target.value)} autoFocus
@@ -2628,7 +2788,7 @@ function guessTopic(text){
 
 function draftPreview(d){
   if (d.type === 'extended') return { tag: `${d.verb} · ${d.marks} marks`, main: d.prompt, sub: d.achieved };
-  if (d.type === 'mcq') return { tag: 'Multiple choice', main: d.front, sub: '✓ ' + (d.options[d.answer] || '') };
+  if (d.type === 'mcq') return { tag: 'Multiple choice', main: d.front, sub: d.options[d.answer] || '' };
   if (d.type === 'short') return { tag: 'Short answer', main: d.front, sub: d.back };
   if (d.type === 'cloze') return { tag: 'Fill the blank', main: d.front, sub: d.back };
   return { tag: 'Flip', main: d.front, sub: d.back };
@@ -2649,8 +2809,9 @@ function DraftReview({ drafts, setDrafts, meta, setMeta, onSave, onCancel }){
         </button>
       </div>
       <div style={{ background: rgba(T.amber, 0.13), borderRadius: R.well, padding: '11px 14px', marginBottom: 14 }}>
-        <Sub style={{ color: '#8A5A00', fontWeight: 600, fontSize: 13 }}>
-          ⚠︎ Not saved yet — tap <b>Save</b> at the bottom or these are lost.
+        <Sub style={{ color: '#8A5A00', fontWeight: 600, fontSize: 13, display: 'flex', gap: 8, alignItems: 'flex-start' }}>
+          <InlineIco name="warn" size={14} style={{ marginTop: 2 }} />
+          <span>Not saved yet — tap <b>Save</b> at the bottom or these are lost.</span>
         </Sub>
       </div>
       <Sub style={{ marginBottom: 14 }}>Tap a card to drop it. {kept} of {drafts.length} kept.</Sub>
@@ -2708,7 +2869,7 @@ function Decks({ decks, progress, onEditCard, onDeleteCard, onDeleteDeck, onRena
   if (!decks.length){
     return (
       <Card style={{ padding: '44px 24px', textAlign: 'center' }}>
-        <div style={{ fontSize: 40, marginBottom: 12 }}>📚</div>
+        <div style={{ display: 'flex', justifyContent: 'center', marginBottom: 14, color: T.faint }}><Ico name="books" size={38} weight={1.5} /></div>
         <Title>No decks yet</Title>
         <Sub style={{ marginTop: 6 }}>Make some cards and they'll show up here.</Sub>
       </Card>
@@ -2827,7 +2988,9 @@ function DeckEditor({ deck, progress, onBack, onEditCard, onDeleteCard, onDelete
       {!renaming && (onStudyDeck || onQuiz) && (
         <div className="flex gap-2" style={{ marginBottom: 16 }}>
           {onStudyDeck && <Btn full kind="primary" onClick={() => onStudyDeck(deck.id)}>Study this deck</Btn>}
-          {onQuiz && <Btn full kind="soft" onClick={() => onQuiz(deck.id)} style={{ maxWidth: onStudyDeck ? 130 : undefined }}>◎ Quiz</Btn>}
+          {onQuiz && <Btn full kind="soft" onClick={() => onQuiz(deck.id)} style={{ maxWidth: onStudyDeck ? 130 : undefined }}>
+            <span className="flex items-center justify-center gap-2"><Ico name="target" size={15} />Quiz</span>
+          </Btn>}
         </div>
       )}
 
@@ -3122,7 +3285,7 @@ function TransferCard({ library, progress, onImport }){
                 <span style={{ width: 20, height: 20, borderRadius: 6, flexShrink: 0,
                   border: `1.5px solid ${on ? T.accent : T.border}`, background: on ? T.accent : T.surface,
                   color: '#fff', fontFamily: SANS, fontSize: 13, fontWeight: 800, lineHeight: '18px', textAlign: 'center' }}>
-                  {on ? '✓' : ''}
+                  {on && <span style={{ display: 'flex', justifyContent: 'center' }}><Ico name="check" size={13} weight={3} /></span>}
                 </span>
                 <span style={{ flex: 1, minWidth: 0, fontFamily: SANS, fontSize: 14, fontWeight: 600, color: T.ink,
                   overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
@@ -3175,6 +3338,13 @@ function Settings({ settings, onChange, library, progress, onImport }){
         <Segmented value={settings.theme || 'system'} onChange={(v) => set({ theme: v })}
           options={[{ v: 'light', label: 'Light' }, { v: 'dark', label: 'Dark' }, { v: 'system', label: 'System' }]} />
         <Sub style={{ fontSize: 12, marginTop: 8 }}>System follows your device's light or dark setting.</Sub>
+
+        <div style={{ fontFamily: SANS, fontSize: 13, fontWeight: 700, color: T.muted, margin: '16px 0 8px' }}>Typeface</div>
+        <Segmented value={fontOf(settings)} onChange={(v) => set({ font: v })}
+          options={FONTS.map(f => ({ v: f.v, label: f.label }))} />
+        <Sub style={{ fontSize: 12, marginTop: 8 }}>
+          {(FONTS.find(f => f.v === fontOf(settings)) || FONTS[0]).note}
+        </Sub>
       </Card>
 
       <Card style={{ padding: 15, marginBottom: 10, boxShadow: SH.raised }}>
@@ -3307,7 +3477,7 @@ function Home({ library, progress, stats, settings, due, onStart, onCreate, onDe
       {totalCards === 0 ? (
         <Card style={{ padding: '32px 24px 26px' }}>
           <div style={{ textAlign: 'center' }}>
-            <div style={{ fontSize: 38, marginBottom: 10 }}>👋</div>
+            <div style={{ display: 'flex', justifyContent: 'center', marginBottom: 12, color: T.accent }}><Ico name="sparkle" size={34} weight={1.5} /></div>
             <Title>Welcome to Study Feed</Title>
             <Sub style={{ marginTop: 6, marginBottom: 20 }}>Turn your notes into cards, then review a few whenever you've got a minute. Here's the gist:</Sub>
           </div>
@@ -3332,7 +3502,7 @@ function Home({ library, progress, stats, settings, due, onStart, onCreate, onDe
       ) : (
         <>
           <div style={{ marginBottom: 16 }}>
-            <Tip id="home-backup" settings={settings} onSettings={onSettings} icon="💾" tone={T.green}>
+            <Tip id="home-backup" settings={settings} onSettings={onSettings} icon="save" tone={T.green}>
               Your decks are saved on this device only. Use <b>You → Backup &amp; transfer</b> to export them so a cleared browser can't wipe your work.
             </Tip>
           </div>
@@ -3362,18 +3532,16 @@ function Home({ library, progress, stats, settings, due, onStart, onCreate, onDe
 
           {/* stat strip */}
           <div style={{ display: 'flex', flexWrap: 'wrap', gap: 12, marginBottom: 16 }}>
-            {[['Due now', due, T.accentInk], ['🔥 ' + streak, null, T.amber, 'Day streak'], [reviewedToday, null, T.green, 'Reviewed today'], [totalCards, null, T.ink, 'Cards total']].map((it, i) => {
-              const isStreak = i === 1;
-              const big = isStreak ? it[0] : (i === 0 ? it[1] : it[0]);
-              const label = i === 0 ? 'Due now' : it[3];
-              const col = it[2];
-              return (
-                <Card key={i} style={{ flex: '1 1 140px', padding: '15px 16px', boxShadow: SH.raised }}>
-                  <div style={{ fontFamily: SANS, fontSize: 23, fontWeight: 800, lineHeight: 1, color: col, fontVariantNumeric: 'tabular-nums' }}>{big}</div>
-                  <div style={{ fontFamily: SANS, fontSize: 11.5, color: T.faint, marginTop: 6 }}>{label}</div>
-                </Card>
-              );
-            })}
+            {[{ n: due, label: 'Due now', col: T.accentInk }, { n: streak, label: 'Day streak', col: T.amber, icon: 'flame' },
+              { n: reviewedToday, label: 'Reviewed today', col: T.green }, { n: totalCards, label: 'Cards total', col: T.ink }].map((it, i) => (
+              <Card key={i} style={{ flex: '1 1 140px', padding: '15px 16px', boxShadow: SH.raised }}>
+                <div className="flex items-center gap-1.5" style={{ color: it.col }}>
+                  {it.icon && <Ico name={it.icon} size={17} weight={2} fill />}
+                  <span style={{ fontFamily: SANS, fontSize: 23, fontWeight: 800, lineHeight: 1, fontVariantNumeric: 'tabular-nums' }}>{it.n}</span>
+                </div>
+                <div style={{ fontFamily: SANS, fontSize: 11.5, color: T.faint, marginTop: 6 }}>{it.label}</div>
+              </Card>
+            ))}
           </div>
 
           {/* dashboard grid */}
@@ -3438,16 +3606,16 @@ function Home({ library, progress, stats, settings, due, onStart, onCreate, onDe
           {/* quick actions */}
           <div style={{ display: 'flex', flexWrap: 'wrap', gap: 12, marginTop: 16 }}>
             {[
-              { icon: '＋', t: 'Make new cards', s: 'Paste notes, a file, or a topic', on: onCreate },
+              { icon: 'plus', t: 'Make new cards', s: 'Paste notes, a file, or a topic', on: onCreate },
               flagged > 0
-                ? { icon: '✳', t: 'Review your tricky ones', s: `${flagged} card${flagged > 1 ? 's' : ''} keep tripping you up`, on: onStart }
-                : { icon: '◧', t: 'Study your feed', s: 'Review what\'s due today', on: onStart },
-              { icon: '◎', t: 'Take a quiz', s: 'A quick graded test from your cards', on: () => onQuiz('all') },
+                ? { icon: 'warn', t: 'Review your tricky ones', s: `${flagged} card${flagged > 1 ? 's' : ''} keep tripping you up`, on: onStart }
+                : { icon: 'stack', t: 'Study your feed', s: 'Review what\'s due today', on: onStart },
+              { icon: 'target', t: 'Take a quiz', s: 'A quick graded test from your cards', on: () => onQuiz('all') },
             ].map((q, i) => (
               <button key={i} className="sf-tap" onClick={q.on}
                 style={{ flex: '1 1 220px', display: 'flex', alignItems: 'center', gap: 12, textAlign: 'left', cursor: 'pointer',
                   background: T.surface, border: `1px solid ${T.border}`, borderRadius: R.well, boxShadow: SH.raised, padding: '15px 16px' }}>
-                <span style={{ width: 34, height: 34, borderRadius: 10, background: rgba(T.accent, 0.12), color: T.accentInk, display: 'grid', placeItems: 'center', fontSize: 17, flexShrink: 0 }}>{q.icon}</span>
+                <span style={{ width: 34, height: 34, borderRadius: 10, background: rgba(T.accent, 0.12), color: T.accentInk, display: 'grid', placeItems: 'center', flexShrink: 0 }}><Ico name={q.icon} size={17} /></span>
                 <div>
                   <div style={{ fontFamily: SANS, fontSize: 14, fontWeight: 700, color: T.ink }}>{q.t}</div>
                   <div style={{ fontFamily: SANS, fontSize: 12, color: T.faint, marginTop: 1 }}>{q.s}</div>
@@ -3555,7 +3723,8 @@ function Quiz({ decks, deckId, onClose, onDone }){
   const closeBtn = (
     <button onClick={onClose} className="sf-tap" aria-label="Close quiz"
       style={{ width: 38, height: 38, borderRadius: R.pill, background: T.surface, border: `1px solid ${T.border}`,
-        cursor: 'pointer', fontSize: 15, color: T.muted, boxShadow: SH.raised, flexShrink: 0 }}>✕</button>
+        cursor: 'pointer', color: T.muted, boxShadow: SH.raised, flexShrink: 0, display: 'flex',
+        alignItems: 'center', justifyContent: 'center' }}><Ico name="cross" size={15} weight={2.2} /></button>
   );
 
   return (
@@ -3596,7 +3765,7 @@ function Quiz({ decks, deckId, onClose, onDone }){
 
             {usableCount < QUIZ_MIN ? (
               <Card style={{ padding: '30px 22px', textAlign: 'center' }}>
-                <div style={{ fontSize: 34, marginBottom: 10 }}>🧩</div>
+                <div style={{ display: 'flex', justifyContent: 'center', marginBottom: 12, color: T.faint }}><Ico name="puzzle" size={34} weight={1.5} /></div>
                 <Title style={{ fontSize: 18 }}>Not enough to quiz yet</Title>
                 <Sub style={{ marginTop: 6 }}>A quiz needs at least {QUIZ_MIN} quick or multiple-choice cards. Long-answer cards sit quizzes out — make a few more and come back.</Sub>
               </Card>
@@ -3635,8 +3804,8 @@ function Quiz({ decks, deckId, onClose, onDone }){
                   const isPicked = i === picked;
                   let bg = T.surface, bd = T.border, col = T.ink, mark = null;
                   if (answered){
-                    if (isCorrect){ bg = rgba(T.green, 0.12); bd = rgba(T.green, 0.5); col = T.ink; mark = '✓'; }
-                    else if (isPicked){ bg = rgba(T.red, 0.1); bd = rgba(T.red, 0.45); col = T.ink; mark = '✗'; }
+                    if (isCorrect){ bg = rgba(T.green, 0.12); bd = rgba(T.green, 0.5); col = T.ink; mark = 'check'; }
+                    else if (isPicked){ bg = rgba(T.red, 0.1); bd = rgba(T.red, 0.45); col = T.ink; mark = 'cross'; }
                     else { col = T.faint; }
                   }
                   return (
@@ -3645,7 +3814,7 @@ function Quiz({ decks, deckId, onClose, onDone }){
                         cursor: answered ? 'default' : 'pointer', background: bg, border: `1.5px solid ${bd}`,
                         borderRadius: R.well, padding: '15px 16px', boxShadow: answered ? 'none' : SH.raised }}>
                       <span style={{ flex: 1, fontFamily: SANS, fontSize: 15.5, fontWeight: 550, color: col, lineHeight: 1.4 }}>{opt}</span>
-                      {mark && <span style={{ fontSize: 16, fontWeight: 800, color: isCorrect ? T.green : T.red }}>{mark}</span>}
+                      {mark && <span style={{ color: isCorrect ? T.green : T.red }}><Ico name={mark} size={17} weight={2.6} /></span>}
                     </button>
                   );
                 })}
@@ -3698,10 +3867,12 @@ function Quiz({ decks, deckId, onClose, onDone }){
                         <div style={{ fontFamily: SANS, fontSize: 14.5, fontWeight: 650, color: T.ink, lineHeight: 1.4, marginBottom: 8 }}>{q.q}</div>
                         {answers[i] != null && (
                           <div style={{ fontFamily: SANS, fontSize: 13.5, color: T.red, marginBottom: 3 }}>
-                            ✗ You said: {q.options[answers[i]]}
+                            <span className="flex items-center gap-1.5"><Ico name="cross" size={13} weight={2.4} />You said: {q.options[answers[i]]}</span>
                           </div>
                         )}
-                        <div style={{ fontFamily: SANS, fontSize: 13.5, color: T.green, fontWeight: 600 }}>✓ {q.options[q.answer]}</div>
+                        <div style={{ fontFamily: SANS, fontSize: 13.5, color: T.green, fontWeight: 600 }}>
+                          <span className="flex items-center gap-1.5"><Ico name="check" size={13} weight={2.4} />{q.options[q.answer]}</span>
+                        </div>
                       </Card>
                     ))}
                   </div>
@@ -3774,7 +3945,7 @@ function WhatsNew({ onClose }){
         <div className="flex items-center justify-between" style={{ marginBottom: 16 }}>
           <Chip colour={T.accent} solid>What's new</Chip>
           <button onClick={onClose} className="sf-tap" aria-label="Close"
-            style={{ background: 'none', border: 'none', cursor: 'pointer', color: T.faint, fontSize: 20, lineHeight: '18px', padding: 2 }}>✕</button>
+            style={{ background: 'none', border: 'none', cursor: 'pointer', color: T.faint, padding: 2, display: 'flex' }}><Ico name="cross" size={17} /></button>
         </div>
         <PatchNotesList />
         <div style={{ marginTop: 22 }}>
@@ -3842,7 +4013,9 @@ function FeedbackForm(){
   if (state === 'sent'){
     return (
       <Card style={{ padding: 16, marginBottom: 10, boxShadow: SH.raised }}>
-        <div style={{ fontFamily: SANS, fontSize: 15, fontWeight: 700, color: T.green }}>Thanks — sent ✓</div>
+        <div style={{ fontFamily: SANS, fontSize: 15, fontWeight: 700, color: T.green }}>
+        <span className="flex items-center gap-2"><Ico name="check" size={16} weight={2.4} />Thanks — sent</span>
+      </div>
         <Sub style={{ fontSize: 13, marginTop: 4 }}>Your note is on its way. Want to add another?</Sub>
         <Btn kind="soft" onClick={() => setState('')} style={{ marginTop: 12, fontSize: 14 }}>Send another</Btn>
       </Card>
@@ -4003,7 +4176,7 @@ function AskPanel({ thread, setThread, onClose }){
           )}
           <button className="sf-tap" onClick={onClose} aria-label="Close"
             style={{ background: 'none', border: 'none', cursor: 'pointer', color: T.faint,
-              fontSize: 19, lineHeight: '18px', padding: '4px 6px' }}>✕</button>
+              padding: '4px 6px', display: 'flex' }}><Ico name="cross" size={17} /></button>
         </div>
       </div>
 
@@ -4069,7 +4242,7 @@ function AskPanel({ thread, setThread, onClose }){
           {photo && (
             <div className="flex items-center gap-2" style={{ margin: '0 8px 6px', padding: '6px 9px',
               background: T.surface, border: `1px solid ${T.border}`, borderRadius: 10 }}>
-              <span style={{ fontSize: 13 }}>🖼️</span>
+              <span style={{ color: T.muted, display: 'flex' }}><Ico name="image" size={14} /></span>
               <Sub style={{ flex: 1, fontSize: 12, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
                 {photo.busy ? 'Reading the photo…' : photo.name}
               </Sub>
@@ -4180,8 +4353,9 @@ export default function App(){
       const t = settings.theme || 'system';
       if (t === 'system') el.removeAttribute('data-theme');
       else el.setAttribute('data-theme', t);
+      el.setAttribute('data-font', fontOf(settings));
     } catch {}
-  }, [settings.theme]);
+  }, [settings.theme, settings.font]);
 
   const persistLibrary = useCallback((lib) => { setLibrary(lib); save('library:main', lib); }, []);
   const persistProgress = useCallback((p) => { setProgress(p); save('progress:all', p); }, []);
@@ -4493,16 +4667,16 @@ function Masthead({ due, streak, sound, onSound }){
         Study Feed
       </div>
       <div className="flex items-center gap-2">
-        {streak > 0 && <Chip colour={T.amber}>🔥 {streak}</Chip>}
+        {streak > 0 && <Chip colour={T.amber}><span className="flex items-center gap-1"><Ico name="flame" size={12} weight={2} fill />{streak}</span></Chip>}
         {due > 0 && <Chip colour={T.red} solid>{due} due</Chip>}
         {/* muting has to be one tap from wherever you are — this gets used in
             class, and hunting through Settings mid-lesson is not an option */}
         <button className="sf-tap" onClick={onSound} aria-label={sound ? 'Mute sounds' : 'Unmute sounds'}
           title={sound ? 'Mute sounds' : 'Unmute sounds'}
           style={{ width: 32, height: 32, borderRadius: R.pill, border: 'none', cursor: 'pointer',
-            background: 'transparent', color: sound ? T.muted : T.faint, fontSize: 15, lineHeight: '32px',
-            padding: 0, flexShrink: 0 }}>
-          {sound ? '🔊' : '🔇'}
+            background: 'transparent', color: sound ? T.muted : T.faint, padding: 0, flexShrink: 0,
+            display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+          <Ico name={sound ? 'speaker' : 'muted'} size={17} />
         </button>
       </div>
     </div>

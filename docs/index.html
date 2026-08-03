@@ -14,6 +14,14 @@
   <link rel="manifest" href="manifest.webmanifest" />
   <link rel="apple-touch-icon" href="icon.png" />
 
+  <!-- Typefaces. StudyFeed.jsx picks between them via --sf-font (data-font on
+       <html>); system-ui is the fallback, so the Artifact build — which can't
+       reach these — still renders deliberately. -->
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link rel="stylesheet"
+    href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&family=Inter:wght@400;500;600;700;800&display=swap" />
+
   <!-- the app uses Tailwind core utilities for layout only -->
   <script src="https://cdn.tailwindcss.com"></script>
   <style>
