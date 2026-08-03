@@ -65,6 +65,8 @@ Decks are portable: export the whole library, a chosen subset, or one deck on it
 - **Card types:** flip, cloze, short answer, multiple choice (distractors are real misconceptions), extended response. A **Mixed** generate mode picks the best type per idea; a long/quick slider sets the balance of what's made *and* how the feed is blended.
 - **Extended response, end to end:** command verb, A/M/E ladder, structural skeleton, per-question pitfall, and "mark my written answer" graded against the ladder. Two tiers of nudge while writing — writing points, then sentence starters with blanks.
 - **Getting better, not just marked:** after a mark, **How do I get to \<next grade\>?** returns the exact edits to make to *your* answer — the move, where it applies (quoting your words), and that sentence rewritten properly.
+- **It responds:** grading a card fires a colour wash, a particle burst and a chime whose pitch *climbs with your combo* (consecutive non-Again answers). Multi-choice reports right/wrong the instant you commit — the correct option pops, a wrong pick shakes. Finishing the cards actually due stops the feed, throws confetti and makes carrying on into practice a deliberate choice again.
+- **Sound is synthesised, not sampled** (`play()` / `tone()`, Web Audio, major pentatonic). No asset files, so it behaves the same on the website and in the Artifact, and the pitch can vary per combo step. One `AudioContext`, resumed lazily inside a tap since browsers hold it suspended until a gesture. Muted from the masthead speaker or Settings; `navigator.vibrate` adds haptics on Android (iOS Safari ignores it).
 - **Explain this further:** on any revealed card — the reasoning behind the answer, plus **Simpler** and **Go deeper** when the first pass lands at the wrong level.
 - **Ask anything:** a chat helper on every screen. It keeps the thread and is handed the card on screen, so "why is that the answer?" works without retyping. Memory-only — no fifth storage key.
 - **Feed:** ends deliberately ("put the phone down"); **Keep practising anyway** opens opt-in endless practice (recorded as practice, never touches the schedule). A deck bar at the top drills one subject at a time.
@@ -79,3 +81,13 @@ Decks are portable: export the whole library, a chosen subset, or one deck on it
 - **Not built yet:** worked-problem cards, per-standard tagging, accounts/sync (deliberately local-only — real auth would need a backend).
 
 See the in-app **Updates** tab (`PATCH_NOTES` in `StudyFeed.jsx`) for the release history.
+
+## Credits
+
+The dropzone illustration, the loading rings and the chat composer are ports of
+components from [KokonutUI](https://kokonutui.com) (MIT) by @dorianbaffier and
+@kokonutui. They're rebuilt rather than imported: the originals are Next.js +
+TypeScript + Tailwind + framer-motion + shadcn/ui, and this app is one `.jsx`
+file with inline styles that also has to run in an Artifact with no bundler. The
+ports use CSS keyframes and the theme tokens instead, so they follow light/dark
+with the rest of the app.

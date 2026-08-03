@@ -163,14 +163,96 @@ async function save(key, value){
 
 /* longMix = what % of your cards should be long (extended-response) answers.
    Drives both what gets generated and how the feed is blended. */
-const DEFAULT_SETTINGS = { interleave: true, newPerDay: 12, capNew: false, longMix: 30, theme: 'system', name: '', examDate: '', lastSeenVersion: '', onboarded: false, dismissedTips: {} };
+const DEFAULT_SETTINGS = { interleave: true, newPerDay: 12, capNew: false, longMix: 30, theme: 'system', name: '', examDate: '', lastSeenVersion: '', onboarded: false, dismissedTips: {}, sound: true };
+
+/* ---- sound ---------------------------------------------------------------
+   Synthesised, not sampled. Three reasons: a card grade fires 30+ times in a
+   session and the same recording grates fast; synthesis lets the pitch RISE
+   with your combo, which is most of why Duolingo's chime feels good; and there
+   are no asset files, so it behaves identically on the website and inside the
+   Artifact (which has no bundler to load them).
+
+   Every note comes from a major pentatonic scale — that scale has no wrong
+   note in it, so overlapping sounds never clash. */
+const PENT = [523.25, 587.33, 659.25, 783.99, 880.00, 1046.50, 1174.66]; // C5 D5 E5 G5 A5 C6 D6
+let audioCtx = null;
+let soundOn = true;
+const setSoundOn = (v) => { soundOn = !!v; };
+
+function audio(){
+  if (audioCtx) return audioCtx;
+  try {
+    const AC = window.AudioContext || window.webkitAudioContext;
+    if (AC) audioCtx = new AC();
+  } catch { audioCtx = null; }
+  return audioCtx;
+}
+
+/* One note. `when` is an offset in seconds so a caller can lay out a small
+   melody in a single pass without timers. */
+function tone(c, freq, when, dur, type, peak){
+  const o = c.createOscillator();
+  const g = c.createGain();
+  o.type = type || 'sine';
+  o.frequency.setValueAtTime(freq, c.currentTime + when);
+  const t0 = c.currentTime + when;
+  g.gain.setValueAtTime(0.0001, t0);
+  g.gain.exponentialRampToValueAtTime(peak || 0.16, t0 + 0.014);
+  g.gain.exponentialRampToValueAtTime(0.0001, t0 + dur);
+  o.connect(g); g.connect(c.destination);
+  o.start(t0);
+  o.stop(t0 + dur + 0.03);
+}
+
+/* `step` is the current combo — right answers climb the scale as the streak
+   builds, then sit at the top rather than turning shrill. */
+function play(name, step){
+  if (!soundOn) return;
+  const c = audio();
+  if (!c) return;
+  // browsers hold the audio clock suspended until a gesture; every call here
+  // happens inside a tap, so this is the right moment to wake it
+  if (c.state === 'suspended'){ try { c.resume(); } catch {} }
+  const i = Math.min(Math.max(step || 0, 0), 3);
+  if (name === 'right'){
+    tone(c, PENT[i], 0, 0.15, 'sine', 0.15);
+    tone(c, PENT[i + 2], 0.065, 0.24, 'sine', 0.13);
+  } else if (name === 'ok'){
+    tone(c, PENT[1], 0, 0.18, 'sine', 0.11);
+  } else if (name === 'wrong'){
+    tone(c, 174.61, 0, 0.26, 'triangle', 0.12);   // F3, soft — a nudge, not a buzzer
+  } else if (name === 'milestone'){
+    tone(c, PENT[0], 0, 0.16, 'sine', 0.15);
+    tone(c, PENT[2], 0.07, 0.16, 'sine', 0.15);
+    tone(c, PENT[4], 0.14, 0.3, 'sine', 0.15);
+  } else if (name === 'done'){
+    [0, 2, 3, 5].forEach((n, k) => tone(c, PENT[n], k * 0.085, 0.42, 'sine', 0.15));
+    tone(c, PENT[6], 0.34, 0.6, 'triangle', 0.08);
+  } else if (name === 'excellence'){
+    [0, 2, 4, 6].forEach((n, k) => tone(c, PENT[n], k * 0.06, 0.5, 'sine', 0.14));
+  } else if (name === 'tick'){
+    tone(c, PENT[2], 0, 0.05, 'sine', 0.05);
+  }
+}
+
+/* Android fires these; iOS Safari ignores them entirely. Wrapped because a
+   few browsers throw rather than no-op. */
+const buzz = (ms) => { try { if (navigator.vibrate) navigator.vibrate(ms); } catch {} };
 
 /* ---- version + changelog -------------------------------------------------
    APP_VERSION is the id we compare against settings.lastSeenVersion to decide
    whether to pop the "What's new" note. Bump it whenever PATCH_NOTES gains an
    entry. Newest first; the first element is the current release. */
-const APP_VERSION = '1.2.0';
+const APP_VERSION = '1.3.0';
 const PATCH_NOTES = [
+  { v: '1.3.0', date: '2026-08-03', title: 'It feels like something now', items: [
+    'Answers land: colour bursts, sound and a bit of a kick every time you grade a card.',
+    'Build a streak — get them right back to back and the chime climbs with your combo.',
+    'Finishing your due cards is now an actual moment, not a silent hand-off to practice.',
+    'Multi-choice tells you instantly: the right answer glows, a wrong pick shakes.',
+    'Drag files straight onto the Create page, and watch real progress while cards are made.',
+    'Sound can be switched off any time — the speaker in the top corner, or Settings.',
+  ] },
   { v: '1.2.0', date: '2026-07-31', title: 'Ask, explain & upgrade', items: [
     'Ask anything, anywhere — a study helper sits in the corner of every screen, and it can see the card you\'re on.',
     'Didn\'t get the answer? Tap “Explain this further” on any card for the reasoning behind it — and “Simpler” or “Go deeper” if that wasn\'t the right level.',
@@ -1063,6 +1145,103 @@ function Chip({ children, colour = T.accent, solid, style }){
   );
 }
 
+/* ---- reward effects ------------------------------------------------------
+   Ported from the kokonutui components (MIT) into this file's idiom: no
+   framer-motion, no Tailwind colour classes, no icon package — CSS keyframes
+   and the T.* tokens instead, so everything follows light/dark automatically
+   and still runs in the Artifact, which has no bundler. */
+
+/* A particle burst. Dots fly outward from the centre of whatever relative
+   parent holds it; the parent unmounts it when the animation is done. Pure
+   DOM, no canvas — 14 divs is cheaper than a render loop. */
+function Burst({ colour, n = 16, spread = 1 }){
+  const bits = useMemo(() => {
+    const out = [];
+    for (let i = 0; i < n; i++){
+      const a = (i / n) * Math.PI * 2 + (Math.random() - 0.5) * 0.6;
+      const d = (40 + Math.random() * 60) * spread;
+      out.push({ x: Math.cos(a) * d, y: Math.sin(a) * d - 10,
+        s: 5 + Math.random() * 6, delay: Math.round(Math.random() * 70) });
+    }
+    return out;
+  }, [n, spread]);
+  return (
+    <div style={{ position: 'absolute', inset: 0, pointerEvents: 'none', zIndex: 4 }}>
+      {bits.map((b, i) => (
+        <div key={i} style={{ position: 'absolute', left: '50%', top: '50%',
+          width: b.s, height: b.s, borderRadius: b.s, background: colour, opacity: 0,
+          '--bx': b.x + 'px', '--by': b.y + 'px',
+          animation: `sf-burst 640ms cubic-bezier(.15,.75,.35,1) ${b.delay}ms forwards` }} />
+      ))}
+    </div>
+  );
+}
+
+/* Confetti for the big moments only (finishing your due cards). Falls rather
+   than bursts, and covers the whole screen. */
+function Confetti({ n = 46 }){
+  const hues = [T.accent, T.green, T.amber, HUES[0], HUES[2], HUES[5]];
+  const bits = useMemo(() => {
+    const out = [];
+    for (let i = 0; i < n; i++){
+      out.push({ left: Math.random() * 100, delay: Math.round(Math.random() * 900),
+        dur: 1500 + Math.round(Math.random() * 1400), w: 6 + Math.random() * 6,
+        h: 9 + Math.random() * 8, rot: Math.round(Math.random() * 360),
+        drift: Math.round((Math.random() - 0.5) * 130), c: hues[i % hues.length] });
+    }
+    return out;
+  }, [n]);
+  return (
+    <div style={{ position: 'fixed', inset: 0, pointerEvents: 'none', zIndex: 80, overflow: 'hidden' }}>
+      {bits.map((b, i) => (
+        <div key={i} style={{ position: 'absolute', top: -24, left: b.left + '%',
+          width: b.w, height: b.h, background: b.c, borderRadius: 2, opacity: 0,
+          '--drift': b.drift + 'px', '--spin': (b.rot + 540) + 'deg',
+          animation: `sf-fall ${b.dur}ms linear ${b.delay}ms forwards` }} />
+      ))}
+    </div>
+  );
+}
+
+/* The kokonutui loader, rebuilt with plain CSS. Concentric conic-gradient
+   rings, masked to thin circles, spinning at different speeds and directions.
+   Tinted to the app accent instead of the original monochrome. */
+function Rings({ size = 92 }){
+  const ring = (inset, from, sweep, colour, dur, dir, opacity) => ({
+    position: 'absolute', inset: 0, borderRadius: '50%', opacity,
+    background: `conic-gradient(from ${from}deg, transparent 0deg, ${colour} ${sweep}deg, transparent ${sweep * 2}deg)`,
+    mask: `radial-gradient(circle at 50% 50%, transparent ${inset}%, #000 ${inset + 2}%, #000 ${inset + 5}%, transparent ${inset + 7}%)`,
+    WebkitMask: `radial-gradient(circle at 50% 50%, transparent ${inset}%, #000 ${inset + 2}%, #000 ${inset + 5}%, transparent ${inset + 7}%)`,
+    animation: `${dir === 1 ? 'sf-spin' : 'sf-spin-rev'} ${dur}s linear infinite`,
+  });
+  return (
+    <div style={{ position: 'relative', width: size, height: size,
+      animation: 'sf-breathe 4s ease-in-out infinite' }}>
+      <div style={ring(35, 0, 90, T.accent, 3, 1, 0.85)} />
+      <div style={ring(42, 0, 120, T.accentInk, 2.5, 1, 0.9)} />
+      <div style={ring(52, 180, 45, T.accent, 4, -1, 0.4)} />
+      <div style={ring(61, 270, 20, T.green, 3.5, 1, 0.55)} />
+    </div>
+  );
+}
+
+/* Full loading state — rings plus the two lines of copy. Used while cards are
+   being generated, which is the app's one genuinely slow wait. */
+function Loading({ title, subtitle, size }){
+  return (
+    <div className="flex flex-col items-center justify-center" style={{ gap: 22, padding: '26px 8px' }}>
+      <Rings size={size || 92} />
+      <div style={{ textAlign: 'center', maxWidth: 260 }}>
+        <div style={{ fontFamily: SANS, fontSize: 15.5, fontWeight: 600, color: T.ink,
+          letterSpacing: '-0.02em', animation: 'sf-pulse 3s ease-in-out infinite' }}>{title}</div>
+        {subtitle && (
+          <Sub style={{ marginTop: 7, fontSize: 13.5, animation: 'sf-pulse 4s ease-in-out infinite' }}>{subtitle}</Sub>
+        )}
+      </div>
+    </div>
+  );
+}
+
 /* The model replies in light markdown — **bold**, "- " bullets, blank lines.
    Render exactly that much, so replies read as prose instead of raw asterisks
    without pulling in a markdown library. */
@@ -1214,7 +1393,7 @@ function Icon({ name, active }){
 /* ==========================================================================
    STUDY CARD
    ========================================================================== */
-function StudyCard({ card, deck, onGrade, reduceMotion, prog, practice }){
+function StudyCard({ card, deck, onGrade, reduceMotion, prog, practice, onFeedback }){
   const [phase, setPhase] = useState('attempt');
   const [pick, setPick] = useState(null);
   const colour = subjectColour(deck.subject);
@@ -1269,7 +1448,14 @@ function StudyCard({ card, deck, onGrade, reduceMotion, prog, practice }){
       )}
 
       {isLong ? <ExtendedFace card={card} phase={phase} deck={deck} onReveal={() => setPhase('reveal')} />
-        : isMcq ? <McqFace card={card} phase={phase} deck={deck} pick={pick} onPick={(i) => { setPick(i); setPhase('reveal'); }} />
+        : isMcq ? <McqFace card={card} phase={phase} deck={deck} pick={pick}
+            onPick={(i) => {
+              setPick(i); setPhase('reveal');
+              /* multi-choice is the one card type where right and wrong are
+                 unambiguous the instant you commit — so the reward lands here
+                 rather than waiting for the grade buttons */
+              if (onFeedback) onFeedback(i === card.answer ? 'right' : 'wrong');
+            }} />
         : card.type === 'short' ? <ShortFace card={card} phase={phase} deck={deck} />
         : <FlipFace card={card} phase={phase} deck={deck} />}
 
@@ -1474,15 +1660,23 @@ function McqFace({ card, phase, pick, onPick, deck }){
         {(card.options || []).map((opt, i) => {
           const isAnswer = i === card.answer;
           const isPick = pick === i;
-          let bg = T.surface, border = T.border, col = T.ink, dim = 1;
-          if (revealed && isAnswer){ bg = rgba(T.green, 0.1); border = rgba(T.green, 0.5); col = T.ink; }
-          else if (revealed && isPick){ bg = rgba(T.red, 0.1); border = rgba(T.red, 0.5); col = T.ink; }
+          let bg = T.surface, border = T.border, col = T.ink, dim = 1, anim = 'none';
+          if (revealed && isAnswer){
+            bg = rgba(T.green, 0.1); border = rgba(T.green, 0.5); col = T.ink;
+            /* the right answer takes a beat and pops — the moment of truth on
+               a multi-choice is the tap, not the grade buttons below */
+            anim = 'sf-pop 420ms cubic-bezier(.2,.8,.3,1)';
+          }
+          else if (revealed && isPick){
+            bg = rgba(T.red, 0.1); border = rgba(T.red, 0.5); col = T.ink;
+            anim = 'sf-shake 420ms cubic-bezier(.3,.7,.4,1)';
+          }
           else if (revealed){ dim = 0.5; }
           return (
             <button key={i} className="sf-tap" disabled={revealed} onClick={() => onPick(i)}
               style={{ display: 'flex', gap: 12, alignItems: 'center', textAlign: 'left',
                 background: bg, border: `1.5px solid ${border}`, borderRadius: R.well, padding: '13px 14px',
-                cursor: revealed ? 'default' : 'pointer', color: col, opacity: dim,
+                cursor: revealed ? 'default' : 'pointer', color: col, opacity: dim, animation: anim,
                 transition: 'border-color 160ms, background 160ms, opacity 200ms' }}>
               <span style={{ width: 24, height: 24, borderRadius: 12, background: T.well, flexShrink: 0,
                 display: 'flex', alignItems: 'center', justifyContent: 'center',
@@ -1583,7 +1777,14 @@ function ExtendedFace({ card, phase, deck, onReveal }){
     setBusy(true); setErr(''); setResult(null);
     try {
       const r = await markAnswer(card, answer, deck.standard || 'NCEA Level 1');
-      if (r){ setResult(r); onReveal && onReveal(); }   // show feedback and the ladder together
+      if (r){
+        setResult(r); onReveal && onReveal();   // show feedback and the ladder together
+        /* a mark you waited 15 seconds for should announce itself */
+        if (r.grade === 'Excellence'){ play('excellence'); buzz([14, 40, 14]); }
+        else if (r.grade === 'Merit'){ play('milestone'); buzz(16); }
+        else if (r.grade === 'Achieved'){ play('right', 1); buzz(10); }
+        else play('ok');
+      }
       else setErr('Could not read the marking. Try again.');
     } catch (e){ setErr(friendlyApiError(e) + ' Your answer is safe.'); }
     finally { setBusy(false); }
@@ -1901,7 +2102,69 @@ function DeckBar({ decks, progress, focus, setFocus, onQuiz }){
   );
 }
 
-function Feed({ decks, progress, settings, stats, onGrade, reduceMotion, focus, setFocus, onSettings, onQuiz }){
+/* The streak chip. Appears at two in a row and escalates — the number going up
+   is the whole point, so it gets bigger and warmer rather than just changing
+   text. Resets to nothing the moment you press Again. */
+function ComboChip({ n }){
+  if (n < 2) return null;
+  const tier = n >= 10 ? 2 : n >= 5 ? 1 : 0;
+  const c = tier === 2 ? T.green : tier === 1 ? T.amber : T.accent;
+  const label = tier === 2 ? `🔥 ${n} in a row — unreal` : tier === 1 ? `🔥 ${n} in a row` : `${n} in a row`;
+  return (
+    <span key={n} style={{ display: 'inline-block', fontFamily: SANS,
+      fontSize: tier === 2 ? 13 : 12.5, fontWeight: 700, color: tier ? '#fff' : c,
+      background: tier ? c : rgba(c, 0.14), borderRadius: R.pill,
+      padding: tier === 2 ? '5px 13px' : '4px 11px', whiteSpace: 'nowrap',
+      animation: 'sf-combo-in 420ms cubic-bezier(.2,.8,.3,1)' }}>{label}</span>
+  );
+}
+
+/* Sits over the card and fires once per grade: a colour wash across the whole
+   card plus a particle burst. Keyed by an incrementing id so consecutive
+   grades of the same kind still replay. */
+function RewardLayer({ fx }){
+  if (!fx) return null;
+  const c = fx.kind === 'wrong' ? T.red : fx.kind === 'ok' ? T.amber : fx.kind === 'milestone' ? T.amber : T.green;
+  return (
+    <div key={fx.id} style={{ position: 'absolute', inset: 0, pointerEvents: 'none',
+      borderRadius: R.card, overflow: 'hidden', zIndex: 3 }}>
+      <div style={{ position: 'absolute', inset: 0, background: rgba(c, 0.16),
+        animation: 'sf-flash 520ms ease-out forwards' }} />
+      {fx.kind !== 'wrong' && <Burst colour={c} n={fx.kind === 'milestone' ? 24 : 15} spread={fx.kind === 'milestone' ? 1.35 : 1} />}
+    </div>
+  );
+}
+
+/* Finishing the cards that were actually due is the biggest moment in the app
+   and it used to pass in silence — the feed just slid into endless practice.
+   Now it stops, celebrates, and makes carrying on a deliberate choice again. */
+function FinishedCard({ done, streak, onPractice, onHome }){
+  useEffect(() => { play('done'); buzz([16, 60, 16, 60, 26]); }, []);
+  return (
+    <>
+      <Confetti />
+      <Card style={{ padding: '40px 24px', textAlign: 'center', position: 'relative', overflow: 'hidden',
+        animation: 'sf-in 300ms cubic-bezier(.2,.8,.3,1)' }}>
+        <div style={{ fontSize: 46, marginBottom: 10, animation: 'sf-float 2.6s ease-in-out infinite' }}>🎉</div>
+        <Title style={{ fontSize: 23 }}>That's everything due</Title>
+        <Sub style={{ marginTop: 8, maxWidth: 300, marginLeft: 'auto', marginRight: 'auto' }}>
+          {done} card{done === 1 ? '' : 's'} reviewed. They'll come back exactly when you're about to forget them.
+        </Sub>
+        {streak > 0 && (
+          <div style={{ marginTop: 16 }}>
+            <Chip colour={T.amber} solid>🔥 {streak} day streak</Chip>
+          </div>
+        )}
+        <div className="flex gap-2" style={{ marginTop: 26 }}>
+          <Btn full kind="primary" onClick={onHome}>Put the phone down</Btn>
+          <Btn kind="soft" onClick={onPractice} style={{ whiteSpace: 'nowrap' }}>Keep going</Btn>
+        </div>
+      </Card>
+    </>
+  );
+}
+
+function Feed({ decks, progress, settings, stats, onGrade, reduceMotion, focus, setFocus, onSettings, onQuiz, onHome }){
   const fdecks = useMemo(() => (focus === 'all' ? decks : decks.filter(d => d.id === focus)), [decks, focus]);
   const focusDeck = focus === 'all' ? null : decks.find(d => d.id === focus);
 
@@ -1921,9 +2184,15 @@ function Feed({ decks, progress, settings, stats, onGrade, reduceMotion, focus, 
   const [reviewed, setReviewed] = useState(0);
   const [pool, setPool] = useState([]);
   const [pIdx, setPIdx] = useState(0);
+  const [combo, setCombo] = useState(0);
+  const [fx, setFx] = useState(null);          // { id, kind } — one reward flash
+  const [finished, setFinished] = useState(false);
+  const fxId = useRef(0);
 
   const scheduledLeft = queue.length;
-  const inPractice = scheduledLeft === 0;
+  /* Practice only starts once you've either chosen to keep going, or arrived
+     with nothing due in the first place. */
+  const inPractice = scheduledLeft === 0 && !finished;
   const bar = <DeckBar decks={decks} progress={progress} focus={focus} setFocus={setFocus} onQuiz={onQuiz} />;
 
   useEffect(() => {
@@ -1933,27 +2202,60 @@ function Feed({ decks, progress, settings, stats, onGrade, reduceMotion, focus, 
     }
   }, [inPractice, pool.length, allItems]);
 
+  /* One place decides what a grade feels like, so scheduled and practice cards
+     behave identically. `silent` is for multi-choice, which already gave you
+     the sound the moment you committed to an option. */
+  const reward = (q, silent) => {
+    const good = q >= Q.GOOD;
+    const next = good ? combo + 1 : 0;
+    setCombo(next);
+    const milestone = good && next >= 5 && next % 5 === 0;
+    const kind = q === Q.AGAIN ? 'wrong' : q === Q.HARD ? 'ok' : milestone ? 'milestone' : 'right';
+    fxId.current += 1;
+    setFx({ id: fxId.current, kind });
+    if (!silent){
+      if (q === Q.AGAIN){ play('wrong'); buzz(34); }
+      else if (q === Q.HARD){ play('ok'); buzz(10); }
+      else if (milestone){ play('milestone'); buzz([12, 50, 12]); }
+      else { play('right', next - 1); buzz(10); }
+    }
+    return next;
+  };
+
   const gradeScheduled = (q, sure) => {
     const head = queue[0];
     if (!head) return;
     const rest = queue.slice(1);
     const { reinsert } = onGrade(head.card, head.deck, q, sure, false);
+    reward(q, head.card.type === 'mcq');
     setReviewed(r => r + 1);
     if (reinsert){
       const nq = rest.slice();
       nq.splice(Math.min(rest.length, 5), 0, head);
       setQueue(nq);
-    } else setQueue(rest);
+    } else {
+      setQueue(rest);
+      if (rest.length === 0) setFinished(true);   // that was the last one due
+    }
   };
 
   const gradePractice = (q, sure) => {
     const it = pool[pIdx];
     if (!it) return;
     onGrade(it.card, it.deck, q, sure, true);
+    reward(q, it.card.type === 'mcq');
     setReviewed(r => r + 1);
     const next = pIdx + 1;
     if (next >= pool.length){ setPool(mixedPool()); setPIdx(0); }
     else setPIdx(next);
+  };
+
+  /* Multi-choice reports the instant you pick, before any grade is given. */
+  const pickFeedback = (kind) => {
+    fxId.current += 1;
+    setFx({ id: fxId.current, kind });
+    if (kind === 'right'){ play('right', combo); buzz(10); }
+    else { play('wrong'); buzz(34); }
   };
 
   if (allItems.length === 0){
@@ -1969,6 +2271,16 @@ function Feed({ decks, progress, settings, stats, onGrade, reduceMotion, focus, 
     );
   }
 
+  if (finished){
+    return (
+      <div>
+        {bar}
+        <FinishedCard done={reviewed} streak={stats.streak || 0}
+          onPractice={() => { setFinished(false); setCombo(0); }} onHome={onHome} />
+      </div>
+    );
+  }
+
   if (inPractice){
     const it = pool[pIdx];
     if (!it) return <div style={{ minHeight: 420 }} />;
@@ -1977,10 +2289,16 @@ function Feed({ decks, progress, settings, stats, onGrade, reduceMotion, focus, 
         {bar}
         <div className="flex items-center justify-between" style={{ marginBottom: 12, padding: '0 4px' }}>
           <Chip colour={T.green}>{focusDeck ? 'Extra practice · ' + (focusDeck.topic || focusDeck.subject || 'this deck') : 'Extra practice'}</Chip>
-          <Sub style={{ fontSize: 12.5 }}>{reviewed} done today</Sub>
+          <div className="flex items-center gap-2">
+            <ComboChip n={combo} />
+            <Sub style={{ fontSize: 12.5 }}>{reviewed} done today</Sub>
+          </div>
         </div>
-        <StudyCard key={it.card.id + ':' + pIdx} card={it.card} deck={it.deck} onGrade={gradePractice}
-          reduceMotion={reduceMotion} prog={progress[it.card.id]} practice={true} />
+        <div style={{ position: 'relative' }}>
+          <StudyCard key={it.card.id + ':' + pIdx} card={it.card} deck={it.deck} onGrade={gradePractice}
+            reduceMotion={reduceMotion} prog={progress[it.card.id]} practice={true} onFeedback={pickFeedback} />
+          {!reduceMotion && <RewardLayer fx={fx} />}
+        </div>
       </div>
     );
   }
@@ -2002,10 +2320,13 @@ function Feed({ decks, progress, settings, stats, onGrade, reduceMotion, focus, 
           <div style={{ height: '100%', width: `${pct}%`, background: T.green, borderRadius: R.pill,
             transition: reduceMotion ? 'none' : 'width 340ms cubic-bezier(.2,.8,.3,1)' }} />
         </div>
-        <Sub style={{ fontSize: 12.5, fontWeight: 600 }}>{scheduledLeft} left</Sub>
+        {combo >= 2 ? <ComboChip n={combo} /> : <Sub style={{ fontSize: 12.5, fontWeight: 600 }}>{scheduledLeft} left</Sub>}
       </div>
-      <StudyCard key={queue[0].card.id} card={queue[0].card} deck={queue[0].deck} onGrade={gradeScheduled}
-        reduceMotion={reduceMotion} prog={progress[queue[0].card.id]} practice={false} />
+      <div style={{ position: 'relative' }}>
+        <StudyCard key={queue[0].card.id} card={queue[0].card} deck={queue[0].deck} onGrade={gradeScheduled}
+          reduceMotion={reduceMotion} prog={progress[queue[0].card.id]} practice={false} onFeedback={pickFeedback} />
+        {!reduceMotion && <RewardLayer fx={fx} />}
+      </div>
     </div>
   );
 }
@@ -2015,6 +2336,93 @@ function Feed({ decks, progress, settings, stats, onGrade, reduceMotion, focus, 
    ========================================================================== */
 const INPUT = { width: '100%', background: T.well, color: T.ink, border: `1px solid ${T.border}`,
   borderRadius: R.well, padding: '13px 14px', fontFamily: SANS, lineHeight: 1.55, outline: 'none' };
+
+/* The dropzone illustration — a dashed orbit, a folder that breathes, and an
+   arrow that lifts. Ported from the kokonutui file-upload (MIT); the path
+   morph needs SMIL (CSS can't tween `d`), the orbit is plain CSS. Colours are
+   theme tokens, so it follows light/dark like everything else. */
+function UploadArt({ active }){
+  return (
+    <svg width="66" height="66" viewBox="0 0 100 100" fill="none" aria-hidden="true"
+      style={{ transition: 'transform 240ms cubic-bezier(.2,.8,.3,1)', transform: active ? 'scale(1.06)' : 'none' }}>
+      <circle cx="50" cy="50" r="45" strokeDasharray="4 4" strokeWidth="2"
+        stroke={active ? rgba(T.accent, 0.55) : T.border}
+        style={{ transformOrigin: '50px 50px', animation: 'sf-spin 60s linear infinite' }} />
+      <path strokeWidth="2" stroke={T.accent} fill={rgba(T.accent, 0.13)}
+        d="M30 35H70C75 35 75 40 75 40V65C75 70 70 70 70 70H30C25 70 25 65 25 65V40C25 35 30 35 30 35Z">
+        <animate attributeName="d" dur="2.4s" repeatCount="indefinite"
+          values="M30 35H70C75 35 75 40 75 40V65C75 70 70 70 70 70H30C25 70 25 65 25 65V40C25 35 30 35 30 35Z;
+                  M30 38H70C75 38 75 43 75 43V68C75 73 70 73 70 73H30C25 73 25 68 25 68V43C25 38 30 38 30 38Z;
+                  M30 35H70C75 35 75 40 75 40V65C75 70 70 70 70 70H30C25 70 25 65 25 65V40C25 35 30 35 30 35Z" />
+      </path>
+      <path d="M30 35C30 35 35 35 40 35C45 35 45 30 50 30C55 30 55 35 60 35C65 35 70 35 70 35"
+        fill="none" strokeWidth="2" stroke={T.accent} />
+      <line x1="50" x2="50" y1="45" y2="60" strokeWidth="2" strokeLinecap="round" stroke={T.accent}>
+        <animate attributeName="y2" dur="2.4s" repeatCount="indefinite" values="60;55;60" />
+      </line>
+      <polyline points="42,52 50,45 58,52" fill="none" strokeWidth="2" strokeLinecap="round"
+        strokeLinejoin="round" stroke={T.accent}>
+        <animate attributeName="points" dur="2.4s" repeatCount="indefinite"
+          values="42,52 50,45 58,52;42,47 50,40 58,47;42,52 50,45 58,52" />
+      </polyline>
+    </svg>
+  );
+}
+
+/* Drag-and-drop or tap to browse. The original simulated an upload bar; ours
+   shows the real thing, because reading a PDF genuinely takes a few seconds. */
+function DropZone({ onPicked, attaching, imageCount }){
+  const [drag, setDrag] = useState(false);
+  const fileRef = useRef(null);
+  const stop = (e) => { e.preventDefault(); e.stopPropagation(); };
+
+  return (
+    <div
+      onDragOver={(e) => { stop(e); if (!attaching) setDrag(true); }}
+      onDragLeave={(e) => { stop(e); setDrag(false); }}
+      onDrop={(e) => {
+        stop(e); setDrag(false);
+        if (attaching) return;
+        const files = Array.from((e.dataTransfer && e.dataTransfer.files) || []);
+        if (files.length) onPicked(files);
+      }}
+      onClick={() => { if (!attaching && fileRef.current) fileRef.current.click(); }}
+      style={{ marginTop: 14, position: 'relative', cursor: attaching ? 'default' : 'pointer',
+        borderRadius: R.card, padding: '26px 18px', textAlign: 'center',
+        border: `1.5px dashed ${drag ? T.accent : T.border}`,
+        background: drag ? rgba(T.accent, 0.07) : T.surface,
+        transition: 'background 200ms, border-color 200ms' }}>
+      <input ref={fileRef} type="file" multiple style={{ display: 'none' }}
+        accept=".pdf,.docx,.pptx,.txt,application/pdf,image/*"
+        onChange={(e) => {
+          const files = Array.from(e.target.files || []);
+          if (e.target) e.target.value = '';
+          if (files.length) onPicked(files);
+        }} />
+
+      {attaching ? (
+        <div className="flex flex-col items-center" style={{ gap: 14, padding: '4px 0' }}>
+          <Rings size={62} />
+          <Sub style={{ fontWeight: 600, color: T.ink }}>{attaching}</Sub>
+        </div>
+      ) : (
+        <div className="flex flex-col items-center">
+          <UploadArt active={drag} />
+          <div style={{ fontFamily: SANS, fontSize: 16, fontWeight: 700, color: T.ink,
+            letterSpacing: '-0.02em', marginTop: 12 }}>
+            {drag ? 'Drop it here' : 'Drop a file, or tap to browse'}
+          </div>
+          <Sub style={{ fontSize: 12.5, marginTop: 4 }}>PDF, Word, PowerPoint, images or text</Sub>
+          {imageCount > 0 && (
+            <div style={{ marginTop: 10 }}>
+              <Chip colour={T.green}>{imageCount} image{imageCount === 1 ? '' : 's'} ready to read</Chip>
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
 
 function Create({ onSave, settings, onSettings, onPending }){
   const [mode, setMode] = useState('generate');
@@ -2029,7 +2437,6 @@ function Create({ onSave, settings, onSettings, onPending }){
   const [attaching, setAttaching] = useState('');
   const [images, setImages] = useState([]);
   const [strictSource, setStrictSource] = useState(false);
-  const fileRef = useRef(null);
   const hasMaterial = source.trim().length > 0 || images.length > 0;
 
   // let the nav badge the Create tab while cards are sitting unsaved
@@ -2037,10 +2444,9 @@ function Create({ onSave, settings, onSettings, onPending }){
     if (onPending) onPending(drafts ? drafts.filter(d => d.keep).length : 0);
   }, [drafts, onPending]);
 
-  const onFiles = async (e) => {
-    const files = Array.from(e.target.files || []);
-    if (e.target) e.target.value = '';
-    if (!files.length) return;
+  /* Takes a plain array so the hidden input and the drop target share one path. */
+  const takeFiles = async (files) => {
+    if (!files || !files.length) return;
     setErr('');
     let added = '';
     const gotImages = [];
@@ -2140,16 +2546,7 @@ function Create({ onSave, settings, onSettings, onPending }){
       )}
 
       {mode === 'generate' && (
-        <Card style={{ padding: 14, marginTop: 14, boxShadow: SH.raised }}>
-          <input ref={fileRef} type="file" accept=".pdf,.docx,.pptx,.txt,application/pdf,image/*" multiple onChange={onFiles} style={{ display: 'none' }} />
-          <Btn full kind="soft" onClick={() => fileRef.current && fileRef.current.click()}>
-            📎  Add PDF, Word, PowerPoint, image or text
-          </Btn>
-          {attaching && <Sub style={{ marginTop: 10, textAlign: 'center' }}>{attaching}</Sub>}
-          {!attaching && (
-            <Sub style={{ marginTop: 10, textAlign: 'center', fontSize: 12.5 }}>Reads the text and the images, diagrams and scanned pages inside.</Sub>
-          )}
-        </Card>
+        <DropZone onPicked={takeFiles} attaching={attaching} imageCount={images.length} />
       )}
 
       {mode === 'generate' && (
@@ -2201,7 +2598,11 @@ function Create({ onSave, settings, onSettings, onPending }){
           <Sub style={{ color: T.red, fontWeight: 500 }}>{err}</Sub>
         </div>
       )}
-      {busy && <Sub style={{ marginTop: 14, textAlign: 'center', fontWeight: 600 }}>{progText}</Sub>}
+      {busy && (
+        <Card style={{ marginTop: 14, padding: '10px 8px', boxShadow: SH.raised }}>
+          <Loading title={progText} subtitle="Writing questions, answers and the marking for each one." />
+        </Card>
+      )}
 
       <div style={{ marginTop: 16 }}>
         <Btn full kind="primary" onClick={run} disabled={busy}>
@@ -2801,6 +3202,10 @@ function Settings({ settings, onChange, library, progress, onImport }){
         <MixSlider value={longMixOf(settings)} onChange={(v) => set({ longMix: v })} />
       </Card>
 
+      <SettingRow title="Sounds" note="A chime when you get one right, climbing as your streak builds">
+        <Toggle on={settings.sound !== false} onClick={() => { const on = settings.sound === false; set({ sound: on }); if (on) play('right', 1); }} />
+      </SettingRow>
+
       <SettingRow title="Mix subjects up" note="Rotates subjects so you don't do one topic in a block">
         <Toggle on={settings.interleave} onClick={() => set({ interleave: !settings.interleave })} />
       </SettingRow>
@@ -3099,6 +3504,7 @@ function Quiz({ decks, deckId, onClose, onDone }){
   const [idx, setIdx] = useState(0);
   const [answers, setAnswers] = useState([]);
   const [picked, setPicked] = useState(null);
+  const [quizRun, setQuizRun] = useState(0);   // consecutive right answers
   const doneRef = useRef(false);
 
   const scopeDecks = scope === 'all' ? decks : decks.filter(d => d.id === scope);
@@ -3117,19 +3523,34 @@ function Quiz({ decks, deckId, onClose, onDone }){
     const qs = buildQuiz(scopeCards, n);
     if (!qs.length) return;
     doneRef.current = false;
-    setQuestions(qs); setAnswers(new Array(qs.length).fill(null)); setIdx(0); setPicked(null); setPhase('run');
+    setQuestions(qs); setAnswers(new Array(qs.length).fill(null)); setIdx(0); setPicked(null); setQuizRun(0); setPhase('run');
   };
+  /* A quiz is the most game-like thing in the app, so it gets the fullest
+     feedback: the run of right answers drives the pitch the same way the feed
+     does, and a wrong pick breaks the run. */
   const choose = (i) => {
     if (picked !== null) return;
     setPicked(i);
     setAnswers(a => { const b = a.slice(); b[idx] = i; return b; });
+    const right = questions[idx] && i === questions[idx].answer;
+    const run = right ? quizRun + 1 : 0;
+    setQuizRun(run);
+    if (right){ play(run >= 5 && run % 5 === 0 ? 'milestone' : 'right', run - 1); buzz(10); }
+    else { play('wrong'); buzz(34); }
   };
   const next = () => { if (idx + 1 >= questions.length) setPhase('done'); else { setIdx(idx + 1); setPicked(null); } };
 
   const score = answers.reduce((s, a, i) => s + ((a != null && questions[i] && a === questions[i].answer) ? 1 : 0), 0);
   const pct = questions.length ? Math.round((score / questions.length) * 100) : 0;
 
-  useEffect(() => { if (phase === 'done' && !doneRef.current){ doneRef.current = true; onDone(questions.length, subject); } }, [phase]);
+  useEffect(() => {
+    if (phase === 'done' && !doneRef.current){
+      doneRef.current = true;
+      onDone(questions.length, subject);
+      play(pct >= 80 ? 'done' : pct >= 50 ? 'milestone' : 'ok');
+      buzz(pct >= 80 ? [16, 60, 16, 60, 26] : 16);
+    }
+  }, [phase]);
 
   const closeBtn = (
     <button onClick={onClose} className="sf-tap" aria-label="Close quiz"
@@ -3248,6 +3669,9 @@ function Quiz({ decks, deckId, onClose, onDone }){
           const line = pct >= 80 ? 'Strong — you know this well.' : pct >= 50 ? 'Getting there. Review the misses below.' : 'Worth another look — the misses are below.';
           return (
             <div style={{ animation: 'sf-in 260ms cubic-bezier(.2,.8,.3,1)' }}>
+              {/* 80%+ earns the full treatment; below that a scorecard that
+                  throws confetti would just feel sarcastic */}
+              {pct >= 80 && <Confetti n={38} />}
               <Card style={{ padding: '26px 22px', marginBottom: 16, display: 'flex', alignItems: 'center', gap: 20, flexWrap: 'wrap' }}>
                 <div style={{ position: 'relative', width: 108, height: 108, borderRadius: '50%', flexShrink: 0,
                   background: `conic-gradient(${ring} 0 ${pct}%, ${T.well} 0)` }}>
@@ -3491,8 +3915,33 @@ function AskPanel({ thread, setThread, onClose }){
   const [text, setText] = useState('');
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState('');
+  const [photo, setPhoto] = useState(null);   // { name, busy, text } — a snapped question
   const endRef = useRef(null);
+  const taRef = useRef(null);
+  const photoRef = useRef(null);
   const hasCard = !!studyContext;
+
+  // the composer grows with the question instead of scrolling a one-line box
+  const grow = () => {
+    const ta = taRef.current;
+    if (!ta) return;
+    ta.style.height = 'auto';
+    ta.style.height = Math.min(ta.scrollHeight, 160) + 'px';
+  };
+
+  /* Photograph the question you're stuck on. The vision model turns it into
+     text here, once, so the thread stays cheap and the reply is grounded in
+     what's actually on the page. */
+  const attachPhoto = async (file) => {
+    setPhoto({ name: file.name, busy: true, text: '' });
+    setErr('');
+    try {
+      const shrunk = await resizeImage(file);
+      const read = await describeImage(shrunk);
+      if (read && read.trim()) setPhoto({ name: file.name, busy: false, text: read.trim() });
+      else { setPhoto(null); setErr('Could not read that photo — try a clearer one.'); }
+    } catch (e){ setPhoto(null); setErr(friendlyApiError(e)); }
+  };
 
   useEffect(() => {
     const onKey = (e) => { if (e.key === 'Escape') onClose(); };
@@ -3507,9 +3956,14 @@ function AskPanel({ thread, setThread, onClose }){
 
   const send = async (raw) => {
     const q = String(raw != null ? raw : text).trim();
-    if (!q || busy) return;
-    const next = thread.concat([{ role: 'user', text: q }]);
-    setThread(next); setText(''); setErr(''); setBusy(true);
+    if (!q || busy || (photo && photo.busy)) return;
+    /* the photo rides along with the message it was attached to, then clears */
+    const withPhoto = photo && photo.text
+      ? q + '\n\n[Photo they attached, read aloud:]\n' + photo.text
+      : q;
+    const next = thread.concat([{ role: 'user', text: withPhoto, shown: q }]);
+    setThread(next); setText(''); setErr(''); setPhoto(null); setBusy(true);
+    if (taRef.current) taRef.current.style.height = 'auto';
     try {
       const reply = await askHelper(next);
       if (reply) setThread(next.concat([{ role: 'assistant', text: reply }]));
@@ -3575,7 +4029,9 @@ function AskPanel({ thread, setThread, onClose }){
         {thread.map((m, i) => m.role === 'user' ? (
           <div key={i} style={{ display: 'flex', justifyContent: 'flex-end', marginBottom: 12 }}>
             <div style={{ maxWidth: '86%', background: T.accent, color: '#fff', borderRadius: '16px 16px 5px 16px',
-              padding: '9px 13px', fontFamily: SANS, fontSize: 14.5, lineHeight: 1.5, whiteSpace: 'pre-wrap' }}>{m.text}</div>
+              padding: '9px 13px', fontFamily: SANS, fontSize: 14.5, lineHeight: 1.5, whiteSpace: 'pre-wrap' }}>
+              {m.shown ? m.shown : m.text}
+            </div>
           </div>
         ) : (
           <div key={i} style={{ background: T.well, borderRadius: '16px 16px 16px 5px', padding: '11px 13px', marginBottom: 12 }}>
@@ -3583,23 +4039,74 @@ function AskPanel({ thread, setThread, onClose }){
           </div>
         ))}
 
-        {busy && <Sub style={{ padding: '2px 4px' }}>Thinking…</Sub>}
+        {busy && (
+          <div style={{ background: T.well, borderRadius: '16px 16px 16px 5px', padding: '13px 15px',
+            marginBottom: 12, display: 'inline-flex', gap: 5, alignItems: 'center' }}>
+            {[0, 1, 2].map(i => (
+              <span key={i} style={{ width: 7, height: 7, borderRadius: 7, background: T.faint,
+                animation: `sf-pulse 1.1s ease-in-out ${i * 160}ms infinite` }} />
+            ))}
+          </div>
+        )}
         {err && <Sub style={{ color: T.red, padding: '2px 4px' }}>{err}</Sub>}
         <div ref={endRef} />
       </div>
 
-      <div style={{ borderTop: `1px solid ${T.border}`, flexShrink: 0,
-        padding: '10px 10px calc(10px + env(safe-area-inset-bottom))' }}>
-        <div className="flex gap-2" style={{ alignItems: 'flex-end' }}>
-          <textarea value={text} onChange={e => setText(e.target.value)} onKeyDown={onKeyDown} rows={1}
-            placeholder="Ask a question…"
-            style={{ flex: 1, background: T.well, color: T.ink, border: `1px solid ${T.border}`,
-              borderRadius: R.well, padding: '11px 13px', fontFamily: SANS, fontSize: 15, lineHeight: 1.45,
-              resize: 'none', outline: 'none', maxHeight: 120 }} />
-          <button className="sf-btn" onClick={() => send()} disabled={busy || !text.trim()} aria-label="Send"
-            style={{ width: 44, height: 44, borderRadius: R.pill, border: 'none', flexShrink: 0,
-              background: T.accent, color: '#fff', fontSize: 19, fontWeight: 700,
-              cursor: (busy || !text.trim()) ? 'default' : 'pointer', opacity: (busy || !text.trim()) ? 0.45 : 1 }}>↑</button>
+      {/* The composer, ported from the kokonutui AI prompt input (MIT): one
+          framed well holding the textarea and its controls, rather than a bare
+          box with a button beside it. The model picker is left out on purpose
+          — there's one model and naming it would only confuse. */}
+      <div style={{ flexShrink: 0, padding: '8px 10px calc(10px + env(safe-area-inset-bottom))' }}>
+        <div style={{ background: T.well, borderRadius: 16, border: `1px solid ${T.border}`,
+          padding: 4, transition: 'border-color 180ms' }}>
+          <textarea ref={taRef} value={text} onKeyDown={onKeyDown}
+            onChange={e => { setText(e.target.value); grow(); }} rows={1}
+            placeholder={photo ? 'Ask about the photo…' : 'Ask a question…'}
+            style={{ width: '100%', background: 'transparent', color: T.ink, border: 'none',
+              borderRadius: 12, padding: '11px 12px 4px', fontFamily: SANS, fontSize: 15,
+              lineHeight: 1.45, resize: 'none', outline: 'none', maxHeight: 160, display: 'block' }} />
+
+          {photo && (
+            <div className="flex items-center gap-2" style={{ margin: '0 8px 6px', padding: '6px 9px',
+              background: T.surface, border: `1px solid ${T.border}`, borderRadius: 10 }}>
+              <span style={{ fontSize: 13 }}>🖼️</span>
+              <Sub style={{ flex: 1, fontSize: 12, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                {photo.busy ? 'Reading the photo…' : photo.name}
+              </Sub>
+              {!photo.busy && (
+                <button className="sf-tap" onClick={() => setPhoto(null)} aria-label="Remove photo"
+                  style={{ background: 'none', border: 'none', cursor: 'pointer', color: T.faint, fontSize: 15, padding: 0 }}>×</button>
+              )}
+            </div>
+          )}
+
+          <div className="flex items-center justify-between" style={{ padding: '0 6px 4px' }}>
+            <div className="flex items-center gap-1">
+              <input ref={photoRef} type="file" accept="image/*" style={{ display: 'none' }}
+                onChange={(e) => { const f = (e.target.files || [])[0]; if (e.target) e.target.value = ''; if (f) attachPhoto(f); }} />
+              <button className="sf-tap" onClick={() => photoRef.current && photoRef.current.click()}
+                aria-label="Attach a photo of the question" title="Attach a photo"
+                style={{ background: 'none', border: 'none', cursor: 'pointer', padding: 7, borderRadius: 9,
+                  color: T.faint, display: 'flex' }}>
+                <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                  strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round">
+                  <path d="M21 11.5l-8.6 8.6a5 5 0 0 1-7.1-7.1l8.6-8.6a3.4 3.4 0 0 1 4.8 4.8l-8.6 8.6a1.7 1.7 0 0 1-2.4-2.4l7.9-7.9" />
+                </svg>
+              </button>
+              <Sub style={{ fontSize: 11, color: T.faint }}>Enter to send</Sub>
+            </div>
+            <button className="sf-btn" onClick={() => send()} disabled={busy || !text.trim()} aria-label="Send"
+              style={{ width: 34, height: 34, borderRadius: R.pill, border: 'none', flexShrink: 0,
+                background: text.trim() && !busy ? T.accent : T.border,
+                color: text.trim() && !busy ? '#fff' : T.faint, display: 'flex', alignItems: 'center',
+                justifyContent: 'center', cursor: (busy || !text.trim()) ? 'default' : 'pointer',
+                transition: 'background 180ms, color 180ms' }}>
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
+                <path d="M12 19V5M5 12l7-7 7 7" />
+              </svg>
+            </button>
+          </div>
         </div>
         <Sub style={{ fontSize: 11, marginTop: 7, textAlign: 'center' }}>
           It can be wrong — check anything that matters against your notes.
@@ -3660,6 +4167,10 @@ export default function App(){
     const s = { ...settings, lastSeenVersion: APP_VERSION };
     setSettings(s); save('settings:main', s);
   };
+
+  /* The sound engine is a module-level singleton (it owns one AudioContext), so
+     the setting is pushed to it rather than passed down through every card. */
+  useEffect(() => { setSoundOn(settings.sound !== false); }, [settings.sound]);
 
   /* Apply the chosen theme to <html>: 'system' follows the OS, otherwise force
      light/dark. The palette itself lives in THEME_CSS (data-theme selectors). */
@@ -3767,7 +4278,9 @@ export default function App(){
   return (
     <>
     <Shell tab={tab} setTab={setTab} due={dueCount} pending={pendingCount}>
-      {tab !== 'home' && <Masthead due={dueCount} streak={stats.streak || 0} />}
+      {tab !== 'home' && <Masthead due={dueCount} streak={stats.streak || 0}
+        sound={settings.sound !== false}
+        onSound={() => persistSettings({ ...settings, sound: settings.sound === false })} />}
       <div style={{ minHeight: 440 }}>
         {tab === 'home' && <Home library={library} progress={progress} stats={stats} settings={settings}
           due={dueCount} onStart={() => { setFocus('all'); setTab('feed'); }} onCreate={() => setTab('create')}
@@ -3776,7 +4289,7 @@ export default function App(){
         {tab === 'feed' && <Feed key={'feed-' + focus + '-' + cardCount + '-' + longMixOf(settings)}
           decks={library.decks} progress={progress} settings={settings} stats={stats} onGrade={gradeCard}
           reduceMotion={reduceMotion.current} focus={focus} setFocus={setFocus}
-          onSettings={persistSettings} onQuiz={openQuiz} />}
+          onSettings={persistSettings} onQuiz={openQuiz} onHome={() => setTab('home')} />}
         {/* Create stays MOUNTED and is hidden instead — unmounting it threw away
             unsaved drafts, pasted notes and attached photos the moment you
             switched tabs, and those drafts cost real API usage to produce. */}
@@ -3811,6 +4324,45 @@ function Shell({ children, tab, setTab, due, pending }){
         @keyframes sf-in { from { opacity: 0; transform: translateY(12px) scale(0.985); } to { opacity: 1; transform: none; } }
         @keyframes sf-reveal { from { opacity: 0; transform: translateY(-6px); } to { opacity: 1; transform: none; } }
         @keyframes sf-rise { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: none; } }
+
+        /* ---- reward effects ---------------------------------------------- */
+        @keyframes sf-burst {
+          0%   { opacity: 1; transform: translate(-50%, -50%) scale(0.4); }
+          65%  { opacity: 1; }
+          100% { opacity: 0; transform: translate(calc(-50% + var(--bx)), calc(-50% + var(--by))) scale(1); }
+        }
+        @keyframes sf-fall {
+          0%   { opacity: 1; transform: translate(0, 0) rotate(0deg); }
+          100% { opacity: 0.9; transform: translate(var(--drift), 105vh) rotate(var(--spin)); }
+        }
+        @keyframes sf-pop {
+          0%   { transform: scale(1); }
+          38%  { transform: scale(1.11); }
+          100% { transform: scale(1); }
+        }
+        @keyframes sf-shake {
+          0%, 100% { transform: translateX(0); }
+          15% { transform: translateX(-7px); }
+          32% { transform: translateX(6px); }
+          50% { transform: translateX(-4px); }
+          68% { transform: translateX(3px); }
+          85% { transform: translateX(-1px); }
+        }
+        @keyframes sf-flash {
+          0%   { opacity: 0; }
+          22%  { opacity: 1; }
+          100% { opacity: 0; }
+        }
+        @keyframes sf-combo-in {
+          0%   { opacity: 0; transform: scale(0.5) translateY(6px); }
+          60%  { opacity: 1; transform: scale(1.14) translateY(0); }
+          100% { opacity: 1; transform: scale(1) translateY(0); }
+        }
+        @keyframes sf-spin { to { transform: rotate(360deg); } }
+        @keyframes sf-spin-rev { to { transform: rotate(-360deg); } }
+        @keyframes sf-breathe { 0%, 100% { transform: scale(1); } 50% { transform: scale(1.025); } }
+        @keyframes sf-pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.62; } }
+        @keyframes sf-float { 0%, 100% { transform: translateY(0); } 50% { transform: translateY(-5px); } }
 
         * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
         body { overscroll-behavior-y: none; }
@@ -3934,7 +4486,7 @@ function SideNav({ tab, setTab, due, pending }){
   );
 }
 
-function Masthead({ due, streak }){
+function Masthead({ due, streak, sound, onSound }){
   return (
     <div className="flex items-center justify-between" style={{ padding: '10px 2px 18px' }}>
       <div style={{ fontFamily: SANS, fontSize: 24, fontWeight: 800, color: T.ink, letterSpacing: '-0.03em' }}>
@@ -3943,6 +4495,15 @@ function Masthead({ due, streak }){
       <div className="flex items-center gap-2">
         {streak > 0 && <Chip colour={T.amber}>🔥 {streak}</Chip>}
         {due > 0 && <Chip colour={T.red} solid>{due} due</Chip>}
+        {/* muting has to be one tap from wherever you are — this gets used in
+            class, and hunting through Settings mid-lesson is not an option */}
+        <button className="sf-tap" onClick={onSound} aria-label={sound ? 'Mute sounds' : 'Unmute sounds'}
+          title={sound ? 'Mute sounds' : 'Unmute sounds'}
+          style={{ width: 32, height: 32, borderRadius: R.pill, border: 'none', cursor: 'pointer',
+            background: 'transparent', color: sound ? T.muted : T.faint, fontSize: 15, lineHeight: '32px',
+            padding: 0, flexShrink: 0 }}>
+          {sound ? '🔊' : '🔇'}
+        </button>
       </div>
     </div>
   );
