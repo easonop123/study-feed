@@ -4280,6 +4280,14 @@ const TOUR_STEPS = [
     title: 'Then they come back here',
     body: 'Your cards return on a schedule, hardest first. The feed ends on purpose when you are done — carrying on is a choice, and it never messes with your schedule.',
   },
+  {
+    /* Last, and worth the extra step: there is no account and no sync, so a
+       cleared browser takes a term's work with it. The home-backup Tip says the
+       same thing, but not until you already have cards worth losing. */
+    key: 'nav-settings', kind: 'spot', tab: 'create', anchor: 'nav-settings',
+    title: 'One thing before you start',
+    body: 'Your decks live on this device only — no account, no sync. Clearing your browser wipes them, so export a copy from You → Backup & transfer once you have made a few.',
+  },
 ];
 
 /* onDone fires on finishing OR skipping — both mean "do not show this again".
