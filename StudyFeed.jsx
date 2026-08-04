@@ -282,8 +282,14 @@ const buzz = (ms) => { try { if (navigator.vibrate) navigator.vibrate(ms); } cat
    APP_VERSION is the id we compare against settings.lastSeenVersion to decide
    whether to pop the "What's new" note. Bump it whenever PATCH_NOTES gains an
    entry. Newest first; the first element is the current release. */
-const APP_VERSION = '1.4.0';
+const APP_VERSION = '1.5.0';
 const PATCH_NOTES = [
+  { v: '1.5.0', date: '2026-08-05', title: 'Start here', items: [
+    'New here? A short walkthrough now opens on your first visit and hands you over to the generator at the end.',
+    'It explains what Achieved, Merit and Excellence actually mean, using a real marked answer rather than a description of one.',
+    'It also covers the two levels of help while you write, and “Explain this further” for when an answer makes no sense.',
+    'Skip it whenever you like — and get it back any time from Settings → How this app works.',
+  ] },
   { v: '1.4.0', date: '2026-08-03', title: 'Sharper edges', items: [
     'Flip cards actually flip now — the card turns over to show the answer.',
     'Every emoji is gone, replaced with icons drawn to match the rest of the app.',
@@ -3428,11 +3434,21 @@ function TransferCard({ library, progress, onImport }){
   );
 }
 
-function Settings({ settings, onChange, library, progress, onImport }){
+function Settings({ settings, onChange, library, progress, onImport, onTutorial }){
   const set = (patch) => onChange({ ...settings, ...patch });
   return (
     <div>
       <Title style={{ marginBottom: 14 }}>Settings</Title>
+
+      <Card style={{ padding: 15, marginBottom: 10, boxShadow: SH.raised }}>
+        <div className="flex items-center justify-between gap-3" style={{ flexWrap: 'wrap' }}>
+          <div style={{ flex: 1, minWidth: 190 }}>
+            <div style={{ fontFamily: SANS, fontSize: 15, fontWeight: 700, color: T.ink }}>How this app works</div>
+            <Sub style={{ fontSize: 12.5, marginTop: 2 }}>The walkthrough from your first visit — what the marking means, and the help while you write.</Sub>
+          </div>
+          <Btn kind="soft" onClick={onTutorial} style={{ fontSize: 14, flexShrink: 0 }}>Show me again</Btn>
+        </div>
+      </Card>
 
       <Card style={{ padding: 15, marginBottom: 10, boxShadow: SH.raised }}>
         <div style={{ fontFamily: SANS, fontSize: 15, fontWeight: 700, color: T.ink, marginBottom: 10 }}>Appearance</div>
@@ -3523,7 +3539,7 @@ function longDate(){
   catch { return TODAY(); }
 }
 
-function Home({ library, progress, stats, settings, due, onStart, onCreate, onDecks, onStudyDeck, onQuiz, onSettings }){
+function Home({ library, progress, stats, settings, due, onStart, onCreate, onDecks, onStudyDeck, onQuiz, onSettings, onTutorial }){
   const today = TODAY();
   const decks = library.decks;
   const totalCards = decks.reduce((s, d) => s + d.cards.length, 0);
@@ -3599,6 +3615,8 @@ function Home({ library, progress, stats, settings, due, onStart, onCreate, onDe
             ))}
           </div>
           <Btn full kind="primary" onClick={onCreate}>Make your first cards</Btn>
+          {/* The way back for anyone who skipped the walkthrough on arrival */}
+          <Btn full kind="ghost" onClick={onTutorial} style={{ marginTop: 6, fontSize: 14 }}>Show me how it works</Btn>
         </Card>
       ) : (
         <>
@@ -4057,6 +4075,421 @@ function WhatsNew({ onClose }){
   );
 }
 
+/* ==========================================================================
+   FIRST-RUN TUTORIAL
+
+   Six panels, shown once to someone who has never opened the app before.
+
+   Everything on the marking panels is canned rather than fetched. A tutorial
+   that waited on the model would open with a 15-second spinner, spend tokens
+   on someone who has not made a single card yet, and fail outright on a bad
+   connection — which is the one first impression we cannot afford. The
+   trade-off is that these strings can drift from what the model actually
+   returns, so the example is written in the same shape as markPrompt's schema
+   (grade / hit / missing / lift) and rendered through the real MarkResult,
+   not a lookalike. If that schema changes, this has to change with it.
+
+   MarkResult is deliberately given no `card` or `answer`, which is what
+   suppresses UpgradePath — the one child that would fire an API call.
+   ========================================================================== */
+
+const TUT_CARD = {
+  id: 'tutorial-example', type: 'extended', verb: 'Explain', marks: 4,
+  prompt: 'A cyclist stops pedalling on a flat road and slowly coasts to a stop. Explain why the cyclist slows down and eventually stops.',
+};
+
+const TUT_ANSWER = 'The bike slows down because of friction between the tyres and the road. Friction is a force that pushes against the movement, so the bike loses speed until it stops.';
+
+const TUT_MARK = {
+  grade: 'Merit',
+  hit: [
+    'Names friction as a force acting against the motion.',
+    'Links that force to the loss of speed — cause and effect, not just a label.',
+  ],
+  missing: [
+    'Say the forces are now unbalanced: with nothing driving the bike forward, the resultant force acts backwards.',
+    'Follow the energy — the cyclist’s kinetic energy is transferred to heat and sound, so there is none left to keep them moving.',
+  ],
+  lift: 'You have said what happens. Excellence needs the unbalanced force named AND the energy followed through to where it ends up.',
+};
+
+const TUT_HINTS = [
+  'Name every force acting on the bike once the pedalling stops.',
+  'Say what "unbalanced" means for the resultant force here.',
+  'Follow the kinetic energy — where does it end up?',
+];
+
+const TUT_STARTERS = [
+  'Once the cyclist stops pedalling the forces become unbalanced because ______.',
+  'This means the resultant force acts ______, which causes ______.',
+  'The cyclist’s kinetic energy is transferred to ______, so ______.',
+];
+
+/* The wording matches markPrompt (the WHAT / the WHY / the SO WHAT), so the
+   ladder a student is taught here is the ladder the marker is actually using. */
+const TUT_LADDER = [
+  { tier: 'Not yet',    colour: T.red,   gist: 'Not there yet',   note: 'Usually a right-sounding sentence that never answers the question asked.' },
+  { tier: 'Achieved',   colour: T.muted, gist: 'The WHAT',        note: 'You state or describe the correct thing.' },
+  { tier: 'Merit',      colour: T.accent, gist: 'The WHY and HOW', note: 'You explain it, with cause and effect joined up.' },
+  { tier: 'Excellence', colour: T.green, gist: 'The SO WHAT',     note: 'You link ideas together, apply them to this exact scenario, and justify it.' },
+];
+
+/* A numbered row, used by the panels that walk through a sequence. */
+function TutStep({ n, title, children }){
+  return (
+    <div className="flex gap-3" style={{ alignItems: 'flex-start' }}>
+      <span style={{ width: 25, height: 25, borderRadius: R.pill, background: rgba(T.accent, 0.12), color: T.accentInk,
+        display: 'grid', placeItems: 'center', fontFamily: SANS, fontSize: 12.5, fontWeight: 800, flexShrink: 0 }}>{n}</span>
+      <div>
+        <div style={{ fontFamily: SANS, fontSize: 14.5, fontWeight: 700, color: T.ink }}>{title}</div>
+        <Sub style={{ fontSize: 13, marginTop: 2 }}>{children}</Sub>
+      </div>
+    </div>
+  );
+}
+
+/* Frames a piece of the real UI so it reads as a specimen rather than as
+   something you are meant to be able to press. */
+function TutShot({ label, children }){
+  return (
+    <div style={{ marginTop: 14 }}>
+      {label && <div style={{ fontFamily: SANS, fontSize: 11, fontWeight: 700, letterSpacing: '0.06em',
+        textTransform: 'uppercase', color: T.faint, marginBottom: 7 }}>{label}</div>}
+      <div style={{ background: T.surface, border: `1px solid ${T.border}`, borderRadius: R.well,
+        padding: '15px 16px', boxShadow: SH.raised }}>{children}</div>
+    </div>
+  );
+}
+
+const TUTORIAL_STEPS = [
+  {
+    key: 'welcome',
+    title: 'Welcome to Study Feed',
+    lede: 'A minute now, and the rest will make sense.',
+    body: () => (
+      <div>
+        <div style={{ fontFamily: SANS, fontSize: 15, lineHeight: 1.6, color: T.ink }}>
+          Flashcards get you Achieved. The marks that decide your grade sit in the long written
+          questions — and those are a writing problem, not a memory problem.
+        </div>
+        <Sub style={{ marginTop: 12, fontSize: 14, lineHeight: 1.6 }}>
+          So this app does the usual quick cards, and then it does the part nothing else does:
+          you write a real exam answer, it marks it against Achieved, Merit and Excellence, and it
+          tells you exactly what to change.
+        </Sub>
+        <div style={{ ...PANEL, marginTop: 16, display: 'flex', gap: 10, alignItems: 'flex-start' }}>
+          <span style={{ color: T.accent, flexShrink: 0, marginTop: 1 }}><Ico name="sparkle" size={16} /></span>
+          <Sub style={{ fontSize: 13.5, lineHeight: 1.55 }}>
+            Nothing here is set up yet — the app ships empty and fills with your own notes.
+            That is what the next panel is about.
+          </Sub>
+        </div>
+      </div>
+    ),
+  },
+  {
+    key: 'generate',
+    title: 'Cards come from your notes',
+    lede: 'The Create tab is where everything starts.',
+    body: () => (
+      <div>
+        <div className="flex flex-col gap-3">
+          <TutStep n="1" title="Give it your material">
+            Paste your notes, or upload a PDF, Word doc, PowerPoint or a photo of the board.
+            No topic in mind? Type one — “rates of reaction” is enough to start.
+          </TutStep>
+          <TutStep n="2" title="Pick what you want out of it">
+            <b style={{ color: T.ink }}>Mixed</b> lets it choose the best card type per idea.
+            <b style={{ color: T.ink }}> Long</b> makes exam-style written questions.
+            <b style={{ color: T.ink }}> Quick</b> makes fast recall cards.
+          </TutStep>
+          <TutStep n="3" title="Check them, then save">
+            The cards appear for you to look over before anything is kept. Bin the ones that
+            missed, then save the deck and it lands in your feed.
+          </TutStep>
+        </div>
+        <div style={{ ...PANEL, marginTop: 16, display: 'flex', gap: 10, alignItems: 'flex-start' }}>
+          <span style={{ color: T.accent, flexShrink: 0, marginTop: 1 }}><Ico name="books" size={16} /></span>
+          <Sub style={{ fontSize: 13.5, lineHeight: 1.55 }}>
+            Set the level (NCEA Level 1 by default) on that screen too — it sets how hard the
+            questions are and what the marking expects of you.
+          </Sub>
+        </div>
+      </div>
+    ),
+  },
+  {
+    key: 'question',
+    title: 'What a long question looks like',
+    lede: 'Two labels tell you how to answer before you write a word.',
+    body: () => (
+      <div>
+        <TutShot label="A card in your feed">
+          <div className="flex items-center gap-2" style={{ marginBottom: 12, flexWrap: 'wrap' }}>
+            <Chip colour={T.accent} solid>{TUT_CARD.verb}</Chip>
+            <Chip colour={T.muted}>{TUT_CARD.marks} marks</Chip>
+          </div>
+          <div style={{ ...QUESTION, fontSize: 18 }}>{TUT_CARD.prompt}</div>
+        </TutShot>
+        <div className="flex flex-col gap-3" style={{ marginTop: 18 }}>
+          <TutStep n="1" title="The command verb caps your grade">
+            <b style={{ color: T.ink }}>Explain</b> wants cause and effect. A question that only says
+            <i> Describe</i> cannot reach Excellence no matter how well you write it — so answer the
+            verb you were given.
+          </TutStep>
+          <TutStep n="2" title="The marks tell you how much to write">
+            4 marks is not one sentence. Roughly, each mark is another linked point — and “linked”
+            is doing the work in that sentence.
+          </TutStep>
+        </div>
+        <Sub style={{ marginTop: 16, fontSize: 13.5, lineHeight: 1.6 }}>
+          You type your answer straight underneath, then press <b style={{ color: T.ink }}>Mark my
+          answer</b>. Next panel is what comes back.
+        </Sub>
+      </div>
+    ),
+  },
+  {
+    key: 'marking',
+    title: 'What the marking means',
+    lede: 'Every long answer is graded on this ladder.',
+    body: () => (
+      <div>
+        <div className="flex flex-col gap-2">
+          {TUT_LADDER.map(l => (
+            <div key={l.tier} style={{ display: 'flex', gap: 11, alignItems: 'flex-start',
+              background: rgba(l.colour, 0.07), border: `1px solid ${rgba(l.colour, 0.18)}`,
+              borderRadius: R.well, padding: '11px 13px' }}>
+              <span style={{ width: 4, alignSelf: 'stretch', borderRadius: 4, background: l.colour, flexShrink: 0 }} />
+              <div style={{ flex: 1 }}>
+                <div className="flex items-baseline gap-2" style={{ flexWrap: 'wrap' }}>
+                  <span style={{ fontFamily: SANS, fontSize: 14.5, fontWeight: 800, color: T.ink }}>{l.tier}</span>
+                  <span style={{ fontFamily: SANS, fontSize: 12, fontWeight: 700, color: l.colour, letterSpacing: '0.02em' }}>{l.gist}</span>
+                </div>
+                <Sub style={{ fontSize: 13, marginTop: 2, lineHeight: 1.5 }}>{l.note}</Sub>
+              </div>
+            </div>
+          ))}
+        </div>
+
+        <TutShot label="Say you wrote this">
+          <div style={{ fontFamily: SANS, fontSize: 14.5, lineHeight: 1.6, color: T.muted, fontStyle: 'italic' }}>
+            “{TUT_ANSWER}”
+          </div>
+        </TutShot>
+
+        <div style={{ marginTop: 14 }}>
+          <div style={{ fontFamily: SANS, fontSize: 11, fontWeight: 700, letterSpacing: '0.06em',
+            textTransform: 'uppercase', color: T.faint, marginBottom: 7 }}>What comes back</div>
+          <MarkResult r={TUT_MARK} />
+        </div>
+
+        <div className="flex flex-col gap-3" style={{ marginTop: 18 }}>
+          <TutStep n="1" title="What earned credit">
+            The parts that actually scored. Worth reading even when the grade is good — it tells
+            you which habit to keep.
+          </TutStep>
+          <TutStep n="2" title="To reach the next grade">
+            The specific things missing. Not “add more detail” — the actual physics, or point, or
+            link that is not on the page.
+          </TutStep>
+          <TutStep n="3" title="The line in bold">
+            The single change that would lift the grade most, if you only do one thing.
+          </TutStep>
+        </div>
+
+        <div style={{ ...PANEL, marginTop: 16, display: 'flex', gap: 10, alignItems: 'flex-start' }}>
+          <span style={{ color: T.green, flexShrink: 0, marginTop: 1 }}><Ico name="target" size={16} /></span>
+          <Sub style={{ fontSize: 13.5, lineHeight: 1.55 }}>
+            Under a real mark there is also <b style={{ color: T.ink }}>How do I get to Excellence?</b> —
+            it quotes your own sentences back and shows each one rewritten properly.
+          </Sub>
+        </div>
+      </div>
+    ),
+  },
+  {
+    key: 'hints',
+    title: 'When you are stuck',
+    lede: 'Two nudges, and neither one hands you the answer.',
+    body: () => (
+      <div>
+        <Sub style={{ fontSize: 14, lineHeight: 1.6 }}>
+          Staring at a blank box teaches you nothing, but neither does copying a model answer. So
+          the help comes in two sizes, under the answer box.
+        </Sub>
+
+        <TutShot label="Tap 1 — Stuck? Give me some writing points">
+          <div className="flex items-center justify-between" style={{ marginBottom: 9 }}>
+            <Chip colour={T.amber}>Writing points</Chip>
+            <Sub style={{ fontSize: 11.5 }}>The shape of the answer — the words are yours</Sub>
+          </div>
+          <div className="flex flex-col gap-2">
+            {TUT_HINTS.map((h, i) => (
+              <div key={i} className="flex gap-2" style={{ alignItems: 'flex-start' }}>
+                <span style={{ fontFamily: SANS, fontSize: 12, fontWeight: 800, color: T.amber,
+                  lineHeight: '22px', flexShrink: 0 }}>{i + 1}</span>
+                <span style={{ fontFamily: SANS, fontSize: 14.5, lineHeight: 1.5, color: T.ink }}>{h}</span>
+              </div>
+            ))}
+          </div>
+        </TutShot>
+
+        <TutShot label="Still stuck? Tap 2 — sentence starters">
+          <div className="flex items-center justify-between" style={{ marginBottom: 9 }}>
+            <Chip colour={T.accent}>Sentence starters</Chip>
+            <Sub style={{ fontSize: 11.5 }}>Fill each blank yourself</Sub>
+          </div>
+          <div className="flex flex-col gap-2">
+            {TUT_STARTERS.map((h, i) => (
+              <div key={i} style={{ fontFamily: SANS, fontSize: 14.5, lineHeight: 1.55, color: T.ink,
+                background: T.well, border: `1px solid ${T.border}`, borderRadius: R.input, padding: '9px 12px' }}>{h}</div>
+            ))}
+          </div>
+        </TutShot>
+
+        <Sub style={{ marginTop: 16, fontSize: 13.5, lineHeight: 1.6 }}>
+          The blanks are the point. Filling them is what gets marked, and it is the bit that has to
+          come from you in the exam.
+        </Sub>
+      </div>
+    ),
+  },
+  {
+    key: 'explain',
+    title: 'When you do not get it',
+    lede: 'Explain this further, on any card you have revealed.',
+    body: () => (
+      <div>
+        <TutShot label="Under any revealed answer">
+          <span className="flex items-center gap-2" style={{ fontFamily: SANS, fontSize: 13.5, fontWeight: 600, color: T.accent }}>
+            <Ico name="search" size={15} />Explain this further
+          </span>
+        </TutShot>
+        <Sub style={{ marginTop: 14, fontSize: 14, lineHeight: 1.6 }}>
+          Getting an answer wrong tells you that you were wrong, not why. This gives you the
+          reasoning behind it — the steps, and the thing to watch out for next time.
+        </Sub>
+        <div style={{ ...PANEL, marginTop: 16 }}>
+          <div style={{ fontFamily: SANS, fontSize: 14, fontWeight: 700, color: T.ink, marginBottom: 8 }}>
+            Landed at the wrong level?
+          </div>
+          <div className="flex gap-2" style={{ flexWrap: 'wrap' }}>
+            <span style={{ fontFamily: SANS, fontSize: 13, fontWeight: 600, color: T.ink, background: T.surface,
+              border: `1px solid ${T.border}`, borderRadius: R.pill, padding: '8px 14px' }}>Simpler</span>
+            <span style={{ fontFamily: SANS, fontSize: 13, fontWeight: 600, color: T.ink, background: T.surface,
+              border: `1px solid ${T.border}`, borderRadius: R.pill, padding: '8px 14px' }}>Go deeper</span>
+          </div>
+          <Sub style={{ fontSize: 13, marginTop: 10, lineHeight: 1.55 }}>
+            Ask again at a different level as many times as you need. It is the same idea explained
+            differently, not a different idea.
+          </Sub>
+        </div>
+        <div style={{ ...PANEL, marginTop: 12, display: 'flex', gap: 10, alignItems: 'flex-start' }}>
+          <span style={{ color: T.accent, flexShrink: 0, marginTop: 1 }}><Ico name="bulb" size={16} /></span>
+          <Sub style={{ fontSize: 13.5, lineHeight: 1.55 }}>
+            The round button in the corner of every screen is <b style={{ color: T.ink }}>Ask anything</b>.
+            It can see the card you are on, so “why is that the answer?” works without retyping it.
+          </Sub>
+        </div>
+      </div>
+    ),
+  },
+  {
+    key: 'done',
+    title: 'That is the whole app',
+    lede: 'The rest you will pick up as you go.',
+    body: () => (
+      <div>
+        <div className="flex flex-col gap-3">
+          <TutStep n="1" title="Rate every card honestly">
+            Again, Hard, Good and Easy decide when a card comes back. Marking something Easy when
+            it was not is only cheating your own schedule.
+          </TutStep>
+          <TutStep n="2" title="The feed is meant to end">
+            When the cards actually due are done, it stops and says so. Carrying on is a deliberate
+            choice, and it never touches your schedule.
+          </TutStep>
+          <TutStep n="3" title="Everything stays on this device">
+            No account, no sync. Export your decks from Settings if you want them somewhere safe.
+          </TutStep>
+        </div>
+        <div style={{ ...PANEL, marginTop: 16, display: 'flex', gap: 10, alignItems: 'flex-start' }}>
+          <span style={{ color: T.muted, flexShrink: 0, marginTop: 1 }}><Ico name="clock" size={16} /></span>
+          <Sub style={{ fontSize: 13.5, lineHeight: 1.55 }}>
+            Want this again later? It is in <b style={{ color: T.ink }}>Settings → How this app works</b>.
+          </Sub>
+        </div>
+      </div>
+    ),
+  },
+];
+
+/* onDone fires on finishing OR skipping — both mean "do not show this again".
+   `finished` only decides whether we drop them on the Create tab afterwards:
+   someone who skipped has said they want to look around by themselves, and
+   throwing them into the generator anyway would ignore that. */
+function Tutorial({ onDone }){
+  const [i, setI] = useState(0);
+  const bodyRef = useRef(null);
+  const last = i === TUTORIAL_STEPS.length - 1;
+  const step = TUTORIAL_STEPS[i];
+
+  const back = () => setI(n => Math.max(0, n - 1));
+  const next = () => { if (last) onDone(true); else setI(n => Math.min(TUTORIAL_STEPS.length - 1, n + 1)); };
+
+  useEffect(() => {
+    const onKey = (e) => {
+      if (e.key === 'Escape') onDone(false);
+      else if (e.key === 'ArrowRight') next();
+      else if (e.key === 'ArrowLeft') back();
+    };
+    document.addEventListener('keydown', onKey);
+    return () => document.removeEventListener('keydown', onKey);
+  }, [i, last]);
+
+  /* A new panel starts at the top. Without this, panel 5 opens halfway down
+     because panel 4 is long enough to scroll. */
+  useEffect(() => { if (bodyRef.current) bodyRef.current.scrollTop = 0; }, [i]);
+
+  return (
+    <div style={{ position: 'fixed', inset: 0, zIndex: 70, background: T.bg, display: 'flex', flexDirection: 'column' }}>
+      <div style={{ width: '100%', maxWidth: 560, margin: '0 auto', padding: '16px 16px 0', flexShrink: 0 }}>
+        <div className="flex items-center justify-between" style={{ marginBottom: 14 }}>
+          <div className="flex items-center gap-2">
+            {TUTORIAL_STEPS.map((s, n) => (
+              <span key={s.key} style={{ width: n === i ? 22 : 7, height: 7, borderRadius: 7,
+                background: n === i ? T.accent : n < i ? rgba(T.accent, 0.4) : 'var(--sf-track)',
+                transition: 'width 240ms cubic-bezier(.2,.8,.3,1), background 240ms' }} />
+            ))}
+          </div>
+          <button onClick={() => onDone(false)} className="sf-tap"
+            style={{ background: 'none', border: 'none', cursor: 'pointer', fontFamily: SANS,
+              fontSize: 13.5, fontWeight: 600, color: T.muted, padding: '4px 2px' }}>Skip</button>
+        </div>
+      </div>
+
+      <div ref={bodyRef} style={{ flex: 1, overflowY: 'auto' }}>
+        <div style={{ width: '100%', maxWidth: 560, margin: '0 auto', padding: '4px 16px 24px' }}>
+          <div key={step.key} style={{ animation: 'sf-in 280ms cubic-bezier(.2,.8,.3,1)' }}>
+            <Title style={{ fontSize: 24, fontWeight: 800 }}>{step.title}</Title>
+            <Sub style={{ marginTop: 4, marginBottom: 18 }}>{step.lede}</Sub>
+            {step.body()}
+          </div>
+        </div>
+      </div>
+
+      <div style={{ flexShrink: 0, borderTop: `1px solid ${T.border}`, background: T.surface }}>
+        <div style={{ width: '100%', maxWidth: 560, margin: '0 auto', padding: '12px 16px',
+          paddingBottom: 'calc(12px + env(safe-area-inset-bottom))', display: 'flex', gap: 10 }}>
+          {i > 0 && <Btn kind="soft" onClick={back} style={{ flexShrink: 0 }}>Back</Btn>}
+          <Btn full kind="primary" onClick={next}>{last ? 'Make my first cards' : 'Next'}</Btn>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 /* Full-page version of the changelog (its own nav tab). */
 function Changelog(){
   return (
@@ -4401,6 +4834,7 @@ export default function App(){
   const [focus, setFocus] = useState('all');             // which deck the feed is showing: 'all' or a deck id
   const [quiz, setQuiz] = useState(null);                // { deckId } while a quiz is open, else null
   const [showNews, setShowNews] = useState(false);       // "What's new" note after an update
+  const [showTutorial, setShowTutorial] = useState(false); // first-run walkthrough
   const [askOpen, setAskOpen] = useState(false);         // the ask-anything helper
   const [thread, setThread] = useState([]);              // its conversation, this session only
   const reduceMotion = useRef(false);
@@ -4425,11 +4859,33 @@ export default function App(){
       setProgress(prog || {});
       setStats({ ...DEFAULT_STATS, ...st });
       const merged = { ...DEFAULT_SETTINGS, ...se };
-      /* Pop "What's new" as soon as the site opens for anyone who hasn't seen
-         THIS version yet — first-time visitors included. Once they dismiss it,
-         lastSeenVersion is stamped so it won't reappear until the next update.
-         The changelog also has its own tab for reopening any time. */
-      if (merged.lastSeenVersion !== APP_VERSION) setShowNews(true);
+
+      /* Who is actually new? `onboarded` defaults to false, so it alone would
+         fire the tutorial at every existing user the first time they load this
+         build — a walkthrough of an app they already use. Never having seen
+         ANY version is the honest signal, and a stored deck is the backstop
+         for anyone whose lastSeenVersion predates that field. */
+      const neverSeenAVersion = !merged.lastSeenVersion;
+      const hasDecks = !!(lib && lib.decks && lib.decks.length);
+      const isNewcomer = !merged.onboarded && neverSeenAVersion && !hasDecks;
+
+      if (isNewcomer){
+        setShowTutorial(true);
+        /* A changelog is a catch-up for people who were already here. Stacking
+           it behind the tutorial for someone who has never opened the app is
+           two overlays and no context for either, so this one is spent. */
+        merged.lastSeenVersion = APP_VERSION;
+        save('settings:main', merged);
+      } else {
+        /* Pop "What's new" as soon as the site opens for anyone who hasn't seen
+           THIS version yet. Once they dismiss it, lastSeenVersion is stamped so
+           it won't reappear until the next update. The changelog also has its
+           own tab for reopening any time. */
+        if (merged.lastSeenVersion !== APP_VERSION) setShowNews(true);
+        /* An existing user is retroactively onboarded, so that flipping this
+           build's newcomer test can never ambush them later. */
+        if (!merged.onboarded){ merged.onboarded = true; save('settings:main', merged); }
+      }
       setSettings(merged);
       try { reduceMotion.current = window.matchMedia('(prefers-reduced-motion: reduce)').matches; } catch {}
       setReady(true);
@@ -4441,6 +4897,19 @@ export default function App(){
     const s = { ...settings, lastSeenVersion: APP_VERSION };
     setSettings(s); save('settings:main', s);
   };
+
+  /* Finishing and skipping both mean "don't show me this again". They differ
+     only in where you land: finishing ends on "Make my first cards", so the
+     generator is the obvious next step, while skipping is a request to be left
+     alone — moving that person off Home would be ignoring what they just said. */
+  const endTutorial = (finished) => {
+    setShowTutorial(false);
+    persistSettings({ ...settings, onboarded: true, lastSeenVersion: APP_VERSION });
+    if (finished) setTab('create');
+  };
+  /* Skipping is permanent otherwise, and "I'll look at that later" is a
+     perfectly reasonable thing to have meant. */
+  const replayTutorial = () => setShowTutorial(true);
 
   /* The sound engine is a module-level singleton (it owns one AudioContext), so
      the setting is pushed to it rather than passed down through every card. */
@@ -4559,7 +5028,8 @@ export default function App(){
       <div style={{ minHeight: 440 }}>
         {tab === 'home' && <Home library={library} progress={progress} stats={stats} settings={settings}
           due={dueCount} onStart={() => { setFocus('all'); setTab('feed'); }} onCreate={() => setTab('create')}
-          onDecks={() => setTab('decks')} onStudyDeck={startDeck} onQuiz={openQuiz} onSettings={persistSettings} />}
+          onDecks={() => setTab('decks')} onStudyDeck={startDeck} onQuiz={openQuiz} onSettings={persistSettings}
+          onTutorial={replayTutorial} />}
         {/* key includes focus + mix so switching deck or moving the slider rebuilds the queue */}
         {tab === 'feed' && <Feed key={'feed-' + focus + '-' + cardCount + '-' + longMixOf(settings)}
           decks={library.decks} progress={progress} settings={settings} stats={stats} onGrade={gradeCard}
@@ -4578,15 +5048,16 @@ export default function App(){
         {tab === 'changelog' && <Changelog />}
         {tab === 'feedback' && <FeatureRequest />}
         {tab === 'settings' && <Settings settings={settings} onChange={persistSettings}
-          library={library} progress={progress} onImport={importLibrary} />}
+          library={library} progress={progress} onImport={importLibrary} onTutorial={replayTutorial} />}
       </div>
     </Shell>
     {quiz && <Quiz decks={library.decks} deckId={quiz.deckId} onClose={() => setQuiz(null)} onDone={recordQuiz} />}
-    {showNews && <WhatsNew onClose={dismissNews} />}
+    {showNews && !showTutorial && <WhatsNew onClose={dismissNews} />}
+    {showTutorial && <Tutorial onDone={endTutorial} />}
     {/* the helper is available on every screen — except where something else
-        already owns the whole screen (a quiz, the update note) */}
+        already owns the whole screen (a quiz, the update note, the tutorial) */}
     {askOpen && <AskPanel thread={thread} setThread={setThread} onClose={() => setAskOpen(false)} />}
-    {!askOpen && !quiz && !showNews && <AskFab onClick={() => setAskOpen(true)} />}
+    {!askOpen && !quiz && !showNews && !showTutorial && <AskFab onClick={() => setAskOpen(true)} />}
     </>
   );
 }
