@@ -565,8 +565,12 @@ function dedupeCards(cards){
   return out;
 }
 
-/* bigger batches = fewer API calls = less usage burned per generate */
-function batchText(text, size = 12000){
+/* Batch size is a trade: bigger batches burn less usage (fewer API calls), but
+   a bigger batch means a longer reply, and a long reply is what pushes a
+   request past the proxy's 60s ceiling. 6k characters keeps a single reply
+   comfortably inside it even on a slow school connection — the old 12k could
+   finish in ~11s at home and still time out on a congested network. */
+function batchText(text, size = 6000){
   const paras = text.split(/\n\s*\n/);
   const batches = [];
   let cur = '';
@@ -697,8 +701,10 @@ function friendlyApiError(e){
   if (/\b404\b/.test(m)) return 'That model wasn\'t found — it may have been removed from NVIDIA\'s catalog. ' + m;
   if (/\b410\b/.test(m)) return 'This AI model was retired by NVIDIA — the app needs a quick update to point at a current one. ' + m;
   if (/\b429\b/.test(m)) return 'Rate limited (NVIDIA\'s free tier allows ~40 requests/min) — wait a moment and try again.';
-  if (/timed out/i.test(m)) return 'That took too long and timed out — try again in a moment.';
+  if (/timed out/i.test(m)) return 'The AI ran out of time, even after retrying and splitting the notes up. It\'s usually a slow connection — try again, or paste a smaller section.';
   if (/no images/i.test(m)) return m;
+  // Reached only after the retries gave up, so don't suggest trying immediately.
+  if (/API returned 5\d\d/.test(m)) return 'NVIDIA\'s servers are having trouble — it kept failing after three tries, so it isn\'t your device. Give it a minute.';
   return 'Couldn\'t reach the AI. Check your connection and try again.';
 }
 
@@ -708,6 +714,62 @@ function friendlyApiError(e){
    content array (for images). The proxy holds the NVIDIA key server-side and
    adds the Authorization header, so the browser never sees the key and there's
    no cross-origin (CORS) problem. */
+/* One try at the proxy, with its own wall clock. The abort signal covers the
+   body read as well as the connection, because a congested network can hand
+   back headers promptly and then dribble the body out for another minute. */
+async function postOnce(body, timeoutMs){
+  const ctrl = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(), timeoutMs);
+  try {
+    const res = await fetch('/api/nvidia', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+      signal: ctrl.signal,
+    });
+    const text = await res.text();
+    if (!res.ok){
+      // NVIDIA sends {detail} or {error:{message}}; our own proxy sends a plain
+      // {error:"..."} string. Without the string case, the proxy's own messages
+      // (e.g. the missing-key one) never reached friendlyApiError at all.
+      let detail = '';
+      try {
+        const j = JSON.parse(text);
+        const err = j && j.error;
+        detail = (j && j.detail) || (typeof err === 'string' ? err : (err && err.message)) || '';
+      } catch {}
+      throw new Error('API returned ' + res.status + (detail ? ' — ' + detail : ''));
+    }
+    const data = JSON.parse(text);
+    const msg = data && data.choices && data.choices[0] && data.choices[0].message;
+    return (msg && msg.content) ? msg.content : '';
+  } catch (e){
+    if (e && e.name === 'AbortError') throw new Error('timed out — the AI took too long to respond');
+    // fetch rejects with a TypeError when it never got a response at all.
+    if (e instanceof TypeError) throw new Error('could not reach the AI — check your connection');
+    throw e;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+/* One wall clock per attempt, not one for the whole call. The first is
+   deliberately short: on a busy network (school wifi at lunch) a request that
+   hasn't come back in 40s almost never comes back, and starting over beats
+   waiting it out. Later attempts sit just past the proxy's own 60s ceiling
+   (api/nvidia.js maxDuration) so the server's real error has time to arrive
+   instead of the browser hanging up first and hiding it. */
+const ATTEMPT_MS = [40000, 62000, 62000];
+const RETRY_WAIT_MS = [1200, 4000];
+const sleep = (ms) => new Promise(r => setTimeout(r, ms));
+/* Worth another go: a timeout, a dropped connection, rate limiting, or a 5xx.
+   A 401/404/410 is a configuration problem — retrying only wastes the student's
+   time and shows them a slower version of the same error. */
+function isRetryable(e){
+  const m = (e && e.message) ? e.message : '';
+  return /timed out|could not reach/i.test(m) || /API returned (429|5\d\d)/.test(m);
+}
+
 async function postChat(messages, maxTokens, model){
   const body = {
     model,
@@ -720,32 +782,16 @@ async function postChat(messages, maxTokens, model){
   // Reasoning models: switch off chain-of-thought so replies are clean JSON.
   if (isReasoner(model)) body.chat_template_kwargs = { thinking: false };
 
-  // Never let a slow model spin the UI forever — abort after 60s so the caller
-  // gets a real error it can show instead of an endless "Marking…" spinner.
-  const ctrl = new AbortController();
-  const timer = setTimeout(() => ctrl.abort(), 60000);
-  let res;
-  try {
-    res = await fetch('/api/nvidia', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(body),
-      signal: ctrl.signal,
-    });
-  } catch (e){
-    if (e && e.name === 'AbortError') throw new Error('timed out — the AI took too long to respond');
-    throw new Error('could not reach the AI — check your connection');
-  } finally {
-    clearTimeout(timer);
+  let last;
+  for (let i = 0; i < ATTEMPT_MS.length; i++){
+    try { return await postOnce(body, ATTEMPT_MS[i]); }
+    catch (e){
+      last = e;
+      if (i === ATTEMPT_MS.length - 1 || !isRetryable(e)) break;
+      await sleep(RETRY_WAIT_MS[i]);
+    }
   }
-  if (!res.ok){
-    let detail = '';
-    try { const j = await res.json(); detail = (j && (j.detail || (j.error && j.error.message))) || ''; } catch {}
-    throw new Error('API returned ' + res.status + (detail ? ' — ' + detail : ''));
-  }
-  const data = await res.json();
-  const msg = data && data.choices && data.choices[0] && data.choices[0].message;
-  return (msg && msg.content) ? msg.content : '';
+  throw last;
 }
 /* Everything except the chat helper sends exactly one user turn. */
 const postMessages = (content, maxTokens, model) => postChat([{ role: 'user', content }], maxTokens, model);
@@ -782,15 +828,51 @@ function parseReply(mode, reply){
   return cardsFromJson(parseJsonArray(reply));
 }
 
+/* Enough room for a 6k-character batch's worth of cards, including the long
+   extended-response ones, without inviting a reply so long it can't finish
+   inside the proxy's 60s ceiling. Generation time tracks output tokens more
+   than input, so this is the main lever on whether a request beats the clock. */
+const GEN_MAX_TOKENS = 2400;
+
+/* Cut a chunk at the paragraph break nearest the middle, so a half still reads
+   as continuous notes rather than stopping mid-sentence. */
+function splitInHalf(text){
+  const mid = Math.floor(text.length / 2);
+  let cut = text.indexOf('\n\n', mid);
+  if (cut < 0) cut = text.lastIndexOf('\n\n', mid);
+  if (cut < 0) cut = mid;
+  return [text.slice(0, cut).trim(), text.slice(cut).trim()].filter(Boolean);
+}
+
+/* Sections that produced nothing at all, so the student can be told they got a
+   short stack rather than silently receiving half the cards they asked for. */
+let genLost = 0;
+
+/* Cards from one chunk — and if it TIMED OUT, from its halves instead. A
+   timeout nearly always means the reply was simply too long to finish in time,
+   so halving the material halves the writing. Two levels deep is the floor:
+   below that the chunks are too small to be worth cards. */
+async function genChunk(chunk, mode, level, model, pctLong, strict, depth){
+  try {
+    const reply = await callModel(promptFor(mode, chunk, level, pctLong, strict), GEN_MAX_TOKENS, model);
+    return parseReply(mode, reply);
+  } catch (e){
+    noteApiError(e);
+    const canSplit = depth < 2 && chunk.length > 1500 && /timed out/i.test(e && e.message ? e.message : '');
+    if (!canSplit){ genLost++; return []; }
+    const halves = splitInHalf(chunk);
+    let out = [];
+    for (const h of halves) out = out.concat(await genChunk(h, mode, level, model, pctLong, strict, depth + 1));
+    return out;
+  }
+}
+
 async function genText(source, mode, level, onProgress, model, pctLong, strict){
   const batches = batchText(source);
   let cards = [];
   for (let i = 0; i < batches.length; i++){
     onProgress && onProgress(i + 1, batches.length, 'text');
-    let reply = '';
-    try { reply = await callModel(promptFor(mode, batches[i], level, pctLong, strict), 4000, model); }
-    catch (e){ noteApiError(e); continue; }
-    cards = cards.concat(parseReply(mode, reply));
+    cards = cards.concat(await genChunk(batches[i], mode, level, model, pctLong, strict, 0));
   }
   return cards;
 }
@@ -804,7 +886,7 @@ async function transcribeImages(images, onProgress){
     try {
       const txt = await describeImage(images[i]);
       if (txt && txt.trim()) parts.push('# Slide ' + (i + 1) + '\n' + txt.trim());
-    } catch (e){ noteApiError(e); }
+    } catch (e){ noteApiError(e); genLost++; }
   }
   return parts.join('\n\n');
 }
@@ -1103,7 +1185,10 @@ async function extractPdf(file){
   if (!text && !images.length) throw new Error('This PDF had no readable text — if it is a scan, try clearer pages or a photo.');
   return { text, images };
 }
-async function resizeImage(blob, maxPx = 1500, quality = 0.82){
+/* 1280px/0.75 is about 40% fewer bytes on the wire than 1500/0.82 and still
+   reads slide text cleanly. Worth it: base64 images are by far the biggest
+   thing this app uploads, and school wifi is slowest in that direction. */
+async function resizeImage(blob, maxPx = 1280, quality = 0.75){
   const bmp = await createImageBitmap(blob);
   const scale = Math.min(1, maxPx / Math.max(bmp.width, bmp.height));
   const w = Math.max(1, Math.round(bmp.width * scale));
@@ -2593,6 +2678,8 @@ function Create({ onSave, settings, onSettings, onPending }){
   const [prog, setProg] = useState(null);
   const [err, setErr] = useState('');
   const [drafts, setDrafts] = useState(null);
+  // set when some sections of the material failed but others produced cards
+  const [shortfall, setShortfall] = useState('');
   const [meta, setMeta] = useState({ subject: '', topic: '', standard: 'NCEA Level 1' });
   const [attaching, setAttaching] = useState('');
   const [images, setImages] = useState([]);
@@ -2635,8 +2722,8 @@ function Create({ onSave, settings, onSettings, onPending }){
     }
     if (!source.trim() && !images.length){ setErr('Paste notes, type a topic, or attach a PDF, Word, PowerPoint or text file first.'); return; }
 
-    setBusy(true); setErr(''); setProg(null);
-    lastApiError = '';
+    setBusy(true); setErr(''); setProg(null); setShortfall('');
+    lastApiError = ''; genLost = 0;
     try {
       const model = pickModel(cardType, settings);
       let cards = [];
@@ -2660,6 +2747,12 @@ function Create({ onSave, settings, onSettings, onPending }){
                             : 'Nothing came back. Try clearer notes, a narrower topic, or a sharper photo.');
         setBusy(false); return;
       }
+      // Some material made cards and some didn't — say so, rather than handing
+      // over a short stack that looks like everything the notes had in them.
+      if (genLost > 0){
+        setShortfall('Your connection dropped ' + genLost + (genLost === 1 ? ' section' : ' sections')
+          + ' of the material, so this is a shorter set than usual. Save these, then generate again from the parts that are missing.');
+      }
       setMeta({ subject: guessSubject(source), topic: guessTopic(source), standard: lvl });
       setDrafts(cards.map(c => ({ ...c, keep: true })));
     } catch { setErr('Generation failed. Check your connection and try again.'); }
@@ -2667,9 +2760,9 @@ function Create({ onSave, settings, onSettings, onPending }){
   };
 
   if (drafts){
-    return <DraftReview drafts={drafts} setDrafts={setDrafts} meta={meta} setMeta={setMeta}
-      onCancel={() => setDrafts(null)}
-      onSave={() => { onSave(drafts.filter(d => d.keep), meta); setDrafts(null); setSource(''); setImages([]); }} />;
+    return <DraftReview drafts={drafts} setDrafts={setDrafts} meta={meta} setMeta={setMeta} shortfall={shortfall}
+      onCancel={() => { setDrafts(null); setShortfall(''); }}
+      onSave={() => { onSave(drafts.filter(d => d.keep), meta); setDrafts(null); setShortfall(''); setSource(''); setImages([]); }} />;
   }
 
   const progText = !prog ? 'Working…'
@@ -2794,7 +2887,7 @@ function draftPreview(d){
   return { tag: 'Flip', main: d.front, sub: d.back };
 }
 
-function DraftReview({ drafts, setDrafts, meta, setMeta, onSave, onCancel }){
+function DraftReview({ drafts, setDrafts, meta, setMeta, onSave, onCancel, shortfall }){
   const kept = drafts.filter(d => d.keep).length;
   const toggle = (id) => setDrafts(drafts.map(d => d.id === id ? { ...d, keep: !d.keep } : d));
   const colour = subjectColour(meta.subject);
@@ -2814,6 +2907,14 @@ function DraftReview({ drafts, setDrafts, meta, setMeta, onSave, onCancel }){
           <span>Not saved yet — tap <b>Save</b> at the bottom or these are lost.</span>
         </Sub>
       </div>
+      {shortfall && (
+        <div style={{ background: rgba(T.accent, 0.11), borderRadius: R.well, padding: '11px 14px', marginBottom: 14 }}>
+          <Sub style={{ color: T.accent, fontWeight: 600, fontSize: 13, display: 'flex', gap: 8, alignItems: 'flex-start' }}>
+            <InlineIco name="warn" size={14} style={{ marginTop: 2 }} />
+            <span>{shortfall}</span>
+          </Sub>
+        </div>
+      )}
       <Sub style={{ marginBottom: 14 }}>Tap a card to drop it. {kept} of {drafts.length} kept.</Sub>
 
       <Card style={{ padding: 14, marginBottom: 14, boxShadow: SH.raised }}>

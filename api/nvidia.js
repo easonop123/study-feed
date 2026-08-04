@@ -28,6 +28,12 @@ export default async function handler(req, res) {
     });
   }
 
+  // Give up on NVIDIA just before maxDuration so this function returns its own
+  // JSON error. Left to run over, Vercel kills it and serves an HTML 504 the
+  // client can't parse — which surfaced as a generic "couldn't reach the AI".
+  const ctrl = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(), 55000);
+
   try {
     const upstream = await fetch(NVIDIA_URL, {
       method: 'POST',
@@ -37,6 +43,7 @@ export default async function handler(req, res) {
       },
       // Vercel parses JSON bodies into req.body; re-serialize to forward it.
       body: JSON.stringify(req.body),
+      signal: ctrl.signal,
     });
 
     // Pass the upstream status and body straight through, unmodified, so the
@@ -50,8 +57,15 @@ export default async function handler(req, res) {
     res.setHeader('Content-Type', 'application/json');
     return res.send(text);
   } catch (e) {
+    if (e && e.name === 'AbortError') {
+      console.error('NVIDIA timed out after 55s');
+      // 504 so the client counts it as retryable rather than a config problem.
+      return res.status(504).json({ error: 'NVIDIA did not respond in time — the model timed out.' });
+    }
     return res.status(502).json({
       error: 'Failed to reach NVIDIA: ' + (e && e.message ? e.message : String(e)),
     });
+  } finally {
+    clearTimeout(timer);
   }
 }
