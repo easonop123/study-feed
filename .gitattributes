@@ -1,0 +1,7 @@
+# Every file here is text, and docs/app.js is a build output that gets
+# committed. With Git's Windows default (core.autocrlf=true) a fresh clone
+# checks the source out as CRLF, so `npm run build` on that machine emits a
+# bundle that differs from the committed one on line endings alone — a 300KB
+# phantom diff on a file that is actually deployed. Pinning LF everywhere means
+# any machine builds the same bytes.
+* text=auto eol=lf
