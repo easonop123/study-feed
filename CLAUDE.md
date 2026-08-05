@@ -146,9 +146,19 @@ canonical; this section is only where things physically live here.
   they use the 12.5 stroke geometry from `mark-small-on-dark.svg`. In the app
   the lower layers take `T.ink` rather than a literal white, so the mark works
   on the light theme too — which is the kit's on-light rule, not a deviation.
-- **Manifest icons carry no `purpose`.** The supplied icons fill their square,
-  so declaring them `maskable` would let Android crop into the stack. A
-  properly padded maskable icon is a missing asset; ask rather than pad one.
+- **The landing page ground is LIGHT**, decided 6 Aug 2026, overriding the
+  near-black above. Only that page, and only the ground: the violet, the mark
+  and Inter are unchanged, and the app still uses the brand ground for its dark
+  theme. On white the accent is 4.40:1, so accent-coloured text there uses
+  `--accent-ink` (#5B3FD9, 6.65:1) — the same split as the tint on dark, in the
+  other direction. Its `theme-color` matches the page, not the kit.
+- **The closing CTA is a violet fill**, knowingly against the do-not-fill rule:
+  on a white page an outlined panel reads as one more card. It is a single flat
+  accent, not the old two-hue gradient.
+- **Maskable icon:** `docs/icon-maskable-512.png`, built by
+  `brand/make-maskable.mjs` from `icon-512.png` at 0.86 scale so the mark clears
+  Android's 80% safe circle (unpadded it reaches radius 44.06 of an allowed 40).
+  Rerun that script if the icon changes; do not hand-pad a new one.
 - **Two contrast facts worth knowing before changing anything:**
   - White on the violet accent is **4.35:1** — fine for large text, just under
     AA for normal text. It is what primary buttons and solid chips are.

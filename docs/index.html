@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
 <title>Study Feed — flashcards get you Achieved</title>
 <meta name="description" content="NCEA revision that marks the long answers you actually have to write. Real Achieved / Merit / Excellence criteria, the command verb the question is really asking for, and the exact sentence that would have moved you up a grade. Levels 1–3. Free, no account." />
-<meta name="theme-color" content="#141024" />
+<meta name="theme-color" content="#F0EBFF" />
 
 <!-- Brand assets: see /brand and CLAUDE.md. Paths are absolute because this
      page and /app/ sit at different depths and both point at the same files. -->
@@ -36,30 +36,31 @@
    Study Feed — landing page. Standalone: no framework, no build step, one file.
    Marketing pages live or die on how fast they paint, and this one is ~24KB.
 
-   Palette and type are the brand kit's (see /brand and CLAUDE.md): near-black
-   ground, a single violet accent, Inter. The share card, the favicon and the
-   installed app icon are all near-black, so a light indigo page here would
-   have made the link preview and the page it opens look like two products.
+   The page is LIGHT by decision, 6 Aug 2026, overriding the kit's near-black
+   ground. The rest of the kit still holds: the violet is the brand violet, the
+   mark is the brand mark, the type is Inter. Only the ground differs.
 
-   Only five colours are brand. Everything else on this page is derived from
-   them rather than picked: the raised surfaces are lighter steps of the same
-   near-black, and --faint is the muted tone darkened, so no sixth hue enters.
-   Green and amber survive as GRADE semantics (Excellence, streak) — the A/M/E
-   ladder is the page's whole argument and it stops meaning anything in one
-   colour. They are not brand accents and are never used as such.
+   Violet on white is 4.40:1, which fails AA for body text, so the accent
+   appears here in two weights — `--accent` for fills and anything 24px and up,
+   `--accent-ink` (#5B3FD9, 6.65:1) for every accent-coloured word below that.
+   This mirrors what the kit does on dark with its tint, in the other direction.
+
+   Green and amber are GRADE semantics (Excellence, streak), not a second brand
+   accent — the A/M/E ladder is the page's whole argument and it stops meaning
+   anything in one colour.
 
    The whole page argues one thing: flashcards can't get you Excellence,
    because Excellence is a writing problem. Everything else is support.
    ========================================================================== */
 :root{
-  color-scheme: dark;                  /* a marketing page commits to one look */
-  --ink:#FFFFFF; --muted:#B0A8C8; --faint:#8F88A8;
-  --accent:#7C5CFF; --accent-ink:#9B85FF; --accent-soft:rgba(124,92,255,.14);
-  --green:#46C79A; --green-ink:#6FD9B5; --amber:#EAB454; --amber-ink:#EAB454; --red:#EA7B72;
-  --ground:#141024; --surface:#1C1836; --line:#2E2752; --well:#241F42;
+  color-scheme: light;                 /* a marketing page commits to one look */
+  --ink:#1F1B2E; --muted:#5C5470; --faint:#6F6885;
+  --accent:#7C5CFF; --accent-ink:#5B3FD9; --accent-soft:#EFEBFF;
+  --green:#37B98C; --green-ink:#1E8C67; --amber:#E1A63E; --amber-ink:#A9761A; --red:#E06B62;
+  --ground:#FDFCFF; --surface:#FFFFFF; --line:#EAE7F3; --well:#F5F3FB;
   --r:18px; --pill:999px;
-  --sh-card:0 1px 2px rgba(0,0,0,.3), 0 18px 40px -22px rgba(0,0,0,.75);
-  --sh-pop:0 10px 30px -12px rgba(124,92,255,.55);
+  --sh-card:0 1px 2px rgba(31,27,46,.04), 0 18px 40px -22px rgba(31,27,46,.28);
+  --sh-pop:0 10px 30px -12px rgba(124,92,255,.45);
   --font:"Inter", system-ui, -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
 }
 *{ box-sizing:border-box; -webkit-tap-highlight-color:transparent; }
@@ -68,14 +69,12 @@ body{ font-family:var(--font); color:var(--ink); background:var(--ground);
   -webkit-font-smoothing:antialiased; overflow-x:hidden; }
 a{ color:inherit; text-decoration:none; }
 
-/* The accent is allowed to bloom here because it is light on a dark ground,
-   not a violet fill — the brand rule is about filling areas with it. */
 .wash{ position:absolute; inset:0 0 auto; height:820px; z-index:-2;
   background:
-    radial-gradient(1100px 520px at 78% -8%, rgba(124,92,255,.30), transparent 62%),
+    radial-gradient(1100px 520px at 78% -8%, rgba(124,92,255,.26), transparent 62%),
     radial-gradient(900px 460px at 12% 2%,  rgba(124,92,255,.16), transparent 58%),
-    linear-gradient(180deg, #1E1738 0%, #191330 34%, #141024 100%); }
-.grain{ position:absolute; inset:0 0 auto; height:820px; z-index:-1; opacity:.22; pointer-events:none;
+    linear-gradient(180deg, #F0EBFF 0%, #F6F3FE 34%, #FDFCFF 100%); }
+.grain{ position:absolute; inset:0 0 auto; height:820px; z-index:-1; opacity:.4; pointer-events:none;
   background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='140' height='140'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='.85' numOctaves='3'/%3E%3C/filter%3E%3Crect width='140' height='140' filter='url(%23n)' opacity='.5'/%3E%3C/svg%3E"); }
 
 .wrap{ width:100%; max-width:1180px; margin:0 auto; padding:0 24px; }
@@ -84,35 +83,40 @@ a{ color:inherit; text-decoration:none; }
 nav{ position:sticky; top:0; z-index:20; padding:16px 0;
   backdrop-filter:blur(12px); -webkit-backdrop-filter:blur(12px);
   transition:background .3s, border-color .3s; border-bottom:1px solid transparent; }
-nav.stuck{ background:rgba(20,16,36,.82); border-bottom-color:var(--line); }
+nav.stuck{ background:rgba(253,252,255,.86); border-bottom-color:var(--line); }
 .nav-in{ display:flex; align-items:center; gap:20px; }
 .brand{ display:flex; align-items:center; gap:10px; font-weight:800; font-size:17.5px; letter-spacing:-.03em; }
 .nav-links{ margin-left:auto; display:flex; align-items:center; gap:26px; }
 .nav-links a{ font-size:14.5px; font-weight:600; color:var(--muted); transition:color .2s; }
 .nav-links a:hover{ color:var(--ink); }
+/* `.nav-links a` is (0,1,1) and `.btn-primary` is (0,1,0), so the nav's CTA was
+   picking up the muted link colour and rendering grey-on-violet at 1.63:1. It
+   has done that since the page was written — the accent changed, the bug did
+   not. These two rules put the button colours back on top. */
+.nav-links a.btn-primary{ color:#fff; }
+.nav-links a.btn-primary:hover{ color:#fff; }
 @media (max-width:760px){ .nav-links a.hide-sm{ display:none; } }
 
 .btn{ display:inline-flex; align-items:center; justify-content:center; gap:8px;
   font-family:var(--font); font-weight:700; border:none; cursor:pointer; border-radius:var(--pill);
   transition:transform .16s cubic-bezier(.3,.8,.4,1), box-shadow .25s, background .2s; }
 .btn:active{ transform:scale(.975); }
-/* White-on-violet, not violet-on-dark: the accent is 4.28:1 on the ground, so
-   as a text colour it would fail at button sizes. As a fill behind white it
-   is the one place the accent carries a whole element. */
+/* White on violet, never violet as the label: as text on white the accent is
+   4.40:1 and fails at button sizes. As a fill behind white it carries. */
 .btn-primary{ background:var(--accent); color:#fff; box-shadow:var(--sh-pop); }
 .btn-primary:hover{ background:var(--accent-ink); box-shadow:0 14px 34px -10px rgba(124,92,255,.7); transform:translateY(-1px); }
 .btn-sm{ font-size:14px; padding:10px 18px; }
 .btn-lg{ font-size:18px; padding:19px 36px; }
-.btn-white{ background:#fff; color:var(--ground); box-shadow:0 12px 30px -12px rgba(0,0,0,.6); }
+.btn-white{ background:#fff; color:var(--accent-ink); box-shadow:0 12px 30px -12px rgba(0,0,0,.35); }
 .btn-white:hover{ background:#EFEBFF; transform:translateY(-1px); }
 
 /* ---- hero ---------------------------------------------------------------- */
 .hero{ display:grid; grid-template-columns:1fr; gap:44px; align-items:center; padding:52px 0 84px; }
 @media (min-width:1000px){ .hero{ grid-template-columns:1.02fr 1fr; gap:56px; padding:72px 0 112px; } }
 
-/* accent-ink (the tint) rather than the accent — this text is 13px, and the
-   accent only clears contrast at 24px and bold */
-.kicker{ display:inline-flex; align-items:center; gap:9px; background:rgba(124,92,255,.10);
+/* accent-ink, the darker violet — this text is 13px, and the accent itself
+   only clears contrast on white at 24px and bold */
+.kicker{ display:inline-flex; align-items:center; gap:9px; background:rgba(255,255,255,.72);
   border:1px solid rgba(124,92,255,.30); color:var(--accent-ink); font-size:13px; font-weight:700;
   padding:7px 15px; border-radius:var(--pill); margin-bottom:22px; }
 .kicker b{ color:var(--ink); font-weight:800; }
@@ -136,7 +140,7 @@ h1 .accent{ color:var(--accent); }
 .rung small{ display:block; font-size:11px; color:var(--faint); margin-top:2px; font-weight:600; }
 .rung.a{ background:var(--well); color:var(--muted); }
 .rung.m{ background:rgba(124,92,255,.1); color:var(--accent-ink); }
-.rung.e{ background:rgba(70,199,154,.12); color:var(--green-ink); }
+.rung.e{ background:rgba(55,185,140,.12); color:var(--green-ink); }
 .rung.now{ border-color:currentColor; }
 
 /* ---- demo card ----------------------------------------------------------- */
@@ -176,14 +180,14 @@ h1 .accent{ color:var(--accent); }
 @keyframes fill{ to{ width:100% } }
 
 .qcard{ background:var(--surface); border:1px solid var(--line); border-radius:16px; padding:17px;
-  box-shadow:0 1px 2px rgba(0,0,0,.45); }
+  box-shadow:0 1px 2px rgba(31,27,46,.05); }
 .qtop{ display:flex; align-items:center; gap:9px; margin-bottom:12px; flex-wrap:wrap; }
 .chip{ display:inline-flex; align-items:center; gap:6px; font-size:11.5px; font-weight:700;
   padding:4px 10px; border-radius:var(--pill); white-space:nowrap; }
 .chip-accent{ background:var(--accent); color:#fff; }
 .chip-mut{ background:var(--well); color:var(--muted); }
-.chip-green{ background:rgba(70,199,154,.14); color:var(--green-ink); }
-.chip-amber{ background:var(--amber); color:var(--ground); }
+.chip-green{ background:rgba(55,185,140,.14); color:var(--green-ink); }
+.chip-amber{ background:var(--amber); color:var(--ink); }
 .chip-grey{ background:var(--well); color:var(--muted); }
 .qtext{ font-size:16.5px; font-weight:700; line-height:1.4; letter-spacing:-.02em; }
 
@@ -211,7 +215,7 @@ h1 .accent{ color:var(--accent); }
 .step b{ display:block; font-size:13px; margin-bottom:4px; }
 .step q{ display:block; font-size:12px; color:var(--faint); font-style:italic; }
 .step em{ display:block; font-size:12.5px; line-height:1.5; margin-top:7px; padding-left:10px;
-  border-left:2.5px solid rgba(70,199,154,.6); font-style:normal; color:var(--ink); }
+  border-left:2.5px solid rgba(55,185,140,.6); font-style:normal; color:var(--ink); }
 .lift{ display:flex; align-items:center; gap:9px; margin-top:12px; opacity:0; }
 .scene.on .lift{ animation:rise .5s ease forwards; animation-delay:2.5s; }
 .lift svg{ color:var(--green); }
@@ -221,7 +225,7 @@ h1 .accent{ color:var(--accent); }
 .scene-dots b.on{ background:var(--accent); width:18px; }
 
 .floaters{ position:absolute; top:-26px; left:0; right:0; display:flex; justify-content:center; gap:12px; z-index:2; }
-.floaters span{ width:46px; height:46px; border-radius:14px; background:var(--surface); border:1px solid var(--line); box-shadow:0 6px 18px -6px rgba(0,0,0,.7);
+.floaters span{ width:46px; height:46px; border-radius:14px; background:#fff; box-shadow:0 6px 18px -6px rgba(31,27,46,.24);
   display:grid; place-items:center; font-size:9.5px; font-weight:800; color:#fff; animation:bob 3.4s ease-in-out infinite; }
 .floaters span:nth-child(2){ animation-delay:.4s } .floaters span:nth-child(3){ animation-delay:.8s } .floaters span:nth-child(4){ animation-delay:1.2s }
 @keyframes bob{ 0%,100%{ transform:translateY(0) } 50%{ transform:translateY(-7px) } }
@@ -294,22 +298,22 @@ h2{ margin:0; font-size:clamp(28px,4.2vw,42px); line-height:1.11; letter-spacing
 .steps{ display:grid; grid-template-columns:1fr; gap:18px; margin-top:42px; }
 @media (min-width:800px){ .steps{ grid-template-columns:repeat(3,1fr); gap:22px; } }
 .stepcard{ background:var(--surface); border:1px solid var(--line); border-radius:20px; padding:26px 24px;
-  box-shadow:0 1px 2px rgba(0,0,0,.45); }
+  box-shadow:0 1px 2px rgba(31,27,46,.05); }
 .stepno{ width:34px; height:34px; border-radius:11px; background:var(--accent-soft); color:var(--accent-ink);
   display:grid; place-items:center; font-weight:800; font-size:15px; margin-bottom:14px; }
 .stepcard h3{ margin:0 0 7px; font-size:18px; letter-spacing:-.02em; }
 .stepcard p{ margin:0; font-size:14.5px; line-height:1.6; color:var(--muted); }
 
-/* This was a full-bleed violet gradient. "Violet is an accent — do not fill
-   large areas or backgrounds with it" is the one hard rule in the brand kit,
-   and a 70px-padded panel is the largest area on the page. It is now the
-   ground with a violet edge and a bloom behind it, which reads as more
-   emphatic on a dark page than the flood did on a light one. */
+/* The one violet-filled area on the page, and knowingly so: the kit says not to
+   fill large areas with the accent, but a closing CTA on a white page has to
+   carry weight, and the alternative — an outlined panel — reads as another card
+   in a page already made of cards. It is a single flat accent rather than the
+   old three-stop indigo-to-purple gradient, so the second hue is gone even
+   though the fill stays. */
 .close{ position:relative; overflow:hidden; border-radius:30px; padding:70px 28px; text-align:center; margin:20px 0 76px;
-  background:var(--surface); border:1px solid rgba(124,92,255,.42); color:#fff;
-  box-shadow:0 30px 80px -40px rgba(124,92,255,.65); }
+  background:var(--accent); color:#fff; box-shadow:0 30px 80px -40px rgba(124,92,255,.75); }
 .close::after{ content:""; position:absolute; inset:0; pointer-events:none;
-  background:radial-gradient(680px 340px at 50% -20%, rgba(124,92,255,.36), transparent 68%); }
+  background:radial-gradient(600px 300px at 50% -10%, rgba(255,255,255,.26), transparent 65%); }
 .close > *{ position:relative; z-index:1; }
 .close h2{ color:#fff; }
 .close p{ margin:16px auto 28px; font-size:17px; line-height:1.6; color:rgba(255,255,255,.9); max-width:46ch; }
@@ -345,7 +349,7 @@ footer{ padding:0 0 56px; }
       <!-- The brand mark, inlined from brand/svg/mark-small-on-dark.svg. Under
            32px the kit calls for the heavier 12.5 strokes; the 8.5 weight
            smudges at this size. Top layer violet and never filled. -->
-      <svg width="28" height="28" viewBox="0 0 100 100" fill="none" stroke-linecap="round" stroke-linejoin="round" stroke-width="12.5" aria-hidden="true"><path d="M50 14 L85 34 L50 54 L15 34 Z" stroke="#7C5CFF"/><path d="M15 51 L50 71 L85 51" stroke="#FFFFFF"/><path d="M15 68 L50 88 L85 68" stroke="#FFFFFF"/></svg>
+      <svg width="28" height="28" viewBox="0 0 100 100" fill="none" stroke-linecap="round" stroke-linejoin="round" stroke-width="12.5" aria-hidden="true"><path d="M50 14 L85 34 L50 54 L15 34 Z" stroke="#7C5CFF"/><path d="M15 51 L50 71 L85 51" stroke="#141024"/><path d="M15 68 L50 88 L85 68" stroke="#141024"/></svg>
       Study Feed
     </a>
     <div class="nav-links">
@@ -415,7 +419,7 @@ footer{ padding:0 0 56px; }
                 <div class="rings">
                   <div class="ring" style="background:conic-gradient(from 0deg,transparent 0deg,#7C5CFF 90deg,transparent 180deg);-webkit-mask:radial-gradient(circle at 50% 50%,transparent 35%,#000 37%,#000 42%,transparent 44%);mask:radial-gradient(circle at 50% 50%,transparent 35%,#000 37%,#000 42%,transparent 44%);animation:spin 3s linear infinite"></div>
                   <div class="ring" style="background:conic-gradient(from 0deg,transparent 0deg,#9B85FF 120deg,rgba(78,90,214,.4) 240deg,transparent 360deg);-webkit-mask:radial-gradient(circle at 50% 50%,transparent 46%,#000 48%,#000 53%,transparent 55%);mask:radial-gradient(circle at 50% 50%,transparent 46%,#000 48%,#000 53%,transparent 55%);animation:spin 2.5s cubic-bezier(.4,0,.6,1) infinite"></div>
-                  <div class="ring" style="background:conic-gradient(from 180deg,transparent 0deg,#46C79A 50deg,transparent 100deg);-webkit-mask:radial-gradient(circle at 50% 50%,transparent 57%,#000 59%,#000 63%,transparent 65%);mask:radial-gradient(circle at 50% 50%,transparent 57%,#000 59%,#000 63%,transparent 65%);animation:spinr 4s linear infinite"></div>
+                  <div class="ring" style="background:conic-gradient(from 180deg,transparent 0deg,#37B98C 50deg,transparent 100deg);-webkit-mask:radial-gradient(circle at 50% 50%,transparent 57%,#000 59%,#000 63%,transparent 65%);mask:radial-gradient(circle at 50% 50%,transparent 57%,#000 59%,#000 63%,transparent 65%);animation:spinr 4s linear infinite"></div>
                 </div>
                 <div style="text-align:center">
                   <div style="font-size:15.5px;font-weight:700;letter-spacing:-.02em">Writing exam questions…</div>
@@ -508,7 +512,7 @@ footer{ padding:0 0 56px; }
           <div class="gap-arrow">
             <svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14M13 6l6 6-6 6"/></svg>
           </div>
-          <div class="gap-card" style="border-color:rgba(70,199,154,.5);background:rgba(70,199,154,.05)">
+          <div class="gap-card" style="border-color:rgba(55,185,140,.5);background:rgba(55,185,140,.05)">
             <div class="g" style="color:var(--green-ink)">The same point — Merit</div>
             <p>“The rate increases because the particles gain <b>kinetic energy</b>, so a greater <b>proportion</b> of collisions exceed the <b>activation energy</b>.”</p>
           </div>
@@ -651,7 +655,7 @@ footer{ padding:0 0 56px; }
 <footer>
   <div class="wrap foot">
     <span class="brand">
-      <svg width="24" height="24" viewBox="0 0 100 100" fill="none" stroke-linecap="round" stroke-linejoin="round" stroke-width="12.5" aria-hidden="true"><path d="M50 14 L85 34 L50 54 L15 34 Z" stroke="#7C5CFF"/><path d="M15 51 L50 71 L85 51" stroke="#FFFFFF"/><path d="M15 68 L50 88 L85 68" stroke="#FFFFFF"/></svg>
+      <svg width="24" height="24" viewBox="0 0 100 100" fill="none" stroke-linecap="round" stroke-linejoin="round" stroke-width="12.5" aria-hidden="true"><path d="M50 14 L85 34 L50 54 L15 34 Z" stroke="#7C5CFF"/><path d="M15 51 L50 71 L85 51" stroke="#141024"/><path d="M15 68 L50 88 L85 68" stroke="#141024"/></svg>
       Study Feed
     </span>
     <nav>
