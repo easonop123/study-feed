@@ -165,34 +165,81 @@ console.table([100, 1000, 10000].map(n => {
   return row;
 }));
 
-console.log('\n=== Your proposed prices, all NZD ===\n');
-const TIERS = [
-  { name: 'Pro beta lock-in', price: 4.99,  perMonth: 4.99 },
-  { name: 'Pro standard',     price: 8.99,  perMonth: 8.99 },
-  { name: 'Max beta lock-in', price: 9.99,  perMonth: 9.99 },
-  { name: 'Max standard',     price: 14.99, perMonth: 14.99 },
-  { name: 'Max ANNUAL',       price: 49.99, perMonth: 49.99 / 12, annual: true },
-];
-console.table(TIERS.map(t => {
-  // An annual plan pays one fixed fee a year, not twelve — that alone is worth
-  // more than any model saving at these prices.
-  const netYear = t.annual ? stripeNetNZD(t.price) : stripeNetNZD(t.price) * 12;
-  const costYearOss = nzd(monthlyCost(PROFILES.typical, PRICES.ossGroq).total) * 12;
-  const costYearHaiku = nzd(monthlyCost(PROFILES.typical, PRICES.haiku).total) * 12;
+/* ---- the two tiers, as agreed 2026-08-05 --------------------------------
+   Free and Pro, nothing in between. The old Pro/Max ladder is gone: Max annual
+   at $49.99 undercut a YEAR of Pro monthly, so anyone who did the arithmetic
+   bought the cheapest thing on the board and the middle tier earned nothing.
+
+   Free runs on NVIDIA's free API and costs no cash at all — it costs capacity,
+   which is a separate question further down. Pro runs Claude Haiku: the same
+   calls against a better model, which is most visible on marking and on reading
+   photos of slides. Sonnet is priced here only to show why it is not the pick. */
+const PRO_MONTHLY = 7.99;
+const PRO_ANNUAL  = 49.99;
+const PRO_LOCKIN  = 29.99;   // first-release yearly buyers keep this rate for good
+
+console.log('\n=== Pro pricing, all NZD — what reaches you per student per YEAR ===\n');
+const yearCost = (profile, price) => nzd(monthlyCost(PROFILES[profile], price).total) * 12;
+console.table([
+  { tier: 'Pro monthly', billed: m(PRO_MONTHLY) + '/mo', net: stripeNetNZD(PRO_MONTHLY) * 12 },
+  { tier: 'Pro annual',  billed: m(PRO_ANNUAL) + '/yr',  net: stripeNetNZD(PRO_ANNUAL) },
+  { tier: 'Launch lock-in', billed: m(PRO_LOCKIN) + '/yr', net: stripeNetNZD(PRO_LOCKIN) },
+].map(t => ({
+  tier: t.tier,
+  billed: t.billed,
+  'net/yr after Stripe': m(t.net),
+  'keeps, light': m(t.net - yearCost('light', PRICES.haiku)),
+  'keeps, typical': m(t.net - yearCost('typical', PRICES.haiku)),
+  'keeps, heavy': m(t.net - yearCost('heavy', PRICES.haiku)),
+})));
+
+/* The lock-in is permanent, so it has to survive the heaviest user who takes it
+   — and a discount aimed at early adopters selects FOR heavy users. Haiku holds
+   up; Sonnet does not, which is the whole argument for Haiku behind Pro. */
+console.log('\n=== Would the ' + m(PRO_LOCKIN) + ' lock-in survive on Sonnet instead? ===\n');
+console.table(['light', 'typical', 'heavy'].map(p => {
+  const h = yearCost(p, PRICES.haiku), s = yearCost(p, PRICES.sonnet);
+  const net = stripeNetNZD(PRO_LOCKIN);
   return {
-    tier: t.name,
-    'billed': t.annual ? m(t.price) + '/yr' : m(t.price) + '/mo',
-    'per month': m(t.perMonth),
-    'net/yr after Stripe': m(netYear),
-    'margin/yr on gpt-oss': m(netYear - costYearOss),
-    'margin/yr on Haiku': m(netYear - costYearHaiku),
+    user: p,
+    'inference/yr Haiku': m(h),
+    'keeps on Haiku': m(net - h),
+    'inference/yr Sonnet': m(s),
+    'keeps on Sonnet': m(net - s),
+    verdict: (net - s) < 0 ? 'LOSS on Sonnet' : (net - s) < 5 ? 'thin on Sonnet' : 'ok either way',
   };
 }));
 
-/* Can the NVIDIA free tier carry the free plan? Volume isn't the problem —
-   concurrency is. NCEA students are all in one timezone and all revise after
-   dinner, so usage isn't spread across the day; it stacks into a couple of
-   hours. ~40 requests/minute is shared across every user at once. */
+/* Monthly is the low-commitment door in; annual is worth more only if the
+   average subscriber would have churned before this many months. Exam-season
+   subscribers are the ones this decides. */
+console.log('\n=== Monthly vs annual: where the break-even sits ===\n');
+const netMonth = stripeNetNZD(PRO_MONTHLY);
+const netAnnual = stripeNetNZD(PRO_ANNUAL);
+const netLockin = stripeNetNZD(PRO_LOCKIN);
+console.log('  Monthly ' + m(PRO_MONTHLY) + ' -> ' + m(netMonth) + ' net per month after Stripe');
+console.log('  Annual  ' + m(PRO_ANNUAL) + ' -> ' + m(netAnnual) + ' net, one fixed fee instead of twelve');
+console.log('  Annual is worth more unless a monthly subscriber stays past '
+  + (netAnnual / netMonth).toFixed(1) + ' months.');
+console.log('  A student who subscribes only for the exam run-up (3 months) is worth '
+  + m(netMonth * 3) + ' on monthly vs ' + m(netAnnual) + ' on annual.');
+console.log('  The lock-in nets ' + m(netLockin) + ' — worth ' + (netLockin / netMonth).toFixed(1)
+  + ' months of monthly, so it pays off against anyone who would have churned sooner.\n');
+
+/* What the lock-in costs in the years AFTER the first one, which is where a
+   permanent discount actually bites. */
+console.log('=== The lock-in over time (typical user, Haiku) ===\n');
+const costTypical = yearCost('typical', PRICES.haiku);
+console.table([1, 2, 3].map(y => ({
+  'years subscribed': y,
+  'if on lock-in': m((netLockin - costTypical) * y),
+  'if on full annual': m((netAnnual - costTypical) * y),
+  'given up': m(((netAnnual - costTypical) - (netLockin - costTypical)) * y),
+})));
+
+/* Capacity, not cost. The free tier is free in cash and capped in throughput:
+   ~40 req/min shared across every user at once. Worth knowing the ceiling, but
+   hitting it is the good problem — the fix is a paid host, priced below. */
 const NVIDIA_RPM = 40;
 const CALLS_PER_SESSION = 6;        // a generate (2 chunks) plus a few marks/hints
 const SESSIONS_PER_USER_MONTH = 12; // roughly 3 study nights a week
@@ -200,51 +247,19 @@ const PEAK_WINDOW_MIN = 120;        // the after-dinner block the sessions pile 
 const PEAK_SHARE = 0.25;            // share of monthly sessions landing in that window
 const BURST = 3;                    // peak minute vs average minute inside the window
 
-console.log('\n=== Does NVIDIA\'s free tier survive the free plan? ===');
-console.log('(~' + NVIDIA_RPM + ' req/min shared across ALL users at once)\n');
-console.table([200, 500, 1000, 2000, 5000].map(users => {
+console.log('\n=== Free tier ceiling, and what lifting it costs ===');
+console.log('(NVIDIA free tier is ~' + NVIDIA_RPM + ' req/min shared across ALL users at once)\n');
+console.table([200, 1000, 2000, 5000, 10000].map(users => {
   const sessionsInWindow = users * SESSIONS_PER_USER_MONTH * PEAK_SHARE / 30;
-  const avgRpm = sessionsInWindow * CALLS_PER_SESSION / PEAK_WINDOW_MIN;
-  const peakRpm = avgRpm * BURST;
+  const peakRpm = sessionsInWindow * CALLS_PER_SESSION / PEAK_WINDOW_MIN * BURST;
   return {
     'free users': users,
-    'avg req/min at peak hour': avgRpm.toFixed(1),
     'burst req/min': peakRpm.toFixed(1),
-    'vs 40/min cap': peakRpm > NVIDIA_RPM ? 'RATE LIMITED' : 'ok',
+    'free tier': peakRpm > NVIDIA_RPM ? 'over the cap' : 'ok',
+    'cost/mo to serve them on Groq instead': m(nzd(monthlyCost(PROFILES.typical, PRICES.ossGroq).total) * users),
   };
 }));
-
-/* Steady state is not the thing that breaks it — a launch spike is. When a
-   video lands, arrivals are compressed into minutes, and every one of them
-   generates a deck in their first session. */
-console.log('\n=== A spike: N new students arriving within ONE hour ===\n');
-console.table([100, 250, 500, 1000].map(arrivals => {
-  const rpm = arrivals * CALLS_PER_SESSION / 60;
-  return {
-    'arrive in 1h': arrivals,
-    'req/min': rpm.toFixed(1),
-    'vs 40/min cap': rpm > NVIDIA_RPM ? 'RATE LIMITED — first impression is a failure' : 'ok',
-  };
-}));
-
-/* Monthly is the low-commitment door in; annual is worth more to you only if
-   the average subscriber would have churned before this many months. */
-console.log('\n=== Monthly vs annual: where the break-even sits ===\n');
-const MONTHLY = 6.99, ANNUAL = 49.99;
-const netMonth = stripeNetNZD(MONTHLY);
-const netAnnual = stripeNetNZD(ANNUAL);
-console.log('  Monthly ' + m(MONTHLY) + ' -> ' + m(netMonth) + ' net per month after Stripe');
-console.log('  Annual  ' + m(ANNUAL) + ' -> ' + m(netAnnual) + ' net, one fee instead of twelve');
-console.log('  Annual is worth more unless a monthly subscriber stays past '
-  + (netAnnual / netMonth).toFixed(1) + ' months.');
-console.log('  A student who subscribes for the exam run-up (3 months) is worth '
-  + m(netMonth * 3) + ' on monthly vs ' + m(netAnnual) + ' on annual.\n');
-
-console.log('\n=== The ladder problem ===\n');
-const proYear = 8.99 * 12, maxYear = 14.99 * 12;
-console.log('  Pro at $8.99/mo over a year:   ' + m(proYear));
-console.log('  Max at $14.99/mo over a year:  ' + m(maxYear));
-console.log('  Max annual as proposed:        ' + m(49.99)
-  + '   (' + Math.round((1 - 49.99 / maxYear) * 100) + '% off Max monthly)');
-console.log('  -> Max annual undercuts a year of PRO by ' + m(proYear - 49.99)
-  + ', so nobody who does the arithmetic buys anything else.\n');
+console.log('  Paying to remove the ceiling is cheap relative to one Pro subscriber:');
+console.log('  ' + m(nzd(monthlyCost(PROFILES.typical, PRICES.ossGroq).total) * 1000)
+  + '/mo carries 1,000 free users, which ' + Math.ceil((nzd(monthlyCost(PROFILES.typical, PRICES.ossGroq).total) * 1000 * 12) / netAnnual)
+  + ' annual Pro subscribers cover for a year.\n');
