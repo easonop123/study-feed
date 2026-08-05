@@ -1,6 +1,6 @@
 # Study Feed
 
-A study app that turns dead time into revision — swipe-scroll habit, redirected at your own notes. Mobile-first, built to live on an iPhone home screen.
+A study app that turns dead time into revision — swipe-scroll habit, redirected at your own notes. Responsive down to a phone, but not pitched as a phone app: the thing it is actually for is writing long answers, and nobody writes a six-mark answer with their thumbs.
 
 Subject- and curriculum-agnostic. Ships empty. Default level is NCEA Level 1 (free-text, so any curriculum works).
 
@@ -31,6 +31,18 @@ Model calls are OpenAI-compatible requests to NVIDIA Build (`integrate.api.nvidi
 - Reasoning models (`deepseek`, `nemotron`) need `chat_template_kwargs: { thinking: false }` or chain-of-thought pollutes the JSON. `isReasoner` handles this.
 
 `api/feedback.js` emails feature requests via Resend when `RESEND_API_KEY` is set (optional `FEEDBACK_TO`, `FEEDBACK_FROM`); with no key the client falls back to a `mailto:`.
+
+## Brand
+
+The identity lives in `CLAUDE.md` (canonical rules) and `brand/` (vector and
+raster masters); served copies sit in `docs/`. Near-black `#141024` ground, one
+violet accent `#7C5CFF` with a `#9B85FF` tint for small text, Inter. The mark is
+an isometric stack — violet top layer, never filled.
+
+The accent is only 4.28:1 on the ground, so it is a **fill and a mark colour**;
+anything set in it as text uses the tint instead. That is why `Chip` defaults to
+`T.accentInk` and why nav labels, link-style buttons and outline chips take the
+tint rather than `T.accent`.
 
 ## Routes
 
@@ -94,7 +106,7 @@ Decks are portable: export the whole library, a chosen subset, or one deck on it
 - **Home dashboard:** greeting, exam countdown, due hero, streak, this-week bars, subject mastery, quick actions. All from local data.
 - **Upload:** PDF (pdf.js — text plus embedded images; text-less pages are rendered and sent to the vision model), `.docx`, `.pptx`, images, `.txt`. Office files are unzipped in the browser. Everything is shrunk to ≤1500px JPEG and only extracted content is sent, so there's no file-size ceiling. Up to 12 images per generate.
 - **Look:** "Calm" light system with full dark mode (`data-theme` on `<html>`, Light/Dark/System in Settings). Bottom nav on a phone, sidebar past 1024px. Flip cards do a real 3D turn (two faces in one grid cell, so the card sizes to the taller side instead of needing a fixed height).
-- **Typeface:** Plus Jakarta Sans, with Inter and the system stack selectable in Settings → Appearance. `SANS` is `var(--sf-font)` and `data-font` on `<html>` swaps it, mirroring how `data-theme` swaps the palette. The webfonts are linked from `docs/index.html`; system-ui is always the last fallback so the Artifact build still looks deliberate.
+- **Typeface:** Inter (the brand face), with Plus Jakarta Sans and the system stack selectable in Settings → Appearance. `SANS` is `var(--sf-font)` and `data-font` on `<html>` swaps it, mirroring how `data-theme` swaps the palette. The webfonts are linked from `docs/index.html`; system-ui is always the last fallback so the Artifact build still looks deliberate.
 - **No emoji.** Every icon is a stroked SVG on a single weight taking `currentColor` (`ICON_PATHS` / `Ico`). Emoji rendered differently on every platform, ignored the theme, and read as clip art next to the rest of the UI.
 - **Compatibility:** avoids `??` / `?.` / `||=` — the Artifact transpiler rejects them. `jszip` and `pdf.js` load from cdnjs `<script>` when the bundler doesn't provide them. Syntax-check with:
   ```bash

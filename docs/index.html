@@ -5,51 +5,77 @@
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
 <title>Study Feed — flashcards get you Achieved</title>
 <meta name="description" content="NCEA revision that marks the long answers you actually have to write. Real Achieved / Merit / Excellence criteria, the command verb the question is really asking for, and the exact sentence that would have moved you up a grade. Levels 1–3. Free, no account." />
-<meta name="theme-color" content="#F4F2FD" />
-<link rel="apple-touch-icon" href="icon.png" />
+<meta name="theme-color" content="#141024" />
+
+<!-- Brand assets: see /brand and CLAUDE.md. Paths are absolute because this
+     page and /app/ sit at different depths and both point at the same files. -->
+<link rel="icon" href="/favicon.ico" sizes="any" />
+<link rel="icon" href="/favicon-32.png" type="image/png" />
+<link rel="apple-touch-icon" href="/apple-touch-icon.png" />
 
 <meta property="og:type" content="website" />
+<meta property="og:url" content="https://study-feed.vercel.app/" />
 <meta property="og:title" content="Study Feed — flashcards get you Achieved" />
 <meta property="og:description" content="Excellence is a writing problem. Study Feed marks what you actually write, against the real NCEA criteria, and shows you the sentence that gets you the next grade." />
+<!-- Absolute, and it has to stay that way: a relative og:image silently fails
+     in iMessage, WhatsApp and Instagram DMs, where a link with no preview reads
+     as a phishing link. Sharing into group chats is the whole distribution plan. -->
+<meta property="og:image" content="https://study-feed.vercel.app/og-image.png" />
+<meta property="og:image:width" content="1200" />
+<meta property="og:image:height" content="630" />
+<meta property="og:image:alt" content="Study Feed — flashcards get you Achieved. Excellence is a writing problem." />
 <meta name="twitter:card" content="summary_large_image" />
+<meta name="twitter:image" content="https://study-feed.vercel.app/og-image.png" />
 
 <link rel="preconnect" href="https://fonts.googleapis.com" />
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
-<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&display=swap" />
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" />
 
 <style>
 /* ============================================================================
    Study Feed — landing page. Standalone: no framework, no build step, one file.
    Marketing pages live or die on how fast they paint, and this one is ~24KB.
-   Palette and type are the app's own (indigo #6472F0, Plus Jakarta Sans) so
-   arriving in the app doesn't feel like a different product.
+
+   Palette and type are the brand kit's (see /brand and CLAUDE.md): near-black
+   ground, a single violet accent, Inter. The share card, the favicon and the
+   installed app icon are all near-black, so a light indigo page here would
+   have made the link preview and the page it opens look like two products.
+
+   Only five colours are brand. Everything else on this page is derived from
+   them rather than picked: the raised surfaces are lighter steps of the same
+   near-black, and --faint is the muted tone darkened, so no sixth hue enters.
+   Green and amber survive as GRADE semantics (Excellence, streak) — the A/M/E
+   ladder is the page's whole argument and it stops meaning anything in one
+   colour. They are not brand accents and are never used as such.
 
    The whole page argues one thing: flashcards can't get you Excellence,
    because Excellence is a writing problem. Everything else is support.
    ========================================================================== */
 :root{
-  color-scheme: light;                 /* a marketing page commits to one look */
-  --ink:#1F2230; --muted:#5C6274; --faint:#8A90A0;
-  --accent:#6472F0; --accent-ink:#4E5AD6; --accent-soft:#EEF0FE;
-  --green:#37B98C; --green-ink:#1E8C67; --amber:#E1A63E; --amber-ink:#A9761A; --red:#E06B62;
-  --surface:#FFFFFF; --line:#E9EBF2; --well:#F4F6FA;
+  color-scheme: dark;                  /* a marketing page commits to one look */
+  --ink:#FFFFFF; --muted:#B0A8C8; --faint:#8F88A8;
+  --accent:#7C5CFF; --accent-ink:#9B85FF; --accent-soft:rgba(124,92,255,.14);
+  --green:#46C79A; --green-ink:#6FD9B5; --amber:#EAB454; --amber-ink:#EAB454; --red:#EA7B72;
+  --ground:#141024; --surface:#1C1836; --line:#2E2752; --well:#241F42;
   --r:18px; --pill:999px;
-  --sh-card:0 1px 2px rgba(30,34,50,.04), 0 18px 40px -22px rgba(30,34,50,.28);
-  --sh-pop:0 10px 30px -12px rgba(100,114,240,.45);
-  --font:"Plus Jakarta Sans", system-ui, -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  --sh-card:0 1px 2px rgba(0,0,0,.3), 0 18px 40px -22px rgba(0,0,0,.75);
+  --sh-pop:0 10px 30px -12px rgba(124,92,255,.55);
+  --font:"Inter", system-ui, -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
 }
 *{ box-sizing:border-box; -webkit-tap-highlight-color:transparent; }
 html,body{ margin:0; padding:0; }
-body{ font-family:var(--font); color:var(--ink); background:#FDFDFE;
+body{ font-family:var(--font); color:var(--ink); background:var(--ground);
   -webkit-font-smoothing:antialiased; overflow-x:hidden; }
 a{ color:inherit; text-decoration:none; }
 
+/* The accent is allowed to bloom here because it is light on a dark ground,
+   not a violet fill — the brand rule is about filling areas with it. */
 .wash{ position:absolute; inset:0 0 auto; height:820px; z-index:-2;
   background:
-    radial-gradient(1100px 520px at 78% -8%, rgba(140,116,240,.34), transparent 62%),
-    radial-gradient(900px 460px at 12% 2%,  rgba(100,114,240,.24), transparent 58%),
-    linear-gradient(180deg, #EFE9FC 0%, #F4F3FD 34%, #FDFDFE 100%); }
-.grain{ position:absolute; inset:0 0 auto; height:820px; z-index:-1; opacity:.4; pointer-events:none;
+    radial-gradient(1100px 520px at 78% -8%, rgba(124,92,255,.30), transparent 62%),
+    radial-gradient(900px 460px at 12% 2%,  rgba(124,92,255,.16), transparent 58%),
+    linear-gradient(180deg, #1E1738 0%, #191330 34%, #141024 100%); }
+.grain{ position:absolute; inset:0 0 auto; height:820px; z-index:-1; opacity:.22; pointer-events:none;
   background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='140' height='140'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='.85' numOctaves='3'/%3E%3C/filter%3E%3Crect width='140' height='140' filter='url(%23n)' opacity='.5'/%3E%3C/svg%3E"); }
 
 .wrap{ width:100%; max-width:1180px; margin:0 auto; padding:0 24px; }
@@ -58,7 +84,7 @@ a{ color:inherit; text-decoration:none; }
 nav{ position:sticky; top:0; z-index:20; padding:16px 0;
   backdrop-filter:blur(12px); -webkit-backdrop-filter:blur(12px);
   transition:background .3s, border-color .3s; border-bottom:1px solid transparent; }
-nav.stuck{ background:rgba(253,253,254,.84); border-bottom-color:var(--line); }
+nav.stuck{ background:rgba(20,16,36,.82); border-bottom-color:var(--line); }
 .nav-in{ display:flex; align-items:center; gap:20px; }
 .brand{ display:flex; align-items:center; gap:10px; font-weight:800; font-size:17.5px; letter-spacing:-.03em; }
 .nav-links{ margin-left:auto; display:flex; align-items:center; gap:26px; }
@@ -70,19 +96,24 @@ nav.stuck{ background:rgba(253,253,254,.84); border-bottom-color:var(--line); }
   font-family:var(--font); font-weight:700; border:none; cursor:pointer; border-radius:var(--pill);
   transition:transform .16s cubic-bezier(.3,.8,.4,1), box-shadow .25s, background .2s; }
 .btn:active{ transform:scale(.975); }
+/* White-on-violet, not violet-on-dark: the accent is 4.28:1 on the ground, so
+   as a text colour it would fail at button sizes. As a fill behind white it
+   is the one place the accent carries a whole element. */
 .btn-primary{ background:var(--accent); color:#fff; box-shadow:var(--sh-pop); }
-.btn-primary:hover{ background:var(--accent-ink); box-shadow:0 14px 34px -10px rgba(100,114,240,.6); transform:translateY(-1px); }
+.btn-primary:hover{ background:var(--accent-ink); box-shadow:0 14px 34px -10px rgba(124,92,255,.7); transform:translateY(-1px); }
 .btn-sm{ font-size:14px; padding:10px 18px; }
 .btn-lg{ font-size:18px; padding:19px 36px; }
-.btn-white{ background:#fff; color:var(--accent-ink); box-shadow:0 12px 30px -12px rgba(0,0,0,.4); }
-.btn-white:hover{ background:#F6F6FF; transform:translateY(-1px); }
+.btn-white{ background:#fff; color:var(--ground); box-shadow:0 12px 30px -12px rgba(0,0,0,.6); }
+.btn-white:hover{ background:#EFEBFF; transform:translateY(-1px); }
 
 /* ---- hero ---------------------------------------------------------------- */
 .hero{ display:grid; grid-template-columns:1fr; gap:44px; align-items:center; padding:52px 0 84px; }
 @media (min-width:1000px){ .hero{ grid-template-columns:1.02fr 1fr; gap:56px; padding:72px 0 112px; } }
 
-.kicker{ display:inline-flex; align-items:center; gap:9px; background:rgba(255,255,255,.72);
-  border:1px solid rgba(100,114,240,.22); color:var(--accent-ink); font-size:13px; font-weight:700;
+/* accent-ink (the tint) rather than the accent — this text is 13px, and the
+   accent only clears contrast at 24px and bold */
+.kicker{ display:inline-flex; align-items:center; gap:9px; background:rgba(124,92,255,.10);
+  border:1px solid rgba(124,92,255,.30); color:var(--accent-ink); font-size:13px; font-weight:700;
   padding:7px 15px; border-radius:var(--pill); margin-bottom:22px; }
 .kicker b{ color:var(--ink); font-weight:800; }
 
@@ -104,16 +135,16 @@ h1 .accent{ color:var(--accent); }
 .rung b{ display:block; font-size:12.5px; font-weight:800; letter-spacing:-.01em; }
 .rung small{ display:block; font-size:11px; color:var(--faint); margin-top:2px; font-weight:600; }
 .rung.a{ background:var(--well); color:var(--muted); }
-.rung.m{ background:rgba(100,114,240,.1); color:var(--accent-ink); }
-.rung.e{ background:rgba(55,185,140,.12); color:var(--green-ink); }
+.rung.m{ background:rgba(124,92,255,.1); color:var(--accent-ink); }
+.rung.e{ background:rgba(70,199,154,.12); color:var(--green-ink); }
 .rung.now{ border-color:currentColor; }
 
 /* ---- demo card ----------------------------------------------------------- */
 .demo{ position:relative; background:var(--surface); border-radius:26px; padding:22px;
-  box-shadow:var(--sh-card); border:1px solid rgba(255,255,255,.7); min-height:472px;
+  box-shadow:var(--sh-card); border:1px solid var(--line); min-height:472px;
   display:flex; flex-direction:column; }
 .demo-head{ display:flex; align-items:center; gap:7px; padding:2px 4px 15px; }
-.dot{ width:9px; height:9px; border-radius:9px; background:#E4E7EF; }
+.dot{ width:9px; height:9px; border-radius:9px; background:var(--line); }
 .demo-stage{ position:relative; flex:1; }
 .scene{ position:absolute; inset:0; opacity:0; transform:translateY(10px); pointer-events:none;
   transition:opacity .5s ease, transform .5s cubic-bezier(.2,.8,.3,1); }
@@ -145,14 +176,14 @@ h1 .accent{ color:var(--accent); }
 @keyframes fill{ to{ width:100% } }
 
 .qcard{ background:var(--surface); border:1px solid var(--line); border-radius:16px; padding:17px;
-  box-shadow:0 1px 2px rgba(30,34,50,.05); }
+  box-shadow:0 1px 2px rgba(0,0,0,.45); }
 .qtop{ display:flex; align-items:center; gap:9px; margin-bottom:12px; flex-wrap:wrap; }
 .chip{ display:inline-flex; align-items:center; gap:6px; font-size:11.5px; font-weight:700;
   padding:4px 10px; border-radius:var(--pill); white-space:nowrap; }
 .chip-accent{ background:var(--accent); color:#fff; }
 .chip-mut{ background:var(--well); color:var(--muted); }
-.chip-green{ background:rgba(55,185,140,.14); color:var(--green-ink); }
-.chip-amber{ background:var(--amber); color:#fff; }
+.chip-green{ background:rgba(70,199,154,.14); color:var(--green-ink); }
+.chip-amber{ background:var(--amber); color:var(--ground); }
 .chip-grey{ background:var(--well); color:var(--muted); }
 .qtext{ font-size:16.5px; font-weight:700; line-height:1.4; letter-spacing:-.02em; }
 
@@ -180,17 +211,17 @@ h1 .accent{ color:var(--accent); }
 .step b{ display:block; font-size:13px; margin-bottom:4px; }
 .step q{ display:block; font-size:12px; color:var(--faint); font-style:italic; }
 .step em{ display:block; font-size:12.5px; line-height:1.5; margin-top:7px; padding-left:10px;
-  border-left:2.5px solid rgba(55,185,140,.6); font-style:normal; color:var(--ink); }
+  border-left:2.5px solid rgba(70,199,154,.6); font-style:normal; color:var(--ink); }
 .lift{ display:flex; align-items:center; gap:9px; margin-top:12px; opacity:0; }
 .scene.on .lift{ animation:rise .5s ease forwards; animation-delay:2.5s; }
 .lift svg{ color:var(--green); }
 
 .scene-dots{ display:flex; gap:6px; justify-content:center; padding-top:14px; }
-.scene-dots b{ width:6px; height:6px; border-radius:6px; background:#DFE3EE; transition:background .3s, width .3s; }
+.scene-dots b{ width:6px; height:6px; border-radius:6px; background:var(--line); transition:background .3s, width .3s; }
 .scene-dots b.on{ background:var(--accent); width:18px; }
 
 .floaters{ position:absolute; top:-26px; left:0; right:0; display:flex; justify-content:center; gap:12px; z-index:2; }
-.floaters span{ width:46px; height:46px; border-radius:14px; background:#fff; box-shadow:0 6px 18px -6px rgba(30,34,50,.24);
+.floaters span{ width:46px; height:46px; border-radius:14px; background:var(--surface); border:1px solid var(--line); box-shadow:0 6px 18px -6px rgba(0,0,0,.7);
   display:grid; place-items:center; font-size:9.5px; font-weight:800; color:#fff; animation:bob 3.4s ease-in-out infinite; }
 .floaters span:nth-child(2){ animation-delay:.4s } .floaters span:nth-child(3){ animation-delay:.8s } .floaters span:nth-child(4){ animation-delay:1.2s }
 @keyframes bob{ 0%,100%{ transform:translateY(0) } 50%{ transform:translateY(-7px) } }
@@ -205,7 +236,7 @@ h1 .accent{ color:var(--accent); }
 
 /* ---- sections ------------------------------------------------------------ */
 section{ padding:72px 0; }
-.eyebrow{ font-size:12.5px; font-weight:800; letter-spacing:.1em; text-transform:uppercase; color:var(--accent); margin:0 0 12px; }
+.eyebrow{ font-size:12.5px; font-weight:800; letter-spacing:.1em; text-transform:uppercase; color:var(--accent-ink); margin:0 0 12px; }
 h2{ margin:0; font-size:clamp(28px,4.2vw,42px); line-height:1.11; letter-spacing:-.035em; font-weight:800; }
 .sub{ margin:16px 0 0; font-size:16.5px; line-height:1.62; color:var(--muted); max-width:52ch; }
 .center{ text-align:center; } .center .sub{ margin-left:auto; margin-right:auto; }
@@ -240,13 +271,13 @@ h2{ margin:0; font-size:clamp(28px,4.2vw,42px); line-height:1.11; letter-spacing
 .verb{ font-size:13.5px; font-weight:700; padding:8px 14px; border-radius:var(--pill);
   border:1px solid var(--line); background:var(--surface); color:var(--muted); cursor:default;
   transition:border-color .2s, color .2s, transform .2s; }
-.verb:hover{ border-color:rgba(100,114,240,.45); color:var(--accent-ink); transform:translateY(-1px); }
+.verb:hover{ border-color:rgba(124,92,255,.45); color:var(--accent-ink); transform:translateY(-1px); }
 .verb.hot{ background:var(--accent); border-color:var(--accent); color:#fff; }
 .verb-note{ margin-top:16px; background:var(--well); border-radius:13px; padding:14px 15px; }
 .verb-note b{ font-size:13.5px; } .verb-note p{ margin:5px 0 0; font-size:13.5px; line-height:1.55; color:var(--muted); }
 
 .bars{ display:flex; align-items:flex-end; gap:9px; height:100px; margin-top:6px; }
-.bars i{ flex:1; background:linear-gradient(180deg, var(--accent), #8E99F6); border-radius:7px 7px 3px 3px;
+.bars i{ flex:1; background:linear-gradient(180deg, var(--accent), #9B85FF); border-radius:7px 7px 3px 3px;
   transform-origin:bottom; transform:scaleY(0); transition:transform .8s cubic-bezier(.2,.8,.25,1); }
 .reveal.in .bars i{ transform:scaleY(1); }
 .bars i:nth-child(1){ transition-delay:.05s } .bars i:nth-child(2){ transition-delay:.12s } .bars i:nth-child(3){ transition-delay:.19s }
@@ -263,16 +294,22 @@ h2{ margin:0; font-size:clamp(28px,4.2vw,42px); line-height:1.11; letter-spacing
 .steps{ display:grid; grid-template-columns:1fr; gap:18px; margin-top:42px; }
 @media (min-width:800px){ .steps{ grid-template-columns:repeat(3,1fr); gap:22px; } }
 .stepcard{ background:var(--surface); border:1px solid var(--line); border-radius:20px; padding:26px 24px;
-  box-shadow:0 1px 2px rgba(30,34,50,.05); }
+  box-shadow:0 1px 2px rgba(0,0,0,.45); }
 .stepno{ width:34px; height:34px; border-radius:11px; background:var(--accent-soft); color:var(--accent-ink);
   display:grid; place-items:center; font-weight:800; font-size:15px; margin-bottom:14px; }
 .stepcard h3{ margin:0 0 7px; font-size:18px; letter-spacing:-.02em; }
 .stepcard p{ margin:0; font-size:14.5px; line-height:1.6; color:var(--muted); }
 
+/* This was a full-bleed violet gradient. "Violet is an accent — do not fill
+   large areas or backgrounds with it" is the one hard rule in the brand kit,
+   and a 70px-padded panel is the largest area on the page. It is now the
+   ground with a violet edge and a bloom behind it, which reads as more
+   emphatic on a dark page than the flood did on a light one. */
 .close{ position:relative; overflow:hidden; border-radius:30px; padding:70px 28px; text-align:center; margin:20px 0 76px;
-  background:linear-gradient(140deg,#5F6DEE 0%, #7A63E8 52%, #9A6FE4 100%); color:#fff; }
-.close::after{ content:""; position:absolute; inset:0;
-  background:radial-gradient(600px 300px at 50% -10%, rgba(255,255,255,.28), transparent 65%); }
+  background:var(--surface); border:1px solid rgba(124,92,255,.42); color:#fff;
+  box-shadow:0 30px 80px -40px rgba(124,92,255,.65); }
+.close::after{ content:""; position:absolute; inset:0; pointer-events:none;
+  background:radial-gradient(680px 340px at 50% -20%, rgba(124,92,255,.36), transparent 68%); }
 .close > *{ position:relative; z-index:1; }
 .close h2{ color:#fff; }
 .close p{ margin:16px auto 28px; font-size:17px; line-height:1.6; color:rgba(255,255,255,.9); max-width:46ch; }
@@ -305,7 +342,10 @@ footer{ padding:0 0 56px; }
 <nav id="nav">
   <div class="wrap nav-in">
     <a class="brand" href="#top">
-      <svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="#6472F0" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3 3 7.5l9 4.5 9-4.5zM3 12.5 12 17l9-4.5M3 17.2 12 21.7l9-4.5"/></svg>
+      <!-- The brand mark, inlined from brand/svg/mark-small-on-dark.svg. Under
+           32px the kit calls for the heavier 12.5 strokes; the 8.5 weight
+           smudges at this size. Top layer violet and never filled. -->
+      <svg width="28" height="28" viewBox="0 0 100 100" fill="none" stroke-linecap="round" stroke-linejoin="round" stroke-width="12.5" aria-hidden="true"><path d="M50 14 L85 34 L50 54 L15 34 Z" stroke="#7C5CFF"/><path d="M15 51 L50 71 L85 51" stroke="#FFFFFF"/><path d="M15 68 L50 88 L85 68" stroke="#FFFFFF"/></svg>
       Study Feed
     </a>
     <div class="nav-links">
@@ -329,7 +369,7 @@ footer{ padding:0 0 56px; }
         <p class="lede rise d3">Externals aren't multi-choice. They're six-mark questions you have to <em>write</em>. Study Feed marks what you actually wrote against the real Achieved / Merit / Excellence criteria — then shows you the sentence that would have moved you up a grade.</p>
         <div class="cta-row rise d4">
           <a class="btn btn-primary btn-lg" href="/app/">Start writing — free →</a>
-          <span class="cta-note">No account. No card. Works on the phone in your hand.</span>
+          <span class="cta-note">No account. No card. Opens in your browser.</span>
         </div>
       </div>
 
@@ -338,7 +378,7 @@ footer{ padding:0 0 56px; }
           <span style="background:#D93025">PDF</span>
           <span style="background:#D04423">PPT</span>
           <span style="background:#2B579A">DOC</span>
-          <span style="background:#6472F0">IMG</span>
+          <span style="background:#7C5CFF">IMG</span>
         </div>
         <div class="demo">
           <div class="demo-head"><i class="dot"></i><i class="dot"></i><i class="dot"></i></div>
@@ -358,7 +398,7 @@ footer{ padding:0 0 56px; }
                 <svg class="tick" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"><path d="M4.8 12.5 9.7 17.4 19.2 6.9"/></svg>
               </div>
               <div class="filerow">
-                <div class="ft" style="background:#6472F0">IMG</div>
+                <div class="ft" style="background:#7C5CFF">IMG</div>
                 <div><div class="fname">Photo of the whiteboard</div><div class="fmeta">diagrams read too</div></div>
                 <svg class="tick" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"><path d="M4.8 12.5 9.7 17.4 19.2 6.9"/></svg>
               </div>
@@ -373,9 +413,9 @@ footer{ padding:0 0 56px; }
             <div class="scene" data-scene="1">
               <div class="gen">
                 <div class="rings">
-                  <div class="ring" style="background:conic-gradient(from 0deg,transparent 0deg,#6472F0 90deg,transparent 180deg);-webkit-mask:radial-gradient(circle at 50% 50%,transparent 35%,#000 37%,#000 42%,transparent 44%);mask:radial-gradient(circle at 50% 50%,transparent 35%,#000 37%,#000 42%,transparent 44%);animation:spin 3s linear infinite"></div>
-                  <div class="ring" style="background:conic-gradient(from 0deg,transparent 0deg,#4E5AD6 120deg,rgba(78,90,214,.4) 240deg,transparent 360deg);-webkit-mask:radial-gradient(circle at 50% 50%,transparent 46%,#000 48%,#000 53%,transparent 55%);mask:radial-gradient(circle at 50% 50%,transparent 46%,#000 48%,#000 53%,transparent 55%);animation:spin 2.5s cubic-bezier(.4,0,.6,1) infinite"></div>
-                  <div class="ring" style="background:conic-gradient(from 180deg,transparent 0deg,#37B98C 50deg,transparent 100deg);-webkit-mask:radial-gradient(circle at 50% 50%,transparent 57%,#000 59%,#000 63%,transparent 65%);mask:radial-gradient(circle at 50% 50%,transparent 57%,#000 59%,#000 63%,transparent 65%);animation:spinr 4s linear infinite"></div>
+                  <div class="ring" style="background:conic-gradient(from 0deg,transparent 0deg,#7C5CFF 90deg,transparent 180deg);-webkit-mask:radial-gradient(circle at 50% 50%,transparent 35%,#000 37%,#000 42%,transparent 44%);mask:radial-gradient(circle at 50% 50%,transparent 35%,#000 37%,#000 42%,transparent 44%);animation:spin 3s linear infinite"></div>
+                  <div class="ring" style="background:conic-gradient(from 0deg,transparent 0deg,#9B85FF 120deg,rgba(78,90,214,.4) 240deg,transparent 360deg);-webkit-mask:radial-gradient(circle at 50% 50%,transparent 46%,#000 48%,#000 53%,transparent 55%);mask:radial-gradient(circle at 50% 50%,transparent 46%,#000 48%,#000 53%,transparent 55%);animation:spin 2.5s cubic-bezier(.4,0,.6,1) infinite"></div>
+                  <div class="ring" style="background:conic-gradient(from 180deg,transparent 0deg,#46C79A 50deg,transparent 100deg);-webkit-mask:radial-gradient(circle at 50% 50%,transparent 57%,#000 59%,#000 63%,transparent 65%);mask:radial-gradient(circle at 50% 50%,transparent 57%,#000 59%,#000 63%,transparent 65%);animation:spinr 4s linear infinite"></div>
                 </div>
                 <div style="text-align:center">
                   <div style="font-size:15.5px;font-weight:700;letter-spacing:-.02em">Writing exam questions…</div>
@@ -468,7 +508,7 @@ footer{ padding:0 0 56px; }
           <div class="gap-arrow">
             <svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14M13 6l6 6-6 6"/></svg>
           </div>
-          <div class="gap-card" style="border-color:rgba(55,185,140,.5);background:rgba(55,185,140,.05)">
+          <div class="gap-card" style="border-color:rgba(70,199,154,.5);background:rgba(70,199,154,.05)">
             <div class="g" style="color:var(--green-ink)">The same point — Merit</div>
             <p>“The rate increases because the particles gain <b>kinetic energy</b>, so a greater <b>proportion</b> of collisions exceed the <b>activation energy</b>.”</p>
           </div>
@@ -561,7 +601,7 @@ footer{ padding:0 0 56px; }
         </div>
         <div class="bar-lbl"><span>M</span><span>T</span><span>W</span><span>T</span><span>F</span><span>S</span><span>S</span></div>
         <div style="margin-top:16px;font-size:13px;line-height:1.55;color:var(--muted)">
-          Set your exam date and the home screen counts down to it.
+          Set your exam date and your dashboard counts down to it.
         </div>
       </div>
     </div>
@@ -602,7 +642,7 @@ footer{ padding:0 0 56px; }
   <div class="wrap">
     <div class="close reveal">
       <h2>Your notes are already written.</h2>
-      <p>Put them somewhere that will actually make you write. Free, no account, and it runs on the phone that's already in your hand.</p>
+      <p>Put them somewhere that will actually make you write. Free, no account, nothing to install.</p>
       <a class="btn btn-white btn-lg" href="/app/">Start writing →</a>
     </div>
   </div>
@@ -611,7 +651,7 @@ footer{ padding:0 0 56px; }
 <footer>
   <div class="wrap foot">
     <span class="brand">
-      <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="#6472F0" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3 3 7.5l9 4.5 9-4.5zM3 12.5 12 17l9-4.5M3 17.2 12 21.7l9-4.5"/></svg>
+      <svg width="24" height="24" viewBox="0 0 100 100" fill="none" stroke-linecap="round" stroke-linejoin="round" stroke-width="12.5" aria-hidden="true"><path d="M50 14 L85 34 L50 54 L15 34 Z" stroke="#7C5CFF"/><path d="M15 51 L50 71 L85 51" stroke="#FFFFFF"/><path d="M15 68 L50 88 L85 68" stroke="#FFFFFF"/></svg>
       Study Feed
     </span>
     <nav>

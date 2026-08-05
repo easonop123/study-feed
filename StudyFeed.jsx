@@ -43,10 +43,14 @@ const T = {
    deliberate rather than broken. */
 const SANS = 'var(--sf-font)';
 const SYSTEM_STACK = 'system-ui, -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif';
+/* Inter is the brand typeface (see CLAUDE.md), so it leads and is the default.
+   The other two stay: the typeface is a reading preference as much as an
+   identity, and someone who finds Inter tight at 13px should be able to change
+   it. Brand surfaces — the wordmark, the supplied SVGs — are Inter regardless. */
 const FONTS = [
-  { v: 'jakarta', label: 'Rounded', stack: `"Plus Jakarta Sans", ${SYSTEM_STACK}`, note: 'Friendly and geometric — the default' },
-  { v: 'inter',   label: 'Neutral', stack: `"Inter", ${SYSTEM_STACK}`, note: 'Plainer, tuned for small sizes' },
-  { v: 'system',  label: 'System',  stack: SYSTEM_STACK, note: 'Whatever your phone or laptop uses' },
+  { v: 'inter',   label: 'Inter',   stack: `"Inter", ${SYSTEM_STACK}`, note: 'The Study Feed typeface — the default' },
+  { v: 'jakarta', label: 'Rounded', stack: `"Plus Jakarta Sans", ${SYSTEM_STACK}`, note: 'Friendlier and more geometric' },
+  { v: 'system',  label: 'System',  stack: SYSTEM_STACK, note: 'Whatever your device already uses' },
 ];
 
 /* translucent colour that works for hex (#rrggbb) AND CSS vars / any colour
@@ -75,43 +79,43 @@ const HUES = ['#6472F0','#E1A63E','#37B98C','#9B7EDE','#3BA9C4','#E285B4','#8B84
    data-theme="light" forces light even on a dark OS. */
 const THEME_CSS = `
   :root{
-    --sf-font: "Plus Jakarta Sans", ${SYSTEM_STACK};
+    --sf-font: "Inter", ${SYSTEM_STACK};
   }
-  :root[data-font="inter"]{  --sf-font: "Inter", ${SYSTEM_STACK}; }
+  :root[data-font="jakarta"]{ --sf-font: "Plus Jakarta Sans", ${SYSTEM_STACK}; }
   :root[data-font="system"]{ --sf-font: ${SYSTEM_STACK}; }
   :root{
     --sf-bg:#F6F8FB; --sf-surface:#FFFFFF; --sf-well:#F1F4F9; --sf-border:#EBEEF3;
     --sf-ink:#2B2F3A; --sf-muted:#6E7482; --sf-faint:#A6ABB7;
-    --sf-accent:#6472F0; --sf-accent-ink:#4E5AD6;
+    --sf-accent:#7C5CFF; --sf-accent-ink:#5B3FD9;
     --sf-green:#37B98C; --sf-amber:#E1A63E; --sf-red:#E06B62;
     --sf-nav:rgba(255,255,255,.9); --sf-track:#D9DEE8;
     --sf-sh-card:0 1px 2px rgba(30,34,50,.04), 0 12px 28px -18px rgba(30,34,50,.22);
     --sf-sh-raised:0 1px 2px rgba(30,34,50,.05);
     --sf-sh-pop:0 2px 10px rgba(30,34,50,.08);
-    --sf-sh-accent:0 6px 18px -6px rgba(100,114,240,.40);
+    --sf-sh-accent:0 6px 18px -6px rgba(124,92,255,.40);
   }
   :root[data-theme="dark"]{
-    --sf-bg:#14161C; --sf-surface:#1B1E26; --sf-well:#222631; --sf-border:#262A34;
-    --sf-ink:#E7EAF1; --sf-muted:#9CA2B0; --sf-faint:#636A78;
-    --sf-accent:#818DFF; --sf-accent-ink:#9AA4FF;
+    --sf-bg:#141024; --sf-surface:#1C1836; --sf-well:#241F42; --sf-border:#2E2752;
+    --sf-ink:#FFFFFF; --sf-muted:#B0A8C8; --sf-faint:#8F88A8;
+    --sf-accent:#7C5CFF; --sf-accent-ink:#9B85FF;
     --sf-green:#46C79A; --sf-amber:#EAB454; --sf-red:#EA7B72;
-    --sf-nav:rgba(27,30,38,.9); --sf-track:#3A4150;
+    --sf-nav:rgba(20,16,36,.9); --sf-track:#3A3160;
     --sf-sh-card:0 1px 2px rgba(0,0,0,.25), 0 14px 30px -20px rgba(0,0,0,.6);
     --sf-sh-raised:0 1px 2px rgba(0,0,0,.3);
     --sf-sh-pop:0 2px 10px rgba(0,0,0,.4);
-    --sf-sh-accent:0 6px 18px -6px rgba(90,105,240,.5);
+    --sf-sh-accent:0 6px 18px -6px rgba(124,92,255,.55);
   }
   @media (prefers-color-scheme: dark){
     :root:not([data-theme="light"]){
-      --sf-bg:#14161C; --sf-surface:#1B1E26; --sf-well:#222631; --sf-border:#262A34;
-      --sf-ink:#E7EAF1; --sf-muted:#9CA2B0; --sf-faint:#636A78;
-      --sf-accent:#818DFF; --sf-accent-ink:#9AA4FF;
+      --sf-bg:#141024; --sf-surface:#1C1836; --sf-well:#241F42; --sf-border:#2E2752;
+      --sf-ink:#FFFFFF; --sf-muted:#B0A8C8; --sf-faint:#8F88A8;
+      --sf-accent:#7C5CFF; --sf-accent-ink:#9B85FF;
       --sf-green:#46C79A; --sf-amber:#EAB454; --sf-red:#EA7B72;
-      --sf-nav:rgba(27,30,38,.9); --sf-track:#3A4150;
+      --sf-nav:rgba(20,16,36,.9); --sf-track:#3A3160;
       --sf-sh-card:0 1px 2px rgba(0,0,0,.25), 0 14px 30px -20px rgba(0,0,0,.6);
       --sf-sh-raised:0 1px 2px rgba(0,0,0,.3);
       --sf-sh-pop:0 2px 10px rgba(0,0,0,.4);
-      --sf-sh-accent:0 6px 18px -6px rgba(90,105,240,.5);
+      --sf-sh-accent:0 6px 18px -6px rgba(124,92,255,.55);
     }
   }
   /* Tailwind's preflight sets its own stack on body; ours has to win, so any
@@ -181,7 +185,7 @@ async function save(key, value){
 
 /* longMix = what % of your cards should be long (extended-response) answers.
    Drives both what gets generated and how the feed is blended. */
-const DEFAULT_SETTINGS = { interleave: true, newPerDay: 12, capNew: false, longMix: 30, theme: 'system', name: '', examDate: '', lastSeenVersion: '', onboarded: false, dismissedTips: {}, sound: true, font: 'jakarta' };
+const DEFAULT_SETTINGS = { interleave: true, newPerDay: 12, capNew: false, longMix: 30, theme: 'system', name: '', examDate: '', lastSeenVersion: '', onboarded: false, dismissedTips: {}, sound: true, font: 'inter' };
 
 /* ---- sound ---------------------------------------------------------------
    Synthesised, not sampled. Three reasons: a card grade fires 30+ times in a
@@ -282,8 +286,14 @@ const buzz = (ms) => { try { if (navigator.vibrate) navigator.vibrate(ms); } cat
    APP_VERSION is the id we compare against settings.lastSeenVersion to decide
    whether to pop the "What's new" note. Bump it whenever PATCH_NOTES gains an
    entry. Newest first; the first element is the current release. */
-const APP_VERSION = '1.5.0';
+const APP_VERSION = '1.6.0';
 const PATCH_NOTES = [
+  { v: '1.6.0', date: '2026-08-05', title: 'A proper look', items: [
+    'Study Feed has a real identity now — a stacked-card mark, a near-black and violet palette, and Inter throughout.',
+    'The app finally has an icon. Add it to your home screen or pin the tab and you get the mark, not a blurry screenshot of the page.',
+    'Sharing a link now shows a proper preview card instead of a blank grey box.',
+    'Dark mode is the brand ground, so the app and the website look like the same product.',
+  ] },
   { v: '1.5.0', date: '2026-08-05', title: 'Start here', items: [
     'New here? A short tour now runs on your first visit — pointers on the actual screen, walking you through making your first deck.',
     'It hands you a real long-answer card to try, hints and marking included, without saving anything.',
@@ -323,7 +333,7 @@ const PATCH_NOTES = [
   ] },
 ];
 const dismissedTip = (settings, id) => !!(settings && settings.dismissedTips && settings.dismissedTips[id]);
-const fontOf = (s) => (s && s.font) ? s.font : 'jakarta';
+const fontOf = (s) => (s && s.font) ? s.font : 'inter';
 const longMixOf = (s) => (s && s.longMix != null) ? s.longMix : 30;
 const isLongCard = (c) => c.type === 'extended';
 
@@ -1276,7 +1286,12 @@ function Title({ children, style }){
 function Sub({ children, style }){
   return <div style={{ fontFamily: SANS, fontSize: 13.5, color: T.muted, lineHeight: 1.45, ...style }}>{children}</div>;
 }
-function Chip({ children, colour = T.accent, solid, style }){
+/* A chip is 12px, and 12px is below the size the brand accent clears contrast
+   at (4.28:1 on the ground — it is specified for the mark and for bold text
+   24px and up). Solid chips are white on the accent and unaffected; an outline
+   chip paints the accent as TEXT, so it defaults to the tint instead. Callers
+   passing a semantic colour — green, red, amber — are untouched. */
+function Chip({ children, colour = T.accentInk, solid, style }){
   return (
     <span style={{ display: 'inline-block', fontFamily: SANS, fontSize: 12, fontWeight: 600,
       color: solid ? '#fff' : colour, background: solid ? colour : rgba(colour, 0.12),
@@ -1560,7 +1575,7 @@ function MixSlider({ value, onChange, compact }){
       <div className="flex items-center justify-between" style={{ marginBottom: 9 }}>
         <Chip colour={T.green}>{100 - pct}% quick</Chip>
         <div style={{ fontFamily: SANS, fontSize: 12.5, fontWeight: 600, color: T.muted }}>{labelFor(pct)}</div>
-        <Chip colour={T.accent}>{pct}% long</Chip>
+        <Chip colour={T.accentInk}>{pct}% long</Chip>
       </div>
       <input className="sf-range" type="range" min={0} max={100} step={5} value={pct}
         onChange={e => onChange(Number(e.target.value))}
@@ -1591,8 +1606,24 @@ function Tile({ colour, glyph, size = 40 }){
   );
 }
 
+/* The brand mark — an isometric stack, violet top layer never filled, lower
+   two in the ink colour so it works on both themes. Geometry is
+   brand/svg/mark-small-on-dark.svg: everywhere it appears in the app is 32px
+   or under, which is the weight the kit specifies for that range. The 8.5
+   stroke smudges at this size, which is the whole reason the small cut exists. */
+function Mark({ size = 26 }){
+  return (
+    <svg width={size} height={size} viewBox="0 0 100 100" fill="none" aria-hidden="true"
+      strokeLinecap="round" strokeLinejoin="round" strokeWidth="12.5" style={{ flexShrink: 0 }}>
+      <path d="M50 14 L85 34 L50 54 L15 34 Z" stroke={T.accent} />
+      <path d="M15 51 L50 71 L85 51" stroke={T.ink} />
+      <path d="M15 68 L50 88 L85 68" stroke={T.ink} />
+    </svg>
+  );
+}
+
 function Icon({ name, active }){
-  const c = active ? T.accent : T.faint;
+  const c = active ? T.accentInk : T.faint;
   const common = { width: 24, height: 24, viewBox: '0 0 24 24', fill: 'none',
     stroke: c, strokeWidth: active ? 2.2 : 1.9, strokeLinecap: 'round', strokeLinejoin: 'round' };
   if (name === 'home') return <svg {...common}><path d="M4 11l8-6 8 6" /><path d="M6 10v9h12v-9" /></svg>;
@@ -1701,7 +1732,7 @@ function GradeRow({ grade, previews }){
     [Q.AGAIN, 'Again', 'got it wrong', T.red],
     [Q.HARD,  'Hard',  'only just',    T.amber],
     [Q.GOOD,  'Good',  'knew it',      T.green],
-    [Q.EASY,  'Easy',  'instantly',    T.accent],
+    [Q.EASY,  'Easy',  'instantly',    T.accentInk],
   ];
   return (
     <div>
@@ -1791,7 +1822,7 @@ function ExplainMore({ card, deck, compact }){
       <div style={{ marginTop: compact ? 10 : 14 }}>
         <button className="sf-tap" onClick={() => run('normal')} disabled={!!busy}
           style={{ background: 'none', border: 'none', cursor: busy ? 'default' : 'pointer', padding: '2px 2px',
-            fontFamily: SANS, fontSize: 13.5, fontWeight: 600, color: busy ? T.faint : T.accent }}>
+            fontFamily: SANS, fontSize: 13.5, fontWeight: 600, color: busy ? T.faint : T.accentInk }}>
           {busy ? 'Working it out…' : <span className="flex items-center gap-2"><Ico name="search" size={15} />Explain this further</span>}
         </button>
         {err && <Sub style={{ marginTop: 6, color: T.red }}>{err}</Sub>}
@@ -1805,13 +1836,13 @@ function ExplainMore({ card, deck, compact }){
   return (
     <div style={{ ...PANEL, marginTop: 14, background: rgba(T.accent, 0.07),
       animation: 'sf-reveal 260ms cubic-bezier(.2,.8,.3,1)' }}>
-      <Chip colour={T.accent} style={{ marginBottom: 9 }}>{tierLabel}</Chip>
+      <Chip colour={T.accentInk} style={{ marginBottom: 9 }}>{tierLabel}</Chip>
       {d.plain && <RichText text={d.plain} />}
       {steps.length > 0 && (
         <div className="flex flex-col gap-2" style={{ marginTop: 4 }}>
           {steps.map((s, i) => (
             <div key={i} className="flex gap-2" style={{ alignItems: 'flex-start' }}>
-              <span style={{ fontFamily: SANS, fontSize: 12, fontWeight: 800, color: T.accent,
+              <span style={{ fontFamily: SANS, fontSize: 12, fontWeight: 800, color: T.accentInk,
                 lineHeight: '22px', flexShrink: 0 }}>{i + 1}</span>
               <span style={{ fontFamily: SANS, fontSize: 14.5, lineHeight: 1.5, color: T.ink }}>{String(s)}</span>
             </div>
@@ -2088,7 +2119,7 @@ function ExtendedFace({ card, phase, deck, onReveal, demo }){
             <button className="sf-tap" onClick={doHints} disabled={hintBusy}
               style={{ background: 'none', border: 'none', cursor: hintBusy ? 'default' : 'pointer',
                 padding: '12px 2px 0', fontFamily: SANS, fontSize: 13.5, fontWeight: 600,
-                color: hintBusy ? T.faint : T.accent }}>
+                color: hintBusy ? T.faint : T.accentInk }}>
               {hintBusy ? 'Thinking of some pointers…' : <span className="flex items-center gap-2"><Ico name="bulb" size={15} />Stuck? Give me some writing points</span>}
             </button>
           ) : (
@@ -2118,7 +2149,7 @@ function ExtendedFace({ card, phase, deck, onReveal, demo }){
               ) : (
                 <div style={{ marginTop: 12, paddingTop: 12, borderTop: `1px dashed ${rgba(T.amber, 0.4)}` }}>
                   <div className="flex items-center justify-between" style={{ marginBottom: 8 }}>
-                    <Chip colour={T.accent}>Sentence starters</Chip>
+                    <Chip colour={T.accentInk}>Sentence starters</Chip>
                     <Sub style={{ fontSize: 11.5 }}>Fill each blank yourself</Sub>
                   </div>
                   <div className="flex flex-col gap-2">
@@ -2146,11 +2177,11 @@ function ExtendedFace({ card, phase, deck, onReveal, demo }){
       {phase === 'reveal' && (
         <div style={REVEAL}>
           <Rung tier="Achieved" text={card.achieved} colour={T.muted} />
-          <Rung tier="Merit" text={card.merit} colour={T.accent} />
+          <Rung tier="Merit" text={card.merit} colour={T.accentInk} />
           <Rung tier="Excellence" text={card.excellence} colour={T.green} />
           {card.skeleton && (
             <div style={{ ...PANEL, marginTop: 14 }}>
-              <Chip colour={T.accent} style={{ marginBottom: 6 }}>Structure that earns it</Chip>
+              <Chip colour={T.accentInk} style={{ marginBottom: 6 }}>Structure that earns it</Chip>
               <div style={{ fontFamily: SANS, fontSize: 14.5, color: T.ink, fontWeight: 500, lineHeight: 1.5 }}>{card.skeleton}</div>
             </div>
           )}
@@ -2374,7 +2405,7 @@ function DeckBar({ decks, progress, focus, setFocus, onQuiz }){
 function ComboChip({ n }){
   if (n < 2) return null;
   const tier = n >= 10 ? 2 : n >= 5 ? 1 : 0;
-  const c = tier === 2 ? T.green : tier === 1 ? T.amber : T.accent;
+  const c = tier === 2 ? T.green : tier === 1 ? T.amber : T.accentInk;
   const label = tier === 2 ? `${n} in a row — unreal` : `${n} in a row`;
   return (
     <span key={n} style={{ display: 'inline-block', fontFamily: SANS,
@@ -2940,7 +2971,7 @@ function DraftReview({ drafts, setDrafts, meta, setMeta, onSave, onCancel, short
       </div>
       {shortfall && (
         <div style={{ background: rgba(T.accent, 0.11), borderRadius: R.well, padding: '11px 14px', marginBottom: 14 }}>
-          <Sub style={{ color: T.accent, fontWeight: 600, fontSize: 13, display: 'flex', gap: 8, alignItems: 'flex-start' }}>
+          <Sub style={{ color: T.accentInk, fontWeight: 600, fontSize: 13, display: 'flex', gap: 8, alignItems: 'flex-start' }}>
             <InlineIco name="warn" size={14} style={{ marginTop: 2 }} />
             <span>{shortfall}</span>
           </Sub>
@@ -3400,7 +3431,7 @@ function TransferCard({ library, progress, onImport }){
         {library.decks.length > 1 && (
           <button className="sf-tap" onClick={() => picking ? setPicking(false) : startPicking()}
             style={{ background: 'none', border: 'none', cursor: 'pointer', padding: 0,
-              fontFamily: SANS, fontSize: 12.5, fontWeight: 700, color: T.accent }}>
+              fontFamily: SANS, fontSize: 12.5, fontWeight: 700, color: T.accentInk }}>
             {picking ? 'Export all' : 'Choose decks'}
           </button>
         )}
@@ -3619,7 +3650,9 @@ function Home({ library, progress, stats, settings, due, onStart, onCreate, onDe
       {totalCards === 0 ? (
         <Card style={{ padding: '32px 24px 26px' }}>
           <div style={{ textAlign: 'center' }}>
-            <div style={{ display: 'flex', justifyContent: 'center', marginBottom: 12, color: T.accent }}><Ico name="sparkle" size={34} weight={1.5} /></div>
+            {/* the mark, not a generic sparkle — this card is the first thing a
+                new student sees and it is where the app introduces itself */}
+            <div style={{ display: 'flex', justifyContent: 'center', marginBottom: 12 }}><Mark size={40} /></div>
             <Title>Welcome to Study Feed</Title>
             <Sub style={{ marginTop: 6, marginBottom: 20 }}>Turn your notes into cards, then review a few whenever you've got a minute. Here's the gist:</Sub>
           </div>
@@ -4198,7 +4231,7 @@ const TOUR_STEPS = [
           which is the bit flashcards have never helped with.
         </Sub>
         <div style={{ ...PANEL, marginTop: 14, display: 'flex', gap: 10, alignItems: 'flex-start' }}>
-          <span style={{ color: T.accent, flexShrink: 0, marginTop: 1 }}><Ico name="sparkle" size={16} /></span>
+          <span style={{ color: T.accentInk, flexShrink: 0, marginTop: 1 }}><Ico name="sparkle" size={16} /></span>
           <Sub style={{ fontSize: 13.5, lineHeight: 1.55 }}>
             It ships empty. Everything in here will be yours.
           </Sub>
@@ -4243,7 +4276,7 @@ const TOUR_STEPS = [
             back, which is exactly why it went unnoticed. */}
         <div style={{ ...PANEL, marginBottom: 14 }}>
           <div className="flex items-center gap-2" style={{ marginBottom: 10 }}>
-            <span style={{ color: T.accent, display: 'flex' }}><Ico name="bulb" size={16} /></span>
+            <span style={{ color: T.accentInk, display: 'flex' }}><Ico name="bulb" size={16} /></span>
             <span style={{ fontFamily: SANS, fontSize: 13.5, fontWeight: 700, color: T.ink }}>Press them — all three work</span>
           </div>
           <div className="flex flex-col gap-2">
@@ -4253,7 +4286,7 @@ const TOUR_STEPS = [
               ['How do I get to Excellence?', 'shows up under the mark — it rewrites your own sentences'],
             ].map(([label, note], n) => (
               <div key={label} className="flex gap-2" style={{ alignItems: 'flex-start' }}>
-                <span style={{ fontFamily: SANS, fontSize: 12, fontWeight: 800, color: T.accent,
+                <span style={{ fontFamily: SANS, fontSize: 12, fontWeight: 800, color: T.accentInk,
                   lineHeight: '20px', flexShrink: 0 }}>{n + 1}</span>
                 <Sub style={{ fontSize: 13.5, lineHeight: 1.5 }}>
                   <b style={{ color: T.ink }}>{label}</b> — {note}
@@ -4647,7 +4680,7 @@ function AskPanel({ thread, setThread, onClose }){
       <div className="flex items-center justify-between"
         style={{ padding: '12px 14px', borderBottom: `1px solid ${T.border}`, flexShrink: 0 }}>
         <div className="flex items-center gap-2" style={{ minWidth: 0 }}>
-          <span style={{ color: T.accent, display: 'flex' }}><AskIcon size={20} /></span>
+          <span style={{ color: T.accentInk, display: 'flex' }}><AskIcon size={20} /></span>
           <div style={{ minWidth: 0 }}>
             <div style={{ fontFamily: SANS, fontSize: 15, fontWeight: 700, color: T.ink }}>Ask anything</div>
             {hasCard && <Sub style={{ fontSize: 11.5 }}>It can see the card you're on</Sub>}
@@ -4810,6 +4843,22 @@ export default function App(){
       setProgress(prog || {});
       setStats({ ...DEFAULT_STATS, ...st });
       const merged = { ...DEFAULT_SETTINGS, ...se };
+
+      /* Inter is the brand typeface as of 1.6.0. Everyone who has ever opened
+         the app has font:'jakarta' written into their settings — not because
+         they chose it, but because it was the default and defaults get merged
+         in and saved. Left alone, the rebrand would visibly skip every existing
+         install. Migrating on the version stamp moves those people once; anyone
+         who picks Jakarta after this release has a current lastSeenVersion, so
+         the test is already false and their choice stands. */
+      if (merged.font === 'jakarta' && merged.lastSeenVersion && merged.lastSeenVersion !== APP_VERSION){
+        merged.font = 'inter';
+        /* Persist it here rather than leaving it to whichever branch below
+           happens to save. Without this the migration is re-derived on every
+           load until the changelog is dismissed, and the stored settings
+           disagree with what is on screen the whole time. */
+        save('settings:main', merged);
+      }
 
       /* Who is actually new? `onboarded` defaults to false, so it alone would
          fire the tutorial at every existing user the first time they load this
@@ -5166,8 +5215,10 @@ function SideNav({ tab, setTab, due, pending }){
     <div className="sf-navside" style={{ position: 'fixed', top: 0, left: 0, bottom: 0, width: 232,
       flexDirection: 'column', padding: '26px 16px', background: T.surface,
       borderRight: `1px solid ${T.border}`, zIndex: 5 }}>
-      <div style={{ fontFamily: SANS, fontSize: 21, fontWeight: 800, color: T.ink,
-        letterSpacing: '-0.03em', padding: '0 10px', marginBottom: 22 }}>Study Feed</div>
+      <div className="flex items-center gap-2" style={{ fontFamily: SANS, fontSize: 21, fontWeight: 800,
+        color: T.ink, letterSpacing: '-0.03em', padding: '0 10px', marginBottom: 22 }}>
+        <Mark size={24} />Study Feed
+      </div>
       <div className="flex flex-col gap-1">
         {NAV_ITEMS.map(([k, label]) => {
           const active = tab === k;
@@ -5179,7 +5230,7 @@ function SideNav({ tab, setTab, due, pending }){
                 transition: 'background 160ms' }}>
               <Icon name={k} active={active} />
               <span style={{ fontFamily: SANS, fontSize: 15, fontWeight: active ? 700 : 500,
-                color: active ? T.accent : T.muted }}>{label}</span>
+                color: active ? T.accentInk : T.muted }}>{label}</span>
               <NavBadge k={k} due={due} pending={pending} />
             </button>
           );
@@ -5192,8 +5243,9 @@ function SideNav({ tab, setTab, due, pending }){
 function Masthead({ due, streak, sound, onSound }){
   return (
     <div className="flex items-center justify-between" style={{ padding: '10px 2px 18px' }}>
-      <div style={{ fontFamily: SANS, fontSize: 24, fontWeight: 800, color: T.ink, letterSpacing: '-0.03em' }}>
-        Study Feed
+      <div className="flex items-center gap-2" style={{ fontFamily: SANS, fontSize: 24, fontWeight: 800,
+        color: T.ink, letterSpacing: '-0.03em' }}>
+        <Mark size={26} />Study Feed
       </div>
       <div className="flex items-center gap-2">
         {streak > 0 && <Chip colour={T.amber}><span className="flex items-center gap-1"><Ico name="flame" size={12} weight={2} fill />{streak}</span></Chip>}
@@ -5228,7 +5280,7 @@ function Nav({ tab, setTab, due, pending }){
                 display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 3, position: 'relative' }}>
               <Icon name={k} active={active} />
               <span style={{ fontFamily: SANS, fontSize: 10.5, fontWeight: active ? 700 : 500,
-                color: active ? T.accent : T.faint, transition: 'color 160ms' }}>{label}</span>
+                color: active ? T.accentInk : T.faint, transition: 'color 160ms' }}>{label}</span>
               {k === 'feed' && due > 0 && (
                 <span style={{ position: 'absolute', top: 2, right: '50%', marginRight: -16, width: 8, height: 8,
                   borderRadius: 8, background: T.red, border: `1.5px solid ${T.surface}` }} />

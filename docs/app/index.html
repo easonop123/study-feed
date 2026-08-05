@@ -10,9 +10,14 @@
   <meta name="apple-mobile-web-app-capable" content="yes" />
   <meta name="apple-mobile-web-app-status-bar-style" content="default" />
   <meta name="apple-mobile-web-app-title" content="Study Feed" />
-  <meta name="theme-color" content="#F6F8FB" />
-  <link rel="manifest" href="../manifest.webmanifest" />
-  <link rel="apple-touch-icon" href="../icon.png" />
+  <meta name="theme-color" content="#141024" />
+  <link rel="manifest" href="/manifest.webmanifest" />
+  <link rel="icon" href="/favicon.ico" sizes="any" />
+  <link rel="icon" href="/favicon-32.png" type="image/png" />
+  <!-- The home-screen icon. It pointed at ../icon.png, which was never in the
+       repo, so iOS fell back to a screenshot of the page — a blurry tile under
+       an app that claims to install like a real one. -->
+  <link rel="apple-touch-icon" href="/apple-touch-icon.png" />
 
   <!-- Typefaces. StudyFeed.jsx picks between them via --sf-font (data-font on
        <html>); system-ui is the fallback, so the Artifact build — which can't
@@ -25,7 +30,11 @@
   <!-- the app uses Tailwind core utilities for layout only -->
   <script src="https://cdn.tailwindcss.com"></script>
   <style>
+    /* Pre-hydration only — StudyFeed.jsx paints the real theme a moment later.
+       It follows the OS so a dark-mode user doesn't get a white flash first,
+       and the dark value is the brand ground. */
     html, body { margin: 0; background: #F6F8FB; -webkit-font-smoothing: antialiased; }
+    @media (prefers-color-scheme: dark) { html, body { background: #141024; } }
   </style>
 </head>
 <body>
