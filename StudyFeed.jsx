@@ -290,8 +290,8 @@ const APP_VERSION = '1.7.0';
 const PATCH_NOTES = [
   { v: '1.7.0', date: '2026-08-06', title: 'Something to show for it', items: [
     'Clear everything due and you can share the session — cards done, subjects, streak — as a card built for your story.',
-    'Earn an Excellence on a written answer and you can share that too.',
-    'Your question and your answer never go on the card. Just the result and the subject.',
+    'Earn an Excellence on a written answer and you can share that too, with a line of what you wrote and why it scored.',
+    'The question itself never goes on the card — that came from your teacher\'s material, not yours.',
     'You see the card before it goes anywhere, and you can always just close it.',
   ] },
   { v: '1.6.0', date: '2026-08-05', title: 'A proper look', items: [
@@ -485,10 +485,21 @@ const exportName = (decks) => decks.length === 1
 const SHARE_W = 1080, SHARE_H = 1920;   // 9:16, the story format everywhere
 const SHARE_URL = 'study-feed.vercel.app';
 
-/* Brand literals, not theme tokens: the card is the same on a phone in dark
-   mode and a laptop in light, and it has to match the og:image. */
-const SC = { ground: '#141024', ink: '#FFFFFF', violet: '#7C5CFF', tint: '#9B85FF',
-  muted: '#B0A8C8', green: '#46C79A', line: '#2E2752' };
+/* Brand literals, not theme tokens: the card looks the same whether the app is
+   in light or dark mode and whoever sees it is not running our CSS.
+
+   Light, like the landing page and against the kit's near-black ground. A
+   near-black slab filling a story reads as a poster; this has to read as
+   something a 16-year-old wants on their story, and the reference for it
+   (Bevel) is light, contained and round. Same violet, same mark, same Inter. */
+const SC = {
+  bgTop: '#EDE6FF', bgBot: '#FBFAFF',
+  card: '#FFFFFF',
+  ink: '#1F1B2E', muted: '#5C5470', faint: '#8A83A0',
+  violet: '#7C5CFF', violetInk: '#5B3FD9', violetSoft: '#F2EEFF',
+  green: '#2FA37C', greenInk: '#12805C', greenSoft: '#E4F6EF',
+  line: '#EDEAF6',
+};
 
 const scFont = (weight, size) => weight + ' ' + size + 'px Inter, ' + SYSTEM_STACK;
 
@@ -502,19 +513,62 @@ function scRoundRect(ctx, x, y, w, h, r){
   ctx.closePath();
 }
 
-/* Outlined pill, drawn left to right, returns the x it finished at so a row of
-   them can be laid out without measuring twice. */
-function scChip(ctx, text, x, y, colour){
-  ctx.font = scFont(700, 34);
-  const padX = 30, h = 74;
+/* Soft-filled pill, drawn left to right, returning the x it finished at so a
+   row of them lays out without measuring twice. Filled rather than outlined —
+   outlines read as form fields, fills read as stickers. */
+function scChip(ctx, text, x, y, fill, colour, size){
+  const fs = size || 32;
+  ctx.font = scFont(700, fs);
+  const padX = 28, h = fs + 34;
   const w = ctx.measureText(text).width + padX * 2;
-  ctx.strokeStyle = colour; ctx.lineWidth = 2.5;
+  ctx.fillStyle = fill;
   scRoundRect(ctx, x, y, w, h, h / 2);
-  ctx.stroke();
+  ctx.fill();
   ctx.fillStyle = colour;
   ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
   ctx.fillText(text, x + w / 2, y + h / 2 + 1);
-  return x + w + 20;
+  return x + w + 16;
+}
+const scChipW = (ctx, text, size) => {
+  ctx.font = scFont(700, size || 32);
+  return ctx.measureText(text).width + 56;
+};
+
+/* One rounded panel with a soft drop shadow. The shadow is reset immediately —
+   canvas shadow state is global and leaks into every later fill if left set. */
+function scPanel(ctx, x, y, w, h, r, fill, shadow){
+  ctx.save();
+  if (shadow){
+    ctx.shadowColor = 'rgba(48,32,96,0.16)';
+    ctx.shadowBlur = 60; ctx.shadowOffsetY = 22;
+  }
+  ctx.fillStyle = fill;
+  scRoundRect(ctx, x, y, w, h, r);
+  ctx.fill();
+  ctx.restore();
+}
+
+/* A tick in a filled circle — the "this was credited" mark. */
+function scTick(ctx, cx, cy, r){
+  ctx.fillStyle = SC.greenSoft;
+  ctx.beginPath(); ctx.arc(cx, cy, r, 0, Math.PI * 2); ctx.fill();
+  ctx.strokeStyle = SC.greenInk;
+  ctx.lineWidth = r * 0.28; ctx.lineCap = 'round'; ctx.lineJoin = 'round';
+  ctx.beginPath();
+  ctx.moveTo(cx - r * 0.42, cy + r * 0.02);
+  ctx.lineTo(cx - r * 0.10, cy + r * 0.34);
+  ctx.lineTo(cx + r * 0.44, cy - r * 0.34);
+  ctx.stroke();
+}
+
+/* Keeps a quote to something a passer-by will actually read. Cuts on a word and
+   only adds the ellipsis when it really did cut. */
+function scClamp(text, max){
+  const s = String(text || '').replace(/\s+/g, ' ').trim();
+  if (s.length <= max) return s;
+  const cut = s.slice(0, max);
+  const sp = cut.lastIndexOf(' ');
+  return (sp > max * 0.6 ? cut.slice(0, sp) : cut).replace(/[,;:.\s]+$/, '') + '…';
 }
 
 /* Greedy wrap. Returns the lines rather than drawing, so the caller can centre
@@ -532,8 +586,9 @@ function scWrap(ctx, text, maxW){
   return lines;
 }
 
-/* The mark, from the same path data as brand/svg/mark-on-dark.svg. Path2D takes
-   SVG path syntax directly, so the geometry never has to be transcribed. */
+/* The mark, from the same path data as brand/svg/mark-on-light.svg. Path2D
+   takes SVG path syntax directly, so the geometry is never transcribed. On a
+   light ground the lower two layers are near-black — the kit's own rule. */
 function scMark(ctx, x, y, size){
   const s = size / 100;
   ctx.save();
@@ -547,108 +602,234 @@ function scMark(ctx, x, y, size){
   ctx.restore();
 }
 
-/* kind: 'grade' -> { grade, subject, topic, verb, marks }
-   kind: 'session' -> { done, streak, subjects: [] } */
+/* The backdrop the card floats on. Soft blobs rather than a flat wash — the
+   card has to read as sitting ON something, or "contained" just looks like a
+   smaller poster. Deterministic positions: a card that came out different
+   every time would be unsettling rather than delightful. */
+function scBackdrop(ctx){
+  const g = ctx.createLinearGradient(0, 0, 0, SHARE_H);
+  g.addColorStop(0, SC.bgTop); g.addColorStop(1, SC.bgBot);
+  ctx.fillStyle = g;
+  ctx.fillRect(0, 0, SHARE_W, SHARE_H);
+
+  const blob = (cx, cy, r, alpha) => {
+    const rg = ctx.createRadialGradient(cx, cy, 0, cx, cy, r);
+    rg.addColorStop(0, 'rgba(124,92,255,' + alpha + ')');
+    rg.addColorStop(1, 'rgba(124,92,255,0)');
+    ctx.fillStyle = rg;
+    ctx.fillRect(cx - r, cy - r, r * 2, r * 2);
+  };
+  blob(880, 240, 520, 0.34);
+  blob(140, 620, 460, 0.20);
+  blob(940, 1560, 500, 0.22);
+  blob(180, 1780, 420, 0.16);
+}
+
+/* Small floating circles flanking whatever the card is celebrating. This is the
+   one purely decorative thing on the card, so it must never land on top of
+   anything that carries meaning — the first version used fixed offsets and put
+   dots across the eyebrow and over the middle of a wide grade badge.
+
+   `halfW` is the half-width of the thing being flanked, so the dots start
+   outside it: they sit close to a narrow number and further out around a wide
+   badge, without either colliding or drifting off the card. */
+function scSparkles(ctx, cx, cy, halfW, limit){
+  const dots = [
+    [30, -34, 12, 0.50], [86, 28, 8, 0.34], [132, -8, 6, 0.26],
+  ];
+  for (const side of [-1, 1]){
+    for (const [gap, dy, r, a] of dots){
+      const x = cx + side * (halfW + gap);
+      if (Math.abs(x - cx) > limit) continue;      // never past the card edge
+      ctx.fillStyle = 'rgba(124,92,255,' + a + ')';
+      ctx.beginPath(); ctx.arc(x, cy + dy, r, 0, Math.PI * 2); ctx.fill();
+    }
+  }
+}
+
+/* kind: 'grade'   -> { grade, subject, topic, verb, marks, answer, credit }
+   kind: 'session' -> { done, streak, subjects: [] }
+
+   Laid out in two passes. The first measures every block so the card can be
+   sized to its contents and centred; the second draws. Without that the card
+   is a fixed box that either crops a long answer or leaves a hole under a
+   short one, and the whole point of a contained card is that it looks
+   deliberate at any content length. */
 function drawShareCard(ctx, kind, d){
-  const M = 96;                                   // side margin
-  ctx.fillStyle = SC.ground;
-  ctx.fillRect(0, 0, SHARE_W, SHARE_H);
+  scBackdrop(ctx);
 
-  /* A single violet bloom off the top-right. The brand forbids filling areas
-     with the accent; this is light on a dark ground, the same move the landing
-     page hero makes. */
-  const glow = ctx.createRadialGradient(SHARE_W * 0.82, 120, 0, SHARE_W * 0.82, 120, 900);
-  glow.addColorStop(0, 'rgba(124,92,255,0.30)');
-  glow.addColorStop(1, 'rgba(124,92,255,0)');
-  ctx.fillStyle = glow;
-  ctx.fillRect(0, 0, SHARE_W, SHARE_H);
-
-  /* ---- header: mark + wordmark ---- */
-  scMark(ctx, M, 150, 104);
-  ctx.fillStyle = SC.ink;
-  ctx.font = scFont(800, 52);
-  ctx.textAlign = 'left'; ctx.textBaseline = 'middle';
-  ctx.fillText('STUDY FEED', M + 140, 204);
-
-  /* ---- hero ----
-     Everything sits between y=800 and y=1660. Instagram and Snapchat overlay
-     their own furniture on a story — the account row along the top, the reply
-     bar along the bottom — and each eats roughly 250px of a 1920 frame. The
-     footer is the entire point of the card, so it has to clear that bar; at
-     the bottom of the canvas it would have been sitting underneath it. */
-  ctx.textAlign = 'center';
+  const cardX = 76, cardW = SHARE_W - cardX * 2;
+  const pad = 62;                        // card padding
+  const innerW = cardW - pad * 2;
   const cx = SHARE_W / 2;
 
+  /* ---- pass 1: measure ---- */
+  const blocks = [];
+  const push = (h, draw) => blocks.push({ h: h, draw: draw });
+
   if (kind === 'grade'){
-    ctx.fillStyle = SC.muted;
-    ctx.font = scFont(700, 30);
-    ctx.fillText('MARKED AGAINST THE REAL NCEA CRITERIA', cx, 800);
+    const badge = String(d.grade || 'Excellence');
+    ctx.font = scFont(800, 76);
+    const badgeW = ctx.measureText(badge).width + 96;
 
-    ctx.fillStyle = SC.violet;
-    ctx.font = scFont(800, 150);
-    ctx.fillText(d.grade, cx, 940);
+    push(34, (y) => {
+      ctx.textAlign = 'center'; ctx.textBaseline = 'alphabetic';
+      ctx.fillStyle = SC.faint; ctx.font = scFont(700, 26);
+      ctx.fillText('MARKED AGAINST THE NCEA CRITERIA', cx, y + 26);
+    });
+    push(28, null);
+    push(118, (y) => {
+      scSparkles(ctx, cx, y + 59, badgeW / 2, cardW / 2 - 26);
+      scPanel(ctx, cx - badgeW / 2, y, badgeW, 118, 59, SC.green, true);
+      ctx.fillStyle = '#FFFFFF'; ctx.font = scFont(800, 76);
+      ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+      ctx.fillText(badge, cx, y + 61);
+    });
+    push(34, null);
 
-    ctx.fillStyle = SC.ink;
-    ctx.font = scFont(700, 56);
-    const subj = scWrap(ctx, d.subject || 'My notes', SHARE_W - M * 2).slice(0, 2);
-    let y = 1100;
-    for (const l of subj){ ctx.fillText(l, cx, y); y += 70; }
+    ctx.font = scFont(700, 50);
+    const subjLines = scWrap(ctx, d.subject || 'My notes', innerW).slice(0, 2);
+    push(subjLines.length * 60, (y) => {
+      ctx.fillStyle = SC.ink; ctx.font = scFont(700, 50);
+      ctx.textAlign = 'center'; ctx.textBaseline = 'alphabetic';
+      let yy = y + 46;
+      for (const l of subjLines){ ctx.fillText(l, cx, yy); yy += 60; }
+    });
 
     if (d.topic){
-      ctx.fillStyle = SC.muted;
-      ctx.font = scFont(400, 42);
-      const t = scWrap(ctx, d.topic, SHARE_W - M * 2).slice(0, 2);
-      y += 6;
-      for (const l of t){ ctx.fillText(l, cx, y); y += 56; }
+      ctx.font = scFont(400, 36);
+      const topLines = scWrap(ctx, d.topic, innerW).slice(0, 2);
+      push(topLines.length * 46 + 6, (y) => {
+        ctx.fillStyle = SC.muted; ctx.font = scFont(400, 36);
+        ctx.textAlign = 'center'; ctx.textBaseline = 'alphabetic';
+        let yy = y + 40;
+        for (const l of topLines){ ctx.fillText(l, cx, yy); yy += 46; }
+      });
+    }
+
+    /* Their own words. This is the evidence — a grade with nothing behind it
+       is a claim, and a claim is not interesting enough to post. The question
+       stays off: it is generated from their teacher's material, not theirs. */
+    if (d.answer){
+      const quote = scClamp(d.answer, 155);
+      ctx.font = scFont(400, 34);
+      const qLines = scWrap(ctx, '“' + quote + '”', innerW - 76).slice(0, 4);
+      const qh = qLines.length * 48 + 96;
+      push(38, null);
+      push(qh, (y) => {
+        scPanel(ctx, cardX + pad, y, innerW, qh, 34, SC.violetSoft, false);
+        ctx.textAlign = 'left'; ctx.textBaseline = 'alphabetic';
+        ctx.fillStyle = SC.violetInk; ctx.font = scFont(700, 24);
+        ctx.fillText('WHAT YOU WROTE', cardX + pad + 38, y + 46);
+        ctx.fillStyle = SC.ink; ctx.font = scFont(400, 34);
+        let yy = y + 96;
+        for (const l of qLines){ ctx.fillText(l, cardX + pad + 38, yy); yy += 48; }
+      });
+    }
+
+    /* One line of the marking, so the grade is shown being earned. */
+    if (d.credit){
+      ctx.font = scFont(500, 32);
+      const cLines = scWrap(ctx, scClamp(d.credit, 120), innerW - 74).slice(0, 3);
+      const ch = Math.max(58, cLines.length * 44);
+      push(26, null);
+      push(ch, (y) => {
+        scTick(ctx, cardX + pad + 26, y + 26, 26);
+        ctx.textAlign = 'left'; ctx.textBaseline = 'alphabetic';
+        ctx.fillStyle = SC.muted; ctx.font = scFont(500, 32);
+        let yy = y + 36;
+        for (const l of cLines){ ctx.fillText(l, cardX + pad + 70, yy); yy += 44; }
+      });
     }
 
     if (d.verb || d.marks){
-      ctx.font = scFont(700, 34);
       const chips = [];
-      if (d.verb) chips.push(d.verb);
+      if (d.verb) chips.push(String(d.verb));
       if (d.marks) chips.push(d.marks + ' marks');
-      let total = 0;
-      for (const c of chips) total += ctx.measureText(c).width + 60 + 20;
-      let x = cx - (total - 20) / 2;
-      for (const c of chips) x = scChip(ctx, c, x, y + 24, SC.tint);
+      push(30, null);
+      push(66, (y) => {
+        let total = 0;
+        for (const c of chips) total += scChipW(ctx, c) + 16;
+        let x = cx - (total - 16) / 2;
+        for (const c of chips) x = scChip(ctx, c, x, y, SC.violetSoft, SC.violetInk);
+      });
     }
   } else {
-    ctx.fillStyle = SC.muted;
-    ctx.font = scFont(700, 30);
-    ctx.fillText('EVERYTHING DUE, DONE', cx, 800);
+    push(34, (y) => {
+      ctx.textAlign = 'center'; ctx.textBaseline = 'alphabetic';
+      ctx.fillStyle = SC.faint; ctx.font = scFont(700, 26);
+      ctx.fillText('EVERYTHING DUE, DONE', cx, y + 26);
+    });
+    push(20, null);
+    push(190, (y) => {
+      ctx.font = scFont(800, 172);
+      scSparkles(ctx, cx, y + 95, ctx.measureText(String(d.done)).width / 2, cardW / 2 - 26);
+      ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+      ctx.fillStyle = SC.violet; ctx.font = scFont(800, 172);
+      ctx.fillText(String(d.done), cx, y + 98);
+    });
+    push(4, null);
+    push(60, (y) => {
+      ctx.textAlign = 'center'; ctx.textBaseline = 'alphabetic';
+      ctx.fillStyle = SC.ink; ctx.font = scFont(700, 50);
+      ctx.fillText(d.done === 1 ? 'card reviewed' : 'cards reviewed', cx, y + 48);
+    });
 
-    ctx.fillStyle = SC.violet;
-    ctx.font = scFont(800, 200);
-    ctx.fillText(String(d.done), cx, 990);
-
-    ctx.fillStyle = SC.ink;
-    ctx.font = scFont(700, 56);
-    ctx.fillText(d.done === 1 ? 'card reviewed' : 'cards reviewed', cx, 1110);
-
-    let y = 1210;
     if (d.subjects && d.subjects.length){
-      ctx.fillStyle = SC.muted;
-      ctx.font = scFont(400, 42);
-      const lines = scWrap(ctx, d.subjects.join(' · '), SHARE_W - M * 2).slice(0, 2);
-      for (const l of lines){ ctx.fillText(l, cx, y); y += 56; }
+      ctx.font = scFont(400, 36);
+      const sLines = scWrap(ctx, d.subjects.join(' · '), innerW).slice(0, 2);
+      push(18, null);
+      push(sLines.length * 46, (y) => {
+        ctx.fillStyle = SC.muted; ctx.font = scFont(400, 36);
+        ctx.textAlign = 'center'; ctx.textBaseline = 'alphabetic';
+        let yy = y + 38;
+        for (const l of sLines){ ctx.fillText(l, cx, yy); yy += 46; }
+      });
     }
     if (d.streak > 0){
-      ctx.font = scFont(700, 34);
       const label = d.streak + ' day streak';
-      const w = ctx.measureText(label).width + 60;
-      scChip(ctx, label, cx - w / 2, y + 14, SC.green);
+      push(30, null);
+      push(66, (y) => {
+        const w = scChipW(ctx, label);
+        scChip(ctx, label, cx - w / 2, y, SC.greenSoft, SC.greenInk);
+      });
     }
   }
 
-  /* ---- footer: the reason this exists ---- */
-  ctx.textAlign = 'center';
-  ctx.fillStyle = SC.tint;
-  ctx.font = scFont(700, 40);
-  ctx.fillText(SHARE_URL, cx, 1600);
+  /* footer lives inside the card, so the whole thing is one object */
+  push(38, null);
+  push(2, (y) => {
+    ctx.strokeStyle = SC.line; ctx.lineWidth = 2;
+    ctx.beginPath(); ctx.moveTo(cardX + pad, y); ctx.lineTo(cardX + cardW - pad, y); ctx.stroke();
+  });
+  push(34, null);
+  push(58, (y) => {
+    ctx.font = scFont(700, 34);
+    const label = SHARE_URL;
+    const tw = ctx.measureText(label).width;
+    const total = 58 + 20 + tw;
+    const x0 = cx - total / 2;
+    scMark(ctx, x0, y, 58);
+    ctx.textAlign = 'left'; ctx.textBaseline = 'middle';
+    ctx.fillStyle = SC.violetInk;
+    ctx.fillText(label, x0 + 78, y + 31);
+  });
 
-  ctx.fillStyle = SC.muted;
-  ctx.font = scFont(400, 32);
-  ctx.fillText('Free · No sign-up · NCEA 1–3', cx, 1662);
+  /* ---- pass 2: size, centre, draw ---- */
+  let contentH = 0;
+  for (const b of blocks) contentH += b.h;
+  const cardH = contentH + pad * 2;
+  /* Nudged above centre: a story is read top-down and the bottom third is
+     where the reply bar and the poster's own stickers land. */
+  const cardY = Math.max(210, Math.round((SHARE_H - cardH) / 2) - 50);
+
+  scPanel(ctx, cardX, cardY, cardW, cardH, 68, SC.card, true);
+
+  let y = cardY + pad;
+  for (const b of blocks){
+    if (b.draw) b.draw(y);
+    y += b.h;
+  }
 }
 
 /* Waits for Inter before drawing — canvas silently falls back to the system
@@ -2549,7 +2730,12 @@ function MarkResult({ r, card, answer, level, deck, demo }){
         <ShareSheet kind="grade" onClose={() => setShare(false)}
           data={{ grade: r.grade,
             subject: (deck && deck.subject) || '', topic: (deck && deck.topic) || '',
-            verb: card && card.verb, marks: card && card.marks }} />
+            verb: card && card.verb, marks: card && card.marks,
+            /* their own writing, and the marker's reason for the grade — the
+               card is evidence rather than a claim. The question itself stays
+               off it. */
+            answer: answer,
+            credit: (Array.isArray(r.hit) && r.hit.length) ? r.hit[0] : '' }} />
       )}
     </div>
   );
@@ -4448,7 +4634,9 @@ function ShareSheet({ kind, data, onClose }){
         </div>
 
         <Sub style={{ fontSize: 12.5, marginTop: 10 }}>
-          Your question and your answer aren't on it — just the result and the subject.
+          {kind === 'grade'
+            ? 'Shows a bit of what you wrote and why it scored. The question itself isn\'t on it.'
+            : 'Just your totals and subjects — no card content.'}
         </Sub>
 
         {err && <Sub style={{ marginTop: 8, color: T.red }}>{err}</Sub>}
