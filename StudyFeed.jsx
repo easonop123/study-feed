@@ -483,7 +483,54 @@ const exportName = (decks) => decks.length === 1
    ========================================================================== */
 
 const SHARE_W = 1080, SHARE_H = 1920;   // 9:16, the story format everywhere
+
+/* The only place the card's URL is written. When the custom domain lands this
+   is a one-line change — but it is NOT the only place the domain appears:
+   docs/index.html has og:url and two absolute og:image/twitter:image URLs that
+   have to move with it, and CLAUDE.md quotes them. Grep for vercel.app. */
 const SHARE_URL = 'study-feed.vercel.app';
+
+/* ---- what made this session worth posting -------------------------------
+   The first version said "EVERYTHING DUE, DONE" every single time, so someone
+   who shares twice has posted the same picture twice and stops bothering. This
+   reads the history for the most interesting thing that is actually TRUE today
+   and leads with that, which is what makes Bevel's cards feel personal.
+
+   Everything here comes from reviewsByDate, which already exists — no new
+   storage, and no claim that isn't backed by the numbers. */
+function sessionHeadline(stats, done, subjects){
+  const by = (stats && stats.reviewsByDate) || {};
+  const today = TODAY();
+  const todayN = by[today] || 0;
+
+  const others = Object.keys(by).filter(d => d !== today);
+  const best = others.reduce((m, d) => Math.max(m, by[d] || 0), 0);
+  if (others.length >= 3 && todayN > best) return 'BEST DAY YET';
+
+  /* How long since the last day with any reviews on it */
+  let gap = 0;
+  for (let i = 1; i <= 30; i++){
+    if (by[addDays(today, -i)]) break;
+    gap = i;
+  }
+  if (gap >= 3 && others.length) return 'FIRST SESSION IN ' + (gap + 1) + ' DAYS';
+
+  if (subjects && subjects.length >= 3) return subjects.length + ' SUBJECTS IN ONE SITTING';
+  if ((stats && stats.streak || 0) >= 7) return stats.streak + ' DAYS IN A ROW';
+  if (others.length === 0) return 'FIRST SESSION DONE';
+  return 'EVERYTHING DUE, DONE';
+}
+
+/* Seven days ending today, for the little bar strip. */
+function sessionWeek(stats){
+  const by = (stats && stats.reviewsByDate) || {};
+  const out = [];
+  for (let i = 6; i >= 0; i--){
+    const day = addDays(TODAY(), -i);
+    out.push(by[day] || 0);
+  }
+  return out;
+}
 
 /* Brand literals, not theme tokens: the card looks the same whether the app is
    in light or dark mode and whoever sees it is not running our CSS.
@@ -559,6 +606,38 @@ function scTick(ctx, cx, cy, r){
   ctx.lineTo(cx - r * 0.10, cy + r * 0.34);
   ctx.lineTo(cx + r * 0.44, cy - r * 0.34);
   ctx.stroke();
+}
+
+/* Seven days of reviews as a small bar strip. Gives the session card something
+   to look at besides one number, and it is the student's own week rather than
+   decoration — the thing that makes a stat card feel like it is about you.
+   Empty days keep a stub so the row still reads as seven days. */
+function scWeekBars(ctx, x, y, w, h, week){
+  const n = week.length;
+  const gap = 16;
+  const bw = (w - gap * (n - 1)) / n;
+  const max = Math.max(1, ...week);
+  const labels = ['M', 'T', 'W', 'T', 'F', 'S', 'S'];
+  /* reviewsByDate is keyed by real dates, so the strip ends today — the letters
+     have to be rotated to match rather than assuming the week starts Monday */
+  const todayIdx = new Date(TODAY() + 'T00:00:00').getDay();   // 0 = Sunday
+  for (let i = 0; i < n; i++){
+    const isToday = i === n - 1;
+    const bh = Math.max(8, Math.round((week[i] / max) * h));
+    const bx = x + i * (bw + gap);
+    ctx.fillStyle = isToday ? SC.violet : (week[i] ? 'rgba(124,92,255,0.30)' : SC.line);
+    /* Radius has to clear HALF THE HEIGHT as well as half the width. An empty
+       day is only 8px tall, and a 10px corner on it drew a broken-looking arc
+       instead of a stub. */
+    scRoundRect(ctx, bx, y + (h - bh), bw, bh, Math.min(bw / 2, bh / 2, 10));
+    ctx.fill();
+    // Monday-indexed letter for this column
+    const dow = (todayIdx - (n - 1 - i) + 70) % 7;
+    ctx.fillStyle = isToday ? SC.violetInk : SC.faint;
+    ctx.font = scFont(isToday ? 700 : 500, 22);
+    ctx.textAlign = 'center'; ctx.textBaseline = 'alphabetic';
+    ctx.fillText(labels[(dow + 6) % 7], bx + bw / 2, y + h + 30);
+  }
 }
 
 /* Keeps a quote to something a passer-by will actually read. Cuts on a word and
@@ -685,7 +764,26 @@ function drawShareCard(ctx, kind, d){
       ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
       ctx.fillText(badge, cx, y + 61);
     });
-    push(34, null);
+
+    /* The ladder, with the rung they reached lit. The badge alone says what
+       they got; this says what they got PAST, which is the part that reads as
+       a climb. Dots rather than words so it stays a glance, not a second
+       reading of the same information. */
+    push(22, null);
+    push(26, (y) => {
+      const tiers = ['Achieved', 'Merit', 'Excellence'];
+      const at = tiers.indexOf(badge);
+      if (at < 0) return;
+      const w = 74, gap = 12;
+      let x = cx - (tiers.length * w + (tiers.length - 1) * gap) / 2;
+      for (let i = 0; i < tiers.length; i++){
+        ctx.fillStyle = i <= at ? SC.green : SC.line;
+        scRoundRect(ctx, x, y + 8, w, 10, 5);
+        ctx.fill();
+        x += w + gap;
+      }
+    });
+    push(32, null);
 
     ctx.font = scFont(700, 50);
     const subjLines = scWrap(ctx, d.subject || 'My notes', innerW).slice(0, 2);
@@ -755,10 +853,11 @@ function drawShareCard(ctx, kind, d){
       });
     }
   } else {
+    const headline = d.headline || 'EVERYTHING DUE, DONE';
     push(34, (y) => {
       ctx.textAlign = 'center'; ctx.textBaseline = 'alphabetic';
-      ctx.fillStyle = SC.faint; ctx.font = scFont(700, 26);
-      ctx.fillText('EVERYTHING DUE, DONE', cx, y + 26);
+      ctx.fillStyle = SC.violetInk; ctx.font = scFont(700, 26);
+      ctx.fillText(headline, cx, y + 26);
     });
     push(20, null);
     push(190, (y) => {
@@ -786,6 +885,15 @@ function drawShareCard(ctx, kind, d){
         for (const l of sLines){ ctx.fillText(l, cx, yy); yy += 46; }
       });
     }
+    /* Their own week. Only shown once there is a week worth showing — a single
+       lonely bar next to six empty ones is a worse card than no chart. */
+    if (d.week && d.week.filter(n => n > 0).length >= 2){
+      push(34, null);
+      push(140, (y) => {
+        scWeekBars(ctx, cardX + pad + 40, y, innerW - 80, 106, d.week);
+      });
+    }
+
     if (d.streak > 0){
       const label = d.streak + ' day streak';
       push(30, null);
@@ -802,17 +910,25 @@ function drawShareCard(ctx, kind, d){
     ctx.strokeStyle = SC.line; ctx.lineWidth = 2;
     ctx.beginPath(); ctx.moveTo(cardX + pad, y); ctx.lineTo(cardX + cardW - pad, y); ctx.stroke();
   });
-  push(34, null);
-  push(58, (y) => {
-    ctx.font = scFont(700, 34);
-    const label = SHARE_URL;
-    const tw = ctx.measureText(label).width;
-    const total = 58 + 20 + tw;
+  push(30, null);
+  /* Mark + wordmark on one line, domain under it. A bare URL was the whole
+     footer before, which read as a link dumped on the artwork; a lockup reads
+     as a brand signing its own work — and it stops depending on the domain
+     being short enough to carry the line, which today's is not. */
+  push(96, (y) => {
+    ctx.font = scFont(800, 40);
+    const name = 'Study Feed';
+    const tw = ctx.measureText(name).width;
+    const total = 52 + 18 + tw;
     const x0 = cx - total / 2;
-    scMark(ctx, x0, y, 58);
+    scMark(ctx, x0, y, 52);
     ctx.textAlign = 'left'; ctx.textBaseline = 'middle';
-    ctx.fillStyle = SC.violetInk;
-    ctx.fillText(label, x0 + 78, y + 31);
+    ctx.fillStyle = SC.ink;
+    ctx.fillText(name, x0 + 70, y + 28);
+
+    ctx.textAlign = 'center'; ctx.textBaseline = 'alphabetic';
+    ctx.fillStyle = SC.violetInk; ctx.font = scFont(600, 30);
+    ctx.fillText(SHARE_URL, cx, y + 88);
   });
 
   /* ---- pass 2: size, centre, draw ---- */
@@ -2877,7 +2993,7 @@ function RewardLayer({ fx }){
 /* Finishing the cards that were actually due is the biggest moment in the app
    and it used to pass in silence — the feed just slid into endless practice.
    Now it stops, celebrates, and makes carrying on a deliberate choice again. */
-function FinishedCard({ done, streak, subjects, onPractice, onHome }){
+function FinishedCard({ done, streak, subjects, week, headline, onPractice, onHome }){
   const [share, setShare] = useState(false);
   useEffect(() => { play('done'); buzz([16, 60, 16, 60, 26]); }, []);
   return (
@@ -2909,7 +3025,8 @@ function FinishedCard({ done, streak, subjects, onPractice, onHome }){
       </Card>
       {share && (
         <ShareSheet kind="session" onClose={() => setShare(false)}
-          data={{ done: done, streak: streak, subjects: subjects || [] }} />
+          data={{ done: done, streak: streak, subjects: subjects || [],
+            week: week || [], headline: headline }} />
       )}
     </>
   );
@@ -3033,6 +3150,7 @@ function Feed({ decks, progress, settings, stats, onGrade, reduceMotion, focus, 
       <div>
         {bar}
         <FinishedCard done={reviewed} streak={stats.streak || 0} subjects={seenSubjects}
+          week={sessionWeek(stats)} headline={sessionHeadline(stats, reviewed, seenSubjects)}
           onPractice={() => { setFinished(false); setCombo(0); }} onHome={onHome} />
       </div>
     );
