@@ -286,8 +286,14 @@ const buzz = (ms) => { try { if (navigator.vibrate) navigator.vibrate(ms); } cat
    APP_VERSION is the id we compare against settings.lastSeenVersion to decide
    whether to pop the "What's new" note. Bump it whenever PATCH_NOTES gains an
    entry. Newest first; the first element is the current release. */
-const APP_VERSION = '1.6.0';
+const APP_VERSION = '1.7.0';
 const PATCH_NOTES = [
+  { v: '1.7.0', date: '2026-08-06', title: 'Something to show for it', items: [
+    'Clear everything due and you can share the session — cards done, subjects, streak — as a card built for your story.',
+    'Earn an Excellence on a written answer and you can share that too.',
+    'Your question and your answer never go on the card. Just the result and the subject.',
+    'You see the card before it goes anywhere, and you can always just close it.',
+  ] },
   { v: '1.6.0', date: '2026-08-05', title: 'A proper look', items: [
     'Study Feed has a real identity now — a stacked-card mark, a near-black and violet palette, and Inter throughout.',
     'The app finally has an icon. Add it to your home screen or pin the tab and you get the mark, not a blurry screenshot of the page.',
@@ -456,6 +462,235 @@ function safeFileName(s, fallback){
 const exportName = (decks) => decks.length === 1
   ? 'study-feed-' + safeFileName(decks[0].topic || decks[0].subject, 'deck') + '-' + TODAY() + '.json'
   : 'study-feed-' + TODAY() + '.json';
+
+/* ==========================================================================
+   SHAREABLE CARDS
+
+   A story-shaped PNG for the two moments worth telling someone about: clearing
+   everything due, and earning an Excellence on a written answer.
+
+   Drawn on a canvas rather than screenshotted from the DOM. html2canvas and
+   friends are a dependency this app cannot take — the Artifact build has no
+   bundler — and a screenshot of a phone-width screen is the wrong shape for a
+   story anyway. Canvas also means the card is composed for sharing rather than
+   cropped from something that was not.
+
+   NOTHING THE STUDENT WROTE GOES ON THE CARD. Not the question, not their
+   answer. The questions are generated from their teacher's slides and past
+   papers, which are not theirs to publish, and their answer is their own work
+   that they have not agreed to post. The card carries the achievement and the
+   subject they named themselves — which is what makes a good share anyway.
+   ========================================================================== */
+
+const SHARE_W = 1080, SHARE_H = 1920;   // 9:16, the story format everywhere
+const SHARE_URL = 'study-feed.vercel.app';
+
+/* Brand literals, not theme tokens: the card is the same on a phone in dark
+   mode and a laptop in light, and it has to match the og:image. */
+const SC = { ground: '#141024', ink: '#FFFFFF', violet: '#7C5CFF', tint: '#9B85FF',
+  muted: '#B0A8C8', green: '#46C79A', line: '#2E2752' };
+
+const scFont = (weight, size) => weight + ' ' + size + 'px Inter, ' + SYSTEM_STACK;
+
+function scRoundRect(ctx, x, y, w, h, r){
+  ctx.beginPath();
+  ctx.moveTo(x + r, y);
+  ctx.arcTo(x + w, y, x + w, y + h, r);
+  ctx.arcTo(x + w, y + h, x, y + h, r);
+  ctx.arcTo(x, y + h, x, y, r);
+  ctx.arcTo(x, y, x + w, y, r);
+  ctx.closePath();
+}
+
+/* Outlined pill, drawn left to right, returns the x it finished at so a row of
+   them can be laid out without measuring twice. */
+function scChip(ctx, text, x, y, colour){
+  ctx.font = scFont(700, 34);
+  const padX = 30, h = 74;
+  const w = ctx.measureText(text).width + padX * 2;
+  ctx.strokeStyle = colour; ctx.lineWidth = 2.5;
+  scRoundRect(ctx, x, y, w, h, h / 2);
+  ctx.stroke();
+  ctx.fillStyle = colour;
+  ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+  ctx.fillText(text, x + w / 2, y + h / 2 + 1);
+  return x + w + 20;
+}
+
+/* Greedy wrap. Returns the lines rather than drawing, so the caller can centre
+   the block vertically once it knows how tall it came out. */
+function scWrap(ctx, text, maxW){
+  const words = String(text || '').split(/\s+/).filter(Boolean);
+  const lines = [];
+  let line = '';
+  for (const word of words){
+    const next = line ? line + ' ' + word : word;
+    if (ctx.measureText(next).width > maxW && line){ lines.push(line); line = word; }
+    else line = next;
+  }
+  if (line) lines.push(line);
+  return lines;
+}
+
+/* The mark, from the same path data as brand/svg/mark-on-dark.svg. Path2D takes
+   SVG path syntax directly, so the geometry never has to be transcribed. */
+function scMark(ctx, x, y, size){
+  const s = size / 100;
+  ctx.save();
+  ctx.translate(x, y); ctx.scale(s, s);
+  ctx.lineWidth = 8.5; ctx.lineCap = 'round'; ctx.lineJoin = 'round';
+  const top = new Path2D('M50 12 L86 33 L50 54 L14 33 Z');
+  const mid = new Path2D('M14 49 L50 70 L86 49');
+  const low = new Path2D('M14 65 L50 86 L86 65');
+  ctx.strokeStyle = SC.violet; ctx.stroke(top);
+  ctx.strokeStyle = SC.ink; ctx.stroke(mid); ctx.stroke(low);
+  ctx.restore();
+}
+
+/* kind: 'grade' -> { grade, subject, topic, verb, marks }
+   kind: 'session' -> { done, streak, subjects: [] } */
+function drawShareCard(ctx, kind, d){
+  const M = 96;                                   // side margin
+  ctx.fillStyle = SC.ground;
+  ctx.fillRect(0, 0, SHARE_W, SHARE_H);
+
+  /* A single violet bloom off the top-right. The brand forbids filling areas
+     with the accent; this is light on a dark ground, the same move the landing
+     page hero makes. */
+  const glow = ctx.createRadialGradient(SHARE_W * 0.82, 120, 0, SHARE_W * 0.82, 120, 900);
+  glow.addColorStop(0, 'rgba(124,92,255,0.30)');
+  glow.addColorStop(1, 'rgba(124,92,255,0)');
+  ctx.fillStyle = glow;
+  ctx.fillRect(0, 0, SHARE_W, SHARE_H);
+
+  /* ---- header: mark + wordmark ---- */
+  scMark(ctx, M, 150, 104);
+  ctx.fillStyle = SC.ink;
+  ctx.font = scFont(800, 52);
+  ctx.textAlign = 'left'; ctx.textBaseline = 'middle';
+  ctx.fillText('STUDY FEED', M + 140, 204);
+
+  /* ---- hero ----
+     Everything sits between y=800 and y=1660. Instagram and Snapchat overlay
+     their own furniture on a story — the account row along the top, the reply
+     bar along the bottom — and each eats roughly 250px of a 1920 frame. The
+     footer is the entire point of the card, so it has to clear that bar; at
+     the bottom of the canvas it would have been sitting underneath it. */
+  ctx.textAlign = 'center';
+  const cx = SHARE_W / 2;
+
+  if (kind === 'grade'){
+    ctx.fillStyle = SC.muted;
+    ctx.font = scFont(700, 30);
+    ctx.fillText('MARKED AGAINST THE REAL NCEA CRITERIA', cx, 800);
+
+    ctx.fillStyle = SC.violet;
+    ctx.font = scFont(800, 150);
+    ctx.fillText(d.grade, cx, 940);
+
+    ctx.fillStyle = SC.ink;
+    ctx.font = scFont(700, 56);
+    const subj = scWrap(ctx, d.subject || 'My notes', SHARE_W - M * 2).slice(0, 2);
+    let y = 1100;
+    for (const l of subj){ ctx.fillText(l, cx, y); y += 70; }
+
+    if (d.topic){
+      ctx.fillStyle = SC.muted;
+      ctx.font = scFont(400, 42);
+      const t = scWrap(ctx, d.topic, SHARE_W - M * 2).slice(0, 2);
+      y += 6;
+      for (const l of t){ ctx.fillText(l, cx, y); y += 56; }
+    }
+
+    if (d.verb || d.marks){
+      ctx.font = scFont(700, 34);
+      const chips = [];
+      if (d.verb) chips.push(d.verb);
+      if (d.marks) chips.push(d.marks + ' marks');
+      let total = 0;
+      for (const c of chips) total += ctx.measureText(c).width + 60 + 20;
+      let x = cx - (total - 20) / 2;
+      for (const c of chips) x = scChip(ctx, c, x, y + 24, SC.tint);
+    }
+  } else {
+    ctx.fillStyle = SC.muted;
+    ctx.font = scFont(700, 30);
+    ctx.fillText('EVERYTHING DUE, DONE', cx, 800);
+
+    ctx.fillStyle = SC.violet;
+    ctx.font = scFont(800, 200);
+    ctx.fillText(String(d.done), cx, 990);
+
+    ctx.fillStyle = SC.ink;
+    ctx.font = scFont(700, 56);
+    ctx.fillText(d.done === 1 ? 'card reviewed' : 'cards reviewed', cx, 1110);
+
+    let y = 1210;
+    if (d.subjects && d.subjects.length){
+      ctx.fillStyle = SC.muted;
+      ctx.font = scFont(400, 42);
+      const lines = scWrap(ctx, d.subjects.join(' · '), SHARE_W - M * 2).slice(0, 2);
+      for (const l of lines){ ctx.fillText(l, cx, y); y += 56; }
+    }
+    if (d.streak > 0){
+      ctx.font = scFont(700, 34);
+      const label = d.streak + ' day streak';
+      const w = ctx.measureText(label).width + 60;
+      scChip(ctx, label, cx - w / 2, y + 14, SC.green);
+    }
+  }
+
+  /* ---- footer: the reason this exists ---- */
+  ctx.textAlign = 'center';
+  ctx.fillStyle = SC.tint;
+  ctx.font = scFont(700, 40);
+  ctx.fillText(SHARE_URL, cx, 1600);
+
+  ctx.fillStyle = SC.muted;
+  ctx.font = scFont(400, 32);
+  ctx.fillText('Free · No sign-up · NCEA 1–3', cx, 1662);
+}
+
+/* Waits for Inter before drawing — canvas silently falls back to the system
+   face if the webfont has not loaded, and the card would ship in the wrong
+   typeface. The Artifact has no webfonts at all, so this resolves immediately
+   there and the system stack is the intended fallback. */
+async function makeShareBlob(kind, data){
+  try { if (document.fonts && document.fonts.ready) await document.fonts.ready; } catch {}
+  const canvas = document.createElement('canvas');
+  canvas.width = SHARE_W; canvas.height = SHARE_H;
+  const ctx = canvas.getContext('2d');
+  if (!ctx) return null;
+  drawShareCard(ctx, kind, data);
+  return await new Promise(res => {
+    try { canvas.toBlob(b => res(b), 'image/png'); } catch { res(null); }
+  });
+}
+
+/* Web Share with a file is the only route from a web app into Instagram or
+   Snapchat stories: there is no API to post directly, so the OS sheet does it
+   and the student picks where. Everything else falls back to a download. */
+async function shareBlob(blob, filename, text){
+  if (!blob) return 'failed';
+  try {
+    const file = new File([blob], filename, { type: 'image/png' });
+    if (navigator.share && navigator.canShare && navigator.canShare({ files: [file] })){
+      await navigator.share({ files: [file], text: text });
+      return 'shared';
+    }
+  } catch (e){
+    // AbortError is the student closing the sheet — not a failure worth reporting
+    if (e && e.name === 'AbortError') return 'cancelled';
+  }
+  try {
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url; a.download = filename;
+    document.body.appendChild(a); a.click();
+    setTimeout(() => { URL.revokeObjectURL(url); a.remove(); }, 0);
+    return 'saved';
+  } catch { return 'failed'; }
+}
 
 async function copyText(text){
   try { await navigator.clipboard.writeText(text); return true; }
@@ -2172,7 +2407,7 @@ function ExtendedFace({ card, phase, deck, onReveal, demo }){
           runs canned like the rest, so the tour can hand over a mark you can
           actually act on rather than a dead end. */}
       {result && <MarkResult r={result} card={card} answer={answer}
-        level={deck.standard || 'NCEA Level 1'} demo={demo} />}
+        level={deck.standard || 'NCEA Level 1'} deck={deck} demo={demo} />}
 
       {phase === 'reveal' && (
         <div style={REVEAL}>
@@ -2276,8 +2511,14 @@ function UpgradePath({ card, answer, r, level, demo }){
   );
 }
 
-function MarkResult({ r, card, answer, level, demo }){
+function MarkResult({ r, card, answer, level, deck, demo }){
   const gc = r.grade === 'Excellence' ? T.green : r.grade === 'Merit' ? T.accent : r.grade === 'Achieved' ? T.muted : T.red;
+  const [share, setShare] = useState(false);
+  /* Excellence only. Merit is a good day and Achieved is most days; if the card
+     appeared for all three it would stop meaning anything and start reading as
+     the app asking to be advertised. The demo tour never offers it — that mark
+     was not earned. */
+  const canShare = !demo && r.grade === 'Excellence';
   return (
     <div style={{ ...PANEL, marginTop: 12, animation: 'sf-reveal 260ms cubic-bezier(.2,.8,.3,1)' }}>
       <Chip colour={gc} solid>{r.grade}</Chip>
@@ -2299,6 +2540,17 @@ function MarkResult({ r, card, answer, level, demo }){
       )}
       {r.lift && <div style={{ marginTop: 10, fontFamily: SANS, fontSize: 15, fontWeight: 600, color: T.ink, lineHeight: 1.5 }}>{r.lift}</div>}
       {card && answer && <UpgradePath card={card} answer={answer} r={r} level={level} demo={demo} />}
+      {canShare && (
+        <div style={{ marginTop: 6, paddingTop: 6, borderTop: `1px dashed ${T.border}` }}>
+          <ShareLink label="Share this Excellence" onClick={() => setShare(true)} />
+        </div>
+      )}
+      {share && (
+        <ShareSheet kind="grade" onClose={() => setShare(false)}
+          data={{ grade: r.grade,
+            subject: (deck && deck.subject) || '', topic: (deck && deck.topic) || '',
+            verb: card && card.verb, marks: card && card.marks }} />
+      )}
     </div>
   );
 }
@@ -2439,7 +2691,8 @@ function RewardLayer({ fx }){
 /* Finishing the cards that were actually due is the biggest moment in the app
    and it used to pass in silence — the feed just slid into endless practice.
    Now it stops, celebrates, and makes carrying on a deliberate choice again. */
-function FinishedCard({ done, streak, onPractice, onHome }){
+function FinishedCard({ done, streak, subjects, onPractice, onHome }){
+  const [share, setShare] = useState(false);
   useEffect(() => { play('done'); buzz([16, 60, 16, 60, 26]); }, []);
   return (
     <>
@@ -2465,7 +2718,13 @@ function FinishedCard({ done, streak, onPractice, onHome }){
           <Btn full kind="primary" onClick={onHome}>Put the phone down</Btn>
           <Btn kind="soft" onClick={onPractice} style={{ whiteSpace: 'nowrap' }}>Keep going</Btn>
         </div>
+        {/* under the two real choices, so it never competes with them */}
+        <ShareLink label="Share today's session" onClick={() => setShare(true)} style={{ marginTop: 6 }} />
       </Card>
+      {share && (
+        <ShareSheet kind="session" onClose={() => setShare(false)}
+          data={{ done: done, streak: streak, subjects: subjects || [] }} />
+      )}
     </>
   );
 }
@@ -2488,6 +2747,10 @@ function Feed({ decks, progress, settings, stats, onGrade, reduceMotion, focus, 
 
   const [queue, setQueue] = useState(() => buildQueue(fdecks, progress, settings, stats));
   const [reviewed, setReviewed] = useState(0);
+  /* Subjects touched in THIS sitting, for the share card. Taken as they are
+     graded rather than from the queue, because a queue you abandon halfway
+     would otherwise claim subjects you never actually saw. */
+  const [seenSubjects, setSeenSubjects] = useState([]);
   const [pool, setPool] = useState([]);
   const [pIdx, setPIdx] = useState(0);
   const [combo, setCombo] = useState(0);
@@ -2535,6 +2798,8 @@ function Feed({ decks, progress, settings, stats, onGrade, reduceMotion, focus, 
     const { reinsert } = onGrade(head.card, head.deck, q, sure, false);
     reward(q, head.card.type === 'mcq');
     setReviewed(r => r + 1);
+    const subj = head.deck.subject;
+    if (subj) setSeenSubjects(s => s.indexOf(subj) === -1 ? s.concat([subj]) : s);
     if (reinsert){
       const nq = rest.slice();
       nq.splice(Math.min(rest.length, 5), 0, head);
@@ -2581,7 +2846,7 @@ function Feed({ decks, progress, settings, stats, onGrade, reduceMotion, focus, 
     return (
       <div>
         {bar}
-        <FinishedCard done={reviewed} streak={stats.streak || 0}
+        <FinishedCard done={reviewed} streak={stats.streak || 0} subjects={seenSubjects}
           onPractice={() => { setFinished(false); setCombo(0); }} onHome={onHome} />
       </div>
     );
@@ -4130,6 +4395,85 @@ function WhatsNew({ onClose }){
         </div>
       </div>
     </ModalScrim>
+  );
+}
+
+/* The card is always shown before it can go anywhere. Sharing is the one thing
+   in this app that leaves the device, so it does not happen on a single tap
+   from a screen where the student has not seen what they would be posting. */
+function ShareSheet({ kind, data, onClose }){
+  const [url, setUrl] = useState('');
+  const [blob, setBlob] = useState(null);
+  const [err, setErr] = useState('');
+  const [state, setState] = useState('');   // '', 'saved', 'shared'
+
+  useEffect(() => {
+    let dead = false, made = '';
+    (async () => {
+      try {
+        const b = await makeShareBlob(kind, data);
+        if (!b){ if (!dead) setErr('Could not draw the card on this device.'); return; }
+        made = URL.createObjectURL(b);
+        if (dead){ URL.revokeObjectURL(made); return; }
+        setBlob(b); setUrl(made);
+      } catch { if (!dead) setErr('Could not draw the card on this device.'); }
+    })();
+    return () => { dead = true; if (made) URL.revokeObjectURL(made); };
+  }, [kind]);
+
+  const filename = 'study-feed-' + (kind === 'grade'
+    ? safeFileName(data.grade, 'grade') : 'session') + '-' + TODAY() + '.png';
+
+  const go = async () => {
+    const r = await shareBlob(blob, filename, 'Made with Study Feed — ' + SHARE_URL);
+    if (r === 'failed') setErr('Could not share from this browser. Try saving it instead.');
+    else if (r !== 'cancelled') setState(r);
+  };
+
+  return (
+    <ModalScrim onClose={onClose} maxW={420}>
+      <div style={{ padding: '20px 20px 18px' }}>
+        <div className="flex items-center justify-between" style={{ marginBottom: 14 }}>
+          <Chip colour={T.accentInk}>Share this</Chip>
+          <button onClick={onClose} className="sf-tap" aria-label="Close"
+            style={{ background: 'none', border: 'none', cursor: 'pointer', color: T.faint, padding: 2, display: 'flex' }}><Ico name="cross" size={17} /></button>
+        </div>
+
+        {/* 9:16, so the preview is tall — capped so the buttons stay on screen */}
+        <div style={{ background: T.well, borderRadius: R.well, overflow: 'hidden',
+          display: 'grid', placeItems: 'center', minHeight: 240, maxHeight: '46vh' }}>
+          {url
+            ? <img src={url} alt="Your share card" style={{ display: 'block', maxHeight: '46vh', maxWidth: '100%', objectFit: 'contain' }} />
+            : <div style={{ padding: 30 }}><Loading size={64} title="Making your card…" /></div>}
+        </div>
+
+        <Sub style={{ fontSize: 12.5, marginTop: 10 }}>
+          Your question and your answer aren't on it — just the result and the subject.
+        </Sub>
+
+        {err && <Sub style={{ marginTop: 8, color: T.red }}>{err}</Sub>}
+        {state === 'saved' && <Sub style={{ marginTop: 8, color: T.green }}>Saved to your device — post it from there.</Sub>}
+        {state === 'shared' && <Sub style={{ marginTop: 8, color: T.green }}>Sent.</Sub>}
+
+        <div className="flex gap-2" style={{ marginTop: 14 }}>
+          <Btn full kind="primary" onClick={go} disabled={!blob}>Share</Btn>
+          <Btn kind="soft" onClick={onClose} style={{ whiteSpace: 'nowrap' }}>Not now</Btn>
+        </div>
+      </div>
+    </ModalScrim>
+  );
+}
+
+/* Deliberately quiet: a link-weight button, not a second primary. The share is
+   offered at a good moment, it does not compete with what the student came to
+   do — and a loud one on every Excellence would wear out fast. */
+function ShareLink({ label, onClick, style }){
+  return (
+    <button className="sf-tap" onClick={onClick}
+      style={{ background: 'none', border: 'none', cursor: 'pointer', padding: '10px 2px',
+        fontFamily: SANS, fontSize: 13.5, fontWeight: 600, color: T.accentInk, ...style }}>
+      <span className="flex items-center justify-center gap-2"><Ico name="sparkle" size={15} />{label}</span>
+    </button>
   );
 }
 
