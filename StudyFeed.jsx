@@ -289,7 +289,8 @@ const buzz = (ms) => { try { if (navigator.vibrate) navigator.vibrate(ms); } cat
 const APP_VERSION = '1.7.0';
 const PATCH_NOTES = [
   { v: '1.7.0', date: '2026-08-06', title: 'Something to show for it', items: [
-    'Clear everything due and you can share the session — cards done, subjects, streak — as a card built for your story.',
+    'Share your week straight from the Home screen, under This week.',
+    'Clear everything due and you can share that session too — cards done, subjects, streak — as a card built for your story.',
     'Earn an Excellence on a written answer and you can share that too, with a line of what you wrote and why it scored.',
     'The question itself never goes on the card — that came from your teacher\'s material, not yours.',
     'You see the card before it goes anywhere, and you can always just close it.',
@@ -519,6 +520,16 @@ function sessionHeadline(stats, done, subjects){
   if ((stats && stats.streak || 0) >= 7) return stats.streak + ' DAYS IN A ROW';
   if (others.length === 0) return 'FIRST SESSION DONE';
   return 'EVERYTHING DUE, DONE';
+}
+
+/* The Home card sums a week rather than one sitting, so "best day yet" and
+   "first session in N days" don't apply to it — those are about today. */
+function weekHeadline(stats, subjects){
+  const streak = (stats && stats.streak) || 0;
+  if (streak >= 7) return streak + ' DAYS IN A ROW';
+  if (subjects && subjects.length >= 3) return subjects.length + ' SUBJECTS THIS WEEK';
+  if (streak >= 2) return streak + ' DAYS IN A ROW';
+  return 'THIS WEEK';
 }
 
 /* Seven days ending today, for the little bar strip. */
@@ -868,10 +879,12 @@ function drawShareCard(ctx, kind, d){
       ctx.fillText(String(d.done), cx, y + 98);
     });
     push(4, null);
+    /* Home shares a week, the feed shares a sitting — same card, different noun */
+    const countLabel = d.label || (d.done === 1 ? 'card reviewed' : 'cards reviewed');
     push(60, (y) => {
       ctx.textAlign = 'center'; ctx.textBaseline = 'alphabetic';
       ctx.fillStyle = SC.ink; ctx.font = scFont(700, 50);
-      ctx.fillText(d.done === 1 ? 'card reviewed' : 'cards reviewed', cx, y + 48);
+      ctx.fillText(countLabel, cx, y + 48);
     });
 
     if (d.subjects && d.subjects.length){
@@ -4165,6 +4178,7 @@ function longDate(){
 }
 
 function Home({ library, progress, stats, settings, due, onStart, onCreate, onDecks, onStudyDeck, onQuiz, onSettings, onTutorial }){
+  const [shareWeek, setShareWeek] = useState(false);
   const today = TODAY();
   const decks = library.decks;
   const totalCards = decks.reduce((s, d) => s + d.cards.length, 0);
@@ -4204,6 +4218,11 @@ function Home({ library, progress, stats, settings, due, onStart, onCreate, onDe
     wkMax = Math.max(wkMax, n);
     week.push({ n, wd: WD[new Date(day + 'T00:00:00').getDay()], isToday: day === today });
   }
+
+  const weekTotal = week.reduce((s, w) => s + w.n, 0);
+  /* Top subjects by how much has actually been reviewed, not by deck order. */
+  const topSubjects = Object.keys(stats.bySubject || {})
+    .sort((a, b) => (stats.bySubject[b] || 0) - (stats.bySubject[a] || 0)).slice(0, 3);
 
   const LBL = { fontFamily: SANS, fontSize: 11, fontWeight: 700, letterSpacing: '0.06em', textTransform: 'uppercase', color: T.faint };
   const panel = { padding: 18 };
@@ -4331,6 +4350,14 @@ function Home({ library, progress, stats, settings, due, onStart, onCreate, onDe
                 <div style={{ display: 'flex', gap: 8, marginTop: 7 }}>
                   {week.map((w, i) => <span key={i} style={{ flex: 1, textAlign: 'center', fontFamily: SANS, fontSize: 10, color: T.faint }}>{w.wd[0]}</span>)}
                 </div>
+                {/* The findable one. The other two sit behind clearing the whole
+                    feed or earning an Excellence, which a new student may not
+                    reach for days — this shares the panel it is sitting on, and
+                    only appears once there is a week worth showing. */}
+                {weekTotal > 0 && (
+                  <ShareLink label="Share your week" onClick={() => setShareWeek(true)}
+                    style={{ marginTop: 10, width: '100%' }} />
+                )}
               </Card>
 
               <Card style={panel}>
@@ -4370,6 +4397,12 @@ function Home({ library, progress, stats, settings, due, onStart, onCreate, onDe
             ))}
           </div>
         </>
+      )}
+      {shareWeek && (
+        <ShareSheet kind="session" onClose={() => setShareWeek(false)}
+          data={{ done: weekTotal, label: weekTotal === 1 ? 'card this week' : 'cards this week',
+            streak: streak, subjects: topSubjects,
+            week: week.map(w => w.n), headline: weekHeadline(stats, topSubjects) }} />
       )}
     </div>
   );
