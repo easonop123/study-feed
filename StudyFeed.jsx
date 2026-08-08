@@ -282,6 +282,39 @@ function play(name, step){
    few browsers throw rather than no-op. */
 const buzz = (ms) => { try { if (navigator.vibrate) navigator.vibrate(ms); } catch {} };
 
+/* ---- usage counts --------------------------------------------------------
+   How many people are making decks, marking answers and so on. NOT imported
+   from @vercel/analytics here: this file also runs as a claude.ai Artifact,
+   where that package does not exist and there is no endpoint to report to.
+   web/main.jsx hangs the real reporter on window.__sfTrack; with no reporter
+   this is a no-op, which is exactly what the Artifact wants.
+
+   COUNTS AND FIXED VALUES ONLY. Never pass subject, topic, a card, a question,
+   an answer or a filename: subject and topic are free-text boxes a student can
+   type anything into, up to and including their own name, and the notes are
+   the very thing we just promised not to keep. Numbers, and words chosen from
+   a fixed list in this file, are the whole allowance. */
+function track(event, props){
+  try {
+    const fn = (typeof window !== 'undefined') && window.__sfTrack;
+    if (typeof fn === 'function') fn(event, props || {});
+  } catch {}
+}
+
+const GRADES = ['Not yet', 'Achieved', 'Merit', 'Excellence'];
+
+/* Errors are classified before they are counted, never sent raw — an upstream
+   message can quote the prompt back, and the prompt is the student's notes. */
+function failureKind(e){
+  const m = (e && e.message) ? e.message : '';
+  if (/\b429\b/.test(m)) return 'rate_limited';
+  if (/timed out/i.test(m)) return 'timeout';
+  if (/\b410\b/.test(m) || /\b404\b/.test(m)) return 'model_gone';
+  if (/\b401\b/.test(m) || /\b403\b/.test(m) || /no API key/i.test(m)) return 'key';
+  if (/API returned 5\d\d/.test(m)) return 'upstream';
+  return 'other';
+}
+
 /* ---- version + changelog -------------------------------------------------
    APP_VERSION is the id we compare against settings.lastSeenVersion to decide
    whether to pop the "What's new" note. Bump it whenever PATCH_NOTES gains an
@@ -2654,6 +2687,13 @@ function ExtendedFace({ card, phase, deck, onReveal, demo }){
       const r = demo ? await cannedAfter(demo.mark, 1100) : await markAnswer(card, answer, deck.standard || 'NCEA Level 1');
       if (r){
         setResult(r); onReveal && onReveal();   // show feedback and the ladder together
+        /* the tour's mark is canned, so counting it would inflate the number
+           with answers nobody wrote */
+        /* Clamped to the ladder rather than forwarded. This is model output, and
+           a model that returns something unexpected should not be able to put
+           arbitrary text into the analytics. */
+        if (!demo) track('answer_marked', {
+          grade: GRADES.indexOf(r.grade) >= 0 ? r.grade : 'other' });
         /* a mark you waited 15 seconds for should announce itself */
         if (r.grade === 'Excellence'){ play('excellence'); buzz([14, 40, 14]); }
         else if (r.grade === 'Merit'){ play('milestone'); buzz(16); }
@@ -2661,7 +2701,10 @@ function ExtendedFace({ card, phase, deck, onReveal, demo }){
         else play('ok');
       }
       else setErr('Could not read the marking. Try again.');
-    } catch (e){ setErr(friendlyApiError(e) + ' Your answer is safe.'); }
+    } catch (e){
+      if (!demo) track('mark_failed', { reason: failureKind(e) });
+      setErr(friendlyApiError(e) + ' Your answer is safe.');
+    }
     finally { setBusy(false); }
   };
 
@@ -3065,7 +3108,10 @@ function RewardLayer({ fx }){
    Now it stops, celebrates, and makes carrying on a deliberate choice again. */
 function FinishedCard({ done, streak, subjects, week, headline, onPractice, onHome }){
   const [share, setShare] = useState(false);
-  useEffect(() => { play('done'); buzz([16, 60, 16, 60, 26]); }, []);
+  useEffect(() => {
+    play('done'); buzz([16, 60, 16, 60, 26]);
+    track('session_finished', { cards: done, streak: streak, subjects: (subjects || []).length });
+  }, []);
   return (
     <>
       <Confetti />
@@ -3442,6 +3488,12 @@ function Create({ onSave, settings, onSettings, onPending }){
       }
       cards = dedupeCards(cards);
       if (!cards.length){
+        /* The likelier failure than a throw: genChunk swallows its own errors
+           after retrying and leaves the reason in lastApiError, so a rate-limited
+           run lands HERE with an empty stack rather than in the catch. Counting
+           only the catch would have hidden exactly the thing worth watching on
+           launch day. */
+        track('generate_failed', { reason: lastApiError ? failureKind({ message: lastApiError }) : 'empty' });
         setErr(lastApiError ? friendlyApiError({ message: lastApiError })
                             : 'Nothing came back. Try clearer notes, a narrower topic, or a sharper photo.');
         setBusy(false); return;
@@ -3454,7 +3506,14 @@ function Create({ onSave, settings, onSettings, onPending }){
       }
       setMeta({ subject: guessSubject(source), topic: guessTopic(source), standard: lvl });
       setDrafts(cards.map(c => ({ ...c, keep: true })));
-    } catch { setErr('Generation failed. Check your connection and try again.'); }
+      /* Generated, not yet saved — the gap between this and deck_created is the
+         number that says whether the cards coming back are any good. */
+      track('cards_generated', { cards: cards.length, images: images.length,
+        lost: genLost, mode: String(cardType) });
+    } catch (e){
+      track('generate_failed', { reason: failureKind(e) });
+      setErr('Generation failed. Check your connection and try again.');
+    }
     finally { setBusy(false); setProg(null); }
   };
 
@@ -4815,6 +4874,9 @@ function ShareSheet({ kind, data, onClose }){
 
   useEffect(() => {
     let dead = false, made = '';
+    /* Opened the sheet. The gap between this and share_completed is how many
+       people look at the card and then do not post it. */
+    track('share_opened', { kind: String(kind) });
     (async () => {
       try {
         const b = await makeShareBlob(kind, data);
@@ -4832,6 +4894,9 @@ function ShareSheet({ kind, data, onClose }){
 
   const go = async () => {
     const r = await shareBlob(blob, filename, 'Made with Study Feed — ' + SHARE_URL);
+    /* result is shared / saved / cancelled / failed — on a phone "shared" means
+       the OS sheet took it, which is as far as we can ever see. */
+    track('share_completed', { kind: String(kind), result: String(r) });
     if (r === 'failed') setErr('Could not share from this browser. Try saving it instead.');
     else if (r !== 'cancelled') setState(r);
   };
@@ -5669,6 +5734,9 @@ export default function App(){
      alone — moving that person off Home would be ignoring what they just said. */
   const endTutorial = (finished) => {
     setShowTutorial(false);
+    /* The onboarding funnel: how many people who land actually get through the
+       tour to the generator, versus bailing out of it. */
+    track(finished ? 'tour_finished' : 'tour_skipped', {});
     persistSettings({ ...settings, onboarded: true, lastSeenVersion: APP_VERSION });
     if (finished) setTab('create');
   };
@@ -5705,6 +5773,9 @@ export default function App(){
       standard: (meta.standard || 'NCEA Level 1').trim(),
       cards: cards.map(({ keep, ...c }) => c),
     };
+    /* Deliberately not the subject or topic — free-text boxes. */
+    track('deck_created', { cards: deck.cards.length,
+      long: deck.cards.filter(isLongCard).length });
     persistLibrary({ decks: [...library.decks, deck] });
     setTab('feed');
   };

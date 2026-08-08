@@ -73,6 +73,37 @@ The deployed site serves `docs/app.js`, so **always rebuild after editing `Study
 
 Local render check: `.claude/launch.json` defines `studyfeed-web` (esbuild `--servedir=docs --serve=8123`). `/api/nvidia` only exists on Vercel, so AI features can't be exercised in a local static serve.
 
+## Usage counts
+
+Vercel Web Analytics. `<Analytics/>` (page views) and the `track` import both live
+ONLY in `web/main.jsx`, which hangs the reporter on `window.__sfTrack`; `StudyFeed.jsx`
+calls its own dependency-free `track()` that no-ops when that hook is absent. Same
+reason `<Analytics/>` was already kept out: the Artifact build has neither the package
+nor an endpoint.
+
+| Event | Properties |
+|---|---|
+| `deck_created` | cards, long |
+| `cards_generated` | cards, images, lost, mode |
+| `generate_failed` | reason |
+| `answer_marked` | grade |
+| `mark_failed` | reason |
+| `session_finished` | cards, streak, subjects |
+| `share_opened` / `share_completed` | kind, result |
+| `tour_finished` / `tour_skipped` | — |
+
+**Counts and fixed words only.** Never subject, topic, a card, a question, an answer or
+a filename — subject and topic are free-text boxes a student can type anything into,
+including their own name or their teacher's. Errors are classified through
+`failureKind()` rather than sent raw, because an upstream message can quote the prompt
+back and the prompt is the notes. `grade` is clamped to `GRADES`, so odd model output
+cannot inject text.
+
+`generate_failed` is counted on BOTH failure paths. `genChunk` swallows its own errors
+after retrying and leaves the reason in `lastApiError`, so a rate-limited run returns an
+empty stack rather than throwing — counting only the `catch` would miss the failure
+that matters most under load.
+
 ## Data model — four storage keys
 
 | Key | Holds |
