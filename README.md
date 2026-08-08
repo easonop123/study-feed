@@ -92,6 +92,14 @@ nor an endpoint.
 | `share_opened` / `share_completed` | kind, result |
 | `tour_finished` / `tour_skipped` | — |
 
+**Vercel Hobby cannot query custom events** — the beacon is accepted (`/_vercel/insights/event`
+returns 200) but the dashboard gates the Events panel behind Pro, so verifying by HTTP
+status is misleading. Page views, referrers and top pages all work on Hobby. Decision,
+9 Aug 2026: report to **PostHog free tier** instead. Wire it in `web/main.jsx` ONLY, by
+pointing `window.__sfTrack` at `posthog.capture` — `StudyFeed.jsx` must stay free of any
+analytics import because it also runs as an Artifact. The event list and its call sites
+are already correct and need no changes.
+
 **Counts and fixed words only.** Never subject, topic, a card, a question, an answer or
 a filename — subject and topic are free-text boxes a student can type anything into,
 including their own name or their teacher's. Errors are classified through
