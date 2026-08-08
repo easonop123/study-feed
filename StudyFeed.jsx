@@ -285,9 +285,31 @@ const buzz = (ms) => { try { if (navigator.vibrate) navigator.vibrate(ms); } cat
 /* ---- version + changelog -------------------------------------------------
    APP_VERSION is the id we compare against settings.lastSeenVersion to decide
    whether to pop the "What's new" note. Bump it whenever PATCH_NOTES gains an
-   entry. Newest first; the first element is the current release. */
-const APP_VERSION = '1.7.1';
+   entry. Newest first; the first element is the current release.
+
+   The public version series restarts at 1.0.0 on launch day. Everything before
+   it was built before anyone was using the app, and opening with seven releases
+   of development history says "you missed a lot" to someone on their first day
+   — so PRELAUNCH_NOTES is kept, but only behind the second tab on the Updates
+   screen. Nothing in it ever reaches the pop-up.
+
+   The two lists are compared by string equality, never ordering, so the old
+   1.x numbers sitting above the new 1.0.0 cannot cause a mis-fire. They are not
+   shown next to the pre-launch entries either — those were dev builds and the
+   numbers mean nothing to a student. */
+const APP_VERSION = '1.0.0';
 const PATCH_NOTES = [
+  { v: '1.0.0', date: '2026-08-07', title: 'Study Feed is here', items: [
+    'Turn your own notes, slides or a photo of the whiteboard into cards — including real exam-style long answers.',
+    'Write a full answer and have it marked against Achieved, Merit and Excellence, with the exact change that moves you up a grade.',
+    'Stuck mid-answer? Writing points first, then sentence starters — never the answer itself.',
+    'Free, no account, nothing to install.',
+  ] },
+];
+
+/* Everything below shipped before launch. Kept for the record; shown only under
+   Updates → Before launch. */
+const PRELAUNCH_NOTES = [
   { v: '1.7.1', date: '2026-08-06', title: 'Launch polish', items: [
     'Clearer about your data: your decks are saved on your device, and what you paste or upload is sent to an AI provider to write the cards. Said on the Create screen and in the site footer.',
     'Generating uses fewer tokens for the same cards, so big batches are less likely to get cut off.',
@@ -4740,14 +4762,15 @@ function ModalScrim({ onClose, children, maxW = 460 }){
 
 /* Shared changelog markup — used by both the pop-up (WhatsNew) and the tab
    (Changelog) so there's one source of truth for how releases are shown. */
-function PatchNotesList(){
+function PatchNotesList({ notes, showVersion }){
+  const list = notes || PATCH_NOTES;
   return (
     <div>
-      {PATCH_NOTES.map((rel, ri) => (
+      {list.map((rel, ri) => (
         <div key={rel.v} style={{ marginTop: ri ? 22 : 0 }}>
           <div className="flex items-baseline gap-2">
             <Title style={{ fontSize: 19 }}>{rel.title}</Title>
-            <Sub style={{ fontSize: 12 }}>v{rel.v} · {rel.date}</Sub>
+            <Sub style={{ fontSize: 12 }}>{showVersion === false ? rel.date : 'v' + rel.v + ' · ' + rel.date}</Sub>
           </div>
           <div className="flex flex-col gap-2" style={{ marginTop: 12 }}>
             {rel.items.map((it, i) => (
@@ -5203,14 +5226,27 @@ function Tutorial({ onDone, onNavigate, tab }){
   );
 }
 
-/* Full-page version of the changelog (its own nav tab). */
+/* Full-page version of the changelog (its own nav tab). Two sections: what has
+   shipped since launch, and the development history behind a second tab for
+   anyone who wants it. */
 function Changelog(){
+  const [tab, setTab] = useState('now');
+  const pre = tab === 'before';
   return (
     <div>
       <Title style={{ marginBottom: 6 }}>What's new</Title>
-      <Sub style={{ marginBottom: 16 }}>Every update to Study Feed, newest first.</Sub>
+      <Sub style={{ marginBottom: 14 }}>Every update to Study Feed, newest first.</Sub>
+      <div style={{ marginBottom: 14 }}>
+        <Segmented value={tab} onChange={setTab}
+          options={[{ v: 'now', label: 'Updates' }, { v: 'before', label: 'Before launch' }]} />
+      </div>
       <Card style={{ padding: 18, boxShadow: SH.raised }}>
-        <PatchNotesList />
+        {pre && (
+          <Sub style={{ fontSize: 12.5, marginBottom: 16, paddingBottom: 14, borderBottom: `1px solid ${T.border}` }}>
+            How Study Feed got built, before anyone was using it.
+          </Sub>
+        )}
+        <PatchNotesList notes={pre ? PRELAUNCH_NOTES : PATCH_NOTES} showVersion={!pre} />
       </Card>
     </div>
   );
