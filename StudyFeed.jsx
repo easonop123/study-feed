@@ -286,8 +286,13 @@ const buzz = (ms) => { try { if (navigator.vibrate) navigator.vibrate(ms); } cat
    APP_VERSION is the id we compare against settings.lastSeenVersion to decide
    whether to pop the "What's new" note. Bump it whenever PATCH_NOTES gains an
    entry. Newest first; the first element is the current release. */
-const APP_VERSION = '1.7.0';
+const APP_VERSION = '1.7.1';
 const PATCH_NOTES = [
+  { v: '1.7.1', date: '2026-08-06', title: 'Launch polish', items: [
+    'Clearer about your data: your decks are saved on your device, and what you paste or upload is sent to an AI provider to write the cards. Said on the Create screen and in the site footer.',
+    'Generating uses fewer tokens for the same cards, so big batches are less likely to get cut off.',
+    'A friendlier message when the app is busy.',
+  ] },
   { v: '1.7.0', date: '2026-08-06', title: 'Something to show for it', items: [
     'Share your week straight from the Home screen, under This week.',
     'Clear everything due and you can share that session too — cards done, subjects, streak — as a card built for your story.',
@@ -1242,6 +1247,27 @@ const MODEL_VISION = 'meta/llama-3.2-11b-vision-instruct';
    reasoning would pollute the JSON the parser expects, so turn it off. */
 const isReasoner = (m) => /deepseek|nemotron/i.test(m || '');
 
+/* gpt-oss also reasons, but it does NOT honour chat_template_kwargs — measured
+   against the live endpoint, that flag left the reasoning untouched. It takes
+   reasoning_effort instead, and "low" cut ~22% of completion tokens on the same
+   prompt while returning the identical cards.
+
+   That matters twice over: reasoning tokens are spent out of the same
+   max_tokens budget as the cards, so they are a truncation risk on a big batch,
+   and they are billed as output the moment this moves off the free tier.
+
+   Scoped to the model family that was actually tested. An unknown parameter is
+   a 400 from NVIDIA and a dead generate button, so this must never be sent to a
+   model nobody has tried it on.
+
+   GENERATION ONLY, and the caller has to ask for it — MODEL_SMART and MODEL_GEN
+   are currently the same model id, so nothing here can tell the two apart.
+   Generation is structured extraction and the output was byte-for-byte the same
+   with the effort turned down; marking is a judgement about a student's writing
+   and is the thing the app is actually for. Cutting its thinking to save tokens
+   has not been tested and is not a trade worth making blind. */
+const takesReasoningEffort = (m) => /gpt-oss/i.test(m || '');
+
 function pickModel(mode, settings){
   // Generation is all Qwen for now — it returns clean structured output and is
   // the free NVIDIA endpoint. (saveUsage kept for later multi-model routing.)
@@ -1261,7 +1287,12 @@ function friendlyApiError(e){
   if (/\b401\b/.test(m) || /\b403\b/.test(m)) return 'The AI key was rejected by NVIDIA — the site owner needs to check it.';
   if (/\b404\b/.test(m)) return 'That model wasn\'t found — it may have been removed from NVIDIA\'s catalog. ' + m;
   if (/\b410\b/.test(m)) return 'This AI model was retired by NVIDIA — the app needs a quick update to point at a current one. ' + m;
-  if (/\b429\b/.test(m)) return 'Rate limited (NVIDIA\'s free tier allows ~40 requests/min) — wait a moment and try again.';
+  /* The likeliest error on launch day by a distance: the free tier's ~40
+     requests/minute is shared across everyone using the app at once, so a spike
+     hits this and not any one student's doing. Don't hand them our vendor's
+     rate limit as if it were their problem, and don't say "try again" in a way
+     that invites everyone to hammer it in the same second. */
+  if (/\b429\b/.test(m)) return 'Study Feed is busy right now — too many people generating at once. Give it about a minute and it\'ll go through.';
   if (/timed out/i.test(m)) return 'The AI ran out of time, even after retrying and splitting the notes up. It\'s usually a slow connection — try again, or paste a smaller section.';
   if (/no images/i.test(m)) return m;
   // Reached only after the retries gave up, so don't suggest trying immediately.
@@ -1331,7 +1362,7 @@ function isRetryable(e){
   return /timed out|could not reach/i.test(m) || /API returned (429|5\d\d)/.test(m);
 }
 
-async function postChat(messages, maxTokens, model){
+async function postChat(messages, maxTokens, model, lowEffort){
   const body = {
     model,
     messages,
@@ -1342,6 +1373,10 @@ async function postChat(messages, maxTokens, model){
   };
   // Reasoning models: switch off chain-of-thought so replies are clean JSON.
   if (isReasoner(model)) body.chat_template_kwargs = { thinking: false };
+  // gpt-oss ignores that flag; this is the lever it does take. Opt-in only:
+  // MODEL_SMART and MODEL_GEN are the same model id, so the caller has to say
+  // so — see takesReasoningEffort for why marking is deliberately left out.
+  if (lowEffort && takesReasoningEffort(model)) body.reasoning_effort = 'low';
 
   let last;
   for (let i = 0; i < ATTEMPT_MS.length; i++){
@@ -1355,8 +1390,8 @@ async function postChat(messages, maxTokens, model){
   throw last;
 }
 /* Everything except the chat helper sends exactly one user turn. */
-const postMessages = (content, maxTokens, model) => postChat([{ role: 'user', content }], maxTokens, model);
-const callModel = (prompt, maxTokens = 1000, model = MODEL_GEN) => postMessages(prompt, maxTokens, model);
+const postMessages = (content, maxTokens, model, lowEffort) => postChat([{ role: 'user', content }], maxTokens, model, lowEffort);
+const callModel = (prompt, maxTokens = 1000, model = MODEL_GEN, lowEffort) => postMessages(prompt, maxTokens, model, lowEffort);
 /* Read ONE slide/photo with the vision model and return it as plain study text
    (all wording transcribed, diagrams/graphs/formulae described). `img` is a
    { media_type, data } object from resizeImage. */
@@ -1415,7 +1450,7 @@ let genLost = 0;
    below that the chunks are too small to be worth cards. */
 async function genChunk(chunk, mode, level, model, pctLong, strict, depth){
   try {
-    const reply = await callModel(promptFor(mode, chunk, level, pctLong, strict), GEN_MAX_TOKENS, model);
+    const reply = await callModel(promptFor(mode, chunk, level, pctLong, strict), GEN_MAX_TOKENS, model, true);
     return parseReply(mode, reply);
   } catch (e){
     noteApiError(e);
@@ -3505,6 +3540,17 @@ function Create({ onSave, settings, onSettings, onPending }){
         <Btn full kind="primary" onClick={run} disabled={busy}>
           {busy ? (mode === 'manual' ? 'Reading…' : 'Generating…') : (mode === 'manual' ? 'Read cards' : 'Generate cards')}
         </Btn>
+        {/* Said at the point the upload actually happens, not buried in a policy
+            page. "Your decks stay on your device" is true of storage and was the
+            only thing being said — which left students to assume nothing left
+            the device at all, while their teacher's slides were being posted to
+            a third party to be read. */}
+        {mode !== 'manual' && (
+          <Sub style={{ fontSize: 12, marginTop: 10, textAlign: 'center', lineHeight: 1.5 }}>
+            What you paste or upload is sent to an AI provider (NVIDIA) to write the cards.
+            Your decks are saved on this device.
+          </Sub>
+        )}
       </div>
     </div>
   );
