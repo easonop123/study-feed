@@ -98,11 +98,11 @@ Output Directory is `docs`, so files there are what get served from `/`. Then ad
 
 <meta property="og:title" content="Study Feed — flashcards get you Achieved">
 <meta property="og:description" content="Excellence is a writing problem. Study Feed marks what you actually write, against the real NCEA criteria, and shows you the sentence that gets you the next grade.">
-<meta property="og:image" content="https://study-feed.vercel.app/og-image.png">
+<meta property="og:image" content="https://studyfeed.app/og-image.png">
 <meta property="og:image:width" content="1200">
 <meta property="og:image:height" content="630">
 <meta name="twitter:card" content="summary_large_image">
-<meta name="twitter:image" content="https://study-feed.vercel.app/og-image.png">
+<meta name="twitter:image" content="https://studyfeed.app/og-image.png">
 ```
 
 **The og:image URL must be absolute.** Relative paths silently fail in iMessage, WhatsApp,
