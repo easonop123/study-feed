@@ -549,7 +549,7 @@ const SHARE_W = 1080, SHARE_H = 1920;   // 9:16, the story format everywhere
    is a one-line change — but it is NOT the only place the domain appears:
    docs/index.html has og:url and two absolute og:image/twitter:image URLs that
    have to move with it, and CLAUDE.md quotes them. Grep for vercel.app. */
-const SHARE_URL = 'study-feed.vercel.app';
+const SHARE_URL = 'studyfeed.app';
 
 /* ---- what made this session worth posting -------------------------------
    The first version said "EVERYTHING DUE, DONE" every single time, so someone
