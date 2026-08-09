@@ -75,11 +75,11 @@ Local render check: `.claude/launch.json` defines `studyfeed-web` (esbuild `--se
 
 ## Usage counts
 
-Vercel Web Analytics. `<Analytics/>` (page views) and the `track` import both live
-ONLY in `web/main.jsx`, which hangs the reporter on `window.__sfTrack`; `StudyFeed.jsx`
-calls its own dependency-free `track()` that no-ops when that hook is absent. Same
-reason `<Analytics/>` was already kept out: the Artifact build has neither the package
-nor an endpoint.
+PostHog for custom events, Vercel Web Analytics for page views. Both live ONLY in
+`web/main.jsx`, which hangs the reporter on `window.__sfTrack`; `StudyFeed.jsx` calls its
+own dependency-free `track()` that no-ops when that hook is absent. Same reason
+`<Analytics/>` was already kept out: the Artifact build has neither the package nor an
+endpoint, and there it stays a silent no-op.
 
 | Event | Properties |
 |---|---|
@@ -94,11 +94,36 @@ nor an endpoint.
 
 **Vercel Hobby cannot query custom events** — the beacon is accepted (`/_vercel/insights/event`
 returns 200) but the dashboard gates the Events panel behind Pro, so verifying by HTTP
-status is misleading. Page views, referrers and top pages all work on Hobby. Decision,
-9 Aug 2026: report to **PostHog free tier** instead. Wire it in `web/main.jsx` ONLY, by
-pointing `window.__sfTrack` at `posthog.capture` — `StudyFeed.jsx` must stay free of any
-analytics import because it also runs as an Artifact. The event list and its call sites
-are already correct and need no changes.
+status is misleading. Page views, referrers and top pages all work on Hobby. Hence
+**PostHog free tier** (decided 9 Aug 2026, wired 9 Aug 2026) for the table above.
+`<Analytics/>` is kept for now because page views still work and cost nothing; once
+PostHog is confirmed reporting it is redundant and can go, which would also empty the
+`define` block in `build.mjs` — that block exists only for `@vercel/analytics`.
+
+### PostHog settings that are load-bearing
+
+Set in `posthog.init`, and imported from `posthog-js/dist/module.slim` rather than the
+package root:
+
+- **`autocapture: false`** — autocapture records the text of whatever gets clicked, and on
+  this app that is the student's own cards. The slim build ships without the autocapture,
+  session-replay and survey code at all, so this is enforced by the bundle rather than by
+  a flag someone can flip back. It is also about half the bytes.
+- **`person_profiles: 'never'`** — nobody signs in, so there is no person to build. Events
+  still carry an anonymous device id, so unique-device counts still work.
+- **`persistence: 'localStorage'`** — same anonymous id, no cookie, no banner question.
+- `disable_session_recording` / `disable_surveys` — belt and braces on top of the slim build.
+
+Verified 9 Aug 2026 against a deliberately invalid key: PostHog's ingest endpoint returned
+`401 authentication_failed`, which is proof the transport works end to end — with a real
+key the same path returns 200. Note that **the browser network panel does not show these
+requests** and neither does patching `fetch`/`sendBeacon`/`XHR`; the reliable check is
+`posthog.debug(true)` and the `send "<event>"` line in the console. Don't conclude from a
+quiet network tab that nothing is being sent.
+
+Auto-attached properties were audited the same day: browser/OS/screen/session metadata plus
+`$current_url`, which is safe here only because the app puts nothing user-typed in the URL —
+no query string, no hash routing. Keep it that way.
 
 **Counts and fixed words only.** Never subject, topic, a card, a question, an answer or
 a filename — subject and topic are free-text boxes a student can type anything into,
