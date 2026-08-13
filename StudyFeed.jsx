@@ -1559,13 +1559,89 @@ Return ONLY JSON:
 { "grade": "Not yet" | "Achieved" | "Merit" | "Excellence",
   "hit": [ up to 3 things that earned credit ],
   "missing": [ up to 3 specific things needed to reach the NEXT grade up ],
-  "lift": one sentence naming the single change that would most raise the grade }
-Be specific to THIS answer. Reward construction (mechanism, links, context) over word count.`;
+  "lift": one sentence naming the single change that would most raise the grade,
+  "notes": [ 2-5 objects, each { "quote": a phrase copied WORD FOR WORD from the student answer above, "kind": "good" | "weak", "note": one short sentence saying why that phrase earned credit, or what is wrong with it } ] }
+Be specific to THIS answer. Reward construction (mechanism, links, context) over word count.
+
+RULES FOR "notes" — these are shown highlighted on top of the student's own writing, so they must line up with it exactly:
+- "quote" must be an EXACT substring of the student answer. Copy it character for character. Do not paraphrase, correct spelling, or join text from two different sentences.
+- Keep each quote short — a clause or a phrase, roughly 3 to 15 words.
+- Quotes must not overlap each other.
+- BALANCE IS NOT OPTIONAL. Unless you graded this answer Excellence, at least one note MUST be "weak" — you have just said the answer is not yet at the top grade, so something in it is holding it there. Find that phrase and point at it. An all-"good" set of notes on an answer graded below Excellence is wrong.
+- A "weak" note is not an insult. Vague wording, a missing mechanism, a sentence that restates the question, or a common misconception all qualify.
+- If the answer is too short or empty to quote meaningfully, return "notes": [].`;
 }
+/* Bigger ceiling than the other calls because this one now carries the inline
+   notes as well as the grade. Marking is the critical path — if the reply is
+   truncated the JSON does not close and the student loses the whole mark, not
+   just the highlights. */
 async function markAnswer(card, answer, level){
-  const reply = await callModel(markPrompt(card, answer, level), 1000, MODEL_SMART);
+  const reply = await callModel(markPrompt(card, answer, level), 1700, MODEL_SMART);
   const objs = rescueObjects(reply);
   return objs[0] || null;
+}
+
+/* ---- locating the marker's notes in the student's own text ---------------
+   The model is asked to quote the answer word for word, and mostly does. It
+   also sometimes tidies punctuation, swaps a straight apostrophe for a curly
+   one, or collapses a line break — so an exact indexOf alone would silently
+   drop good notes. Anything that still cannot be found is dropped rather than
+   approximated: a highlight sitting over the wrong words is worse than no
+   highlight, because the student would read it as the marker's judgement of a
+   sentence they didn't write. */
+function quoteToRegex(quote){
+  let out = '';
+  for (const ch of quote){
+    if (/\s/.test(ch)){ if (!out.endsWith('\\s+')) out += '\\s+'; continue; }
+    if (ch === "'" || ch === '‘' || ch === '’'){ out += "['‘’]"; continue; }
+    if (ch === '"' || ch === '“' || ch === '”'){ out += '["“”]'; continue; }
+    if (ch === '-' || ch === '–' || ch === '—'){ out += '[-–—]'; continue; }
+    out += ch.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  }
+  return out;
+}
+
+function locateNotes(answer, notes){
+  const text = String(answer || '');
+  if (!text || !Array.isArray(notes)) return [];
+  const found = [];
+  notes.forEach((n) => {
+    const quote = (n && typeof n.quote === 'string') ? n.quote.trim() : '';
+    const note = (n && typeof n.note === 'string') ? n.note.trim() : '';
+    /* one or two characters would highlight a stray letter mid-word */
+    if (quote.length < 4 || !note) return;
+    let at = text.indexOf(quote);
+    let len = quote.length;
+    if (at < 0){
+      try {
+        const m = new RegExp(quoteToRegex(quote), 'i').exec(text);
+        if (!m || !m[0]) return;
+        at = m.index; len = m[0].length;
+      } catch { return; }
+    }
+    found.push({ at, len, kind: n.kind === 'good' ? 'good' : 'weak', note });
+  });
+  /* Overlaps would nest one <mark> inside another and scramble the numbering,
+     so the earlier span wins and the later one is dropped. */
+  found.sort((a, b) => a.at - b.at || b.len - a.len);
+  const kept = [];
+  let cursor = 0;
+  found.forEach((f) => { if (f.at >= cursor){ kept.push(f); cursor = f.at + f.len; } });
+  return kept;
+}
+
+/* The answer sliced into plain and highlighted runs, ready to render. */
+function segmentAnswer(answer, located){
+  const text = String(answer || '');
+  const segs = [];
+  let pos = 0;
+  located.forEach((l, i) => {
+    if (l.at > pos) segs.push({ text: text.slice(pos, l.at) });
+    segs.push({ text: text.slice(l.at, l.at + l.len), mark: l, n: i + 1 });
+    pos = l.at + l.len;
+  });
+  if (pos < text.length) segs.push({ text: text.slice(pos) });
+  return segs;
 }
 
 /* Writing points — a scaffold when you're stuck, NOT the answer. Prompts and
@@ -1688,12 +1764,15 @@ ${atTop
 
 Return ONLY JSON:
 { "target": "${target}",
-  "steps": [ 2-4 objects, each { "move": "the edit to make, as an instruction (start with a verb)", "where": "which part of THEIR answer it applies to — quote 3-6 of their own words", "example": "that part rewritten the way it should read, one sentence, using the real subject content" } ],
+  "gap": "2-3 sentences, spoken to the student, naming exactly what separates their current grade from ${target} on THIS question — what the marker is looking for that their answer does not yet do. Name the thinking move, not just the topic.",
+  "steps": [ 2-4 objects, each { "move": "the edit to make, as an instruction (start with a verb)", "where": "which part of THEIR answer it applies to — quote 3-6 of their own words", "example": "that part rewritten the way it should read, one sentence, using the real subject content", "why": "one sentence: what this edit gives the marker that the original did not, in the language of the grade criteria" } ],
   "habit": "one sentence: the habit that would earn this grade next time without being told" }
-Quote their real words in "where". Write "example" as a finished sentence they could have written — this is feedback after marking, so showing the better version is the point. Do not invent data, quotes or NZQA codes.`;
+Quote their real words in "where". Write "example" as a finished sentence they could have written — this is feedback after marking, so showing the better version is the point.
+
+"gap" and "why" are the parts that teach. Be concrete about the level of thinking each grade wants — describing what happens, explaining why it happens by naming the mechanism, and evaluating or justifying with linked reasoning are different demands, and the command verb "${card.verb}" decides which one this question is asking for. Say which one they did and which one they need. Do not invent data, quotes or NZQA codes.`;
 }
 async function getUpgrade(card, answer, result, level){
-  const reply = await callModel(upgradePrompt(card, answer, result, level), 1100, MODEL_SMART);
+  const reply = await callModel(upgradePrompt(card, answer, result, level), 1600, MODEL_SMART);
   const objs = rescueObjects(reply);
   return objs[0] || null;
 }
@@ -1961,6 +2040,7 @@ const ICON_PATHS = {
   sparkle:  'M12 3l1.9 5.1L19 10l-5.1 1.9L12 17l-1.9-5.1L5 10l5.1-1.9zM18.5 15.5l.8 2.2 2.2.8-2.2.8-.8 2.2-.8-2.2-2.2-.8 2.2-.8z',
   speaker:  'M11 5.5 6.8 9H4a1 1 0 0 0-1 1v4a1 1 0 0 0 1 1h2.8L11 18.5zM15.2 9.4a3.6 3.6 0 0 1 0 5.2M18 6.8a7.4 7.4 0 0 1 0 10.4',
   muted:    'M11 5.5 6.8 9H4a1 1 0 0 0-1 1v4a1 1 0 0 0 1 1h2.8L11 18.5zM16 10l5 4M21 10l-5 4',
+  pencil:   'M4.5 19.5h3.6L19.4 8.2a2.3 2.3 0 0 0-3.2-3.2L4.5 15.9zM14.7 6.5l2.8 2.8',
 };
 
 /* `fill` is only for the couple of glyphs that read better solid (the flame on
@@ -2329,7 +2409,8 @@ function StudyCard({ card, deck, onGrade, reduceMotion, prog, practice, onFeedba
         </div>
       )}
 
-      {isLong ? <ExtendedFace card={card} phase={phase} deck={deck} onReveal={() => setPhase('reveal')} />
+      {isLong ? <ExtendedFace card={card} phase={phase} deck={deck}
+            onReveal={() => setPhase('reveal')} onBack={() => setPhase('attempt')} />
         : isMcq ? <McqFace card={card} phase={phase} deck={deck} pick={pick}
             onPick={(i) => {
               setPick(i); setPhase('reveal');
@@ -2620,7 +2701,7 @@ const cannedAfter = (value, ms = 700) => new Promise(r => setTimeout(() => r(val
 
 /* `demo` swaps the three model calls for fixed answers and nothing else — the
    markup, the states and the ordering are the ones a student meets later. */
-function ExtendedFace({ card, phase, deck, onReveal, demo }){
+function ExtendedFace({ card, phase, deck, onReveal, onBack, demo }){
   const [answer, setAnswer] = useState('');
   const [busy, setBusy] = useState(false);
   const [result, setResult] = useState(null);
@@ -2659,6 +2740,20 @@ function ExtendedFace({ card, phase, deck, onReveal, demo }){
   };
 
   useEffect(() => { setAnswer(''); setResult(null); setErr(''); setHints(null); setHintErr(''); setBig(null); setBigErr(''); selRef.current = { start: 0, end: 0 }; }, [card.id]);
+
+  /* Returning to the box to rewrite has to land the caret in it. The textarea
+     is unmounted while the mark is showing, so this waits for the phase to flip
+     and the box to exist rather than firing at click time, when the ref is
+     still the detached node from the last attempt. Caret goes to the end — the
+     student is continuing a paragraph, not starting one. */
+  const wantFocus = useRef(false);
+  useEffect(() => {
+    if (phase !== 'attempt' || !wantFocus.current) return;
+    wantFocus.current = false;
+    const ta = taRef.current;
+    if (!ta) return;
+    try { ta.focus(); ta.setSelectionRange(ta.value.length, ta.value.length); } catch {}
+  }, [phase]);
 
   const doHints = async () => {
     setHintBusy(true); setHintErr('');
@@ -2816,8 +2911,17 @@ function ExtendedFace({ card, phase, deck, onReveal, demo }){
           it is the one child of MarkResult that fires its own model call. It now
           runs canned like the rest, so the tour can hand over a mark you can
           actually act on rather than a dead end. */}
+      {/* The mark stays on screen while they rewrite — the feedback is the
+          reason for the edit, so hiding it to make room for the box would be
+          backwards. Only offered once the card has flipped to reveal; during
+          the first attempt the textarea is already right there. */}
       {result && <MarkResult r={result} card={card} answer={answer}
-        level={deck.standard || 'NCEA Level 1'} deck={deck} demo={demo} />}
+        level={deck.standard || 'NCEA Level 1'} deck={deck} demo={demo}
+        onEdit={(phase === 'reveal' && onBack) ? () => {
+          wantFocus.current = true;
+          if (!demo) track('answer_reworked', {});
+          onBack();
+        } : null} />}
 
       {phase === 'reveal' && (
         <div style={REVEAL}>
@@ -2884,11 +2988,21 @@ function UpgradePath({ card, answer, r, level, demo }){
         <Chip colour={T.green} solid>{atTop ? 'Making it airtight' : 'Getting to ' + (got.target || target)}</Chip>
         <Sub style={{ fontSize: 11.5 }}>Changes to YOUR answer</Sub>
       </div>
+      {/* Named before the edits, because a student who only follows the steps
+          fixes this one answer, and a student who understands the gap fixes the
+          next one too. */}
+      {got.gap && (
+        <div style={{ marginBottom: 11, background: rgba(T.green, 0.09), borderRadius: R.well,
+          padding: '11px 13px', fontFamily: SANS, fontSize: 14, lineHeight: 1.6, color: T.ink }}>
+          {got.gap}
+        </div>
+      )}
       <div className="flex flex-col gap-2">
         {steps.map((s, i) => {
           const move = typeof s === 'string' ? s : (s && s.move) || '';
           const where = (s && s.where) || '';
           const example = (s && s.example) || '';
+          const why = (s && s.why) || '';
           return (
             <div key={i} style={{ background: T.surface, border: `1px solid ${T.border}`,
               borderRadius: R.input, padding: '11px 13px' }}>
@@ -2908,6 +3022,11 @@ function UpgradePath({ card, answer, r, level, demo }){
                   {example}
                 </div>
               )}
+              {why && (
+                <div style={{ marginTop: 7, paddingLeft: 20, fontFamily: SANS, fontSize: 13, color: T.muted, lineHeight: 1.5 }}>
+                  <b style={{ color: T.green, fontWeight: 700 }}>Why it scores: </b>{why}
+                </div>
+              )}
             </div>
           );
         })}
@@ -2921,7 +3040,73 @@ function UpgradePath({ card, answer, r, level, demo }){
   );
 }
 
-function MarkResult({ r, card, answer, level, deck, demo }){
+/* Your answer, marked up — the thing a teacher hands back.
+
+   Two problems this solves at once. Pressing Mark used to take the answer off
+   the screen entirely: the feedback said "you never named the force" about a
+   paragraph the student could no longer see, so they had to trust it from
+   memory. And feedback about a whole answer is vague by construction, where a
+   line drawn under six particular words is not.
+
+   Highlights degrade quietly. If the model quotes something it did not copy
+   properly, locateNotes drops that note and the answer still renders — plain,
+   readable, and still there. Losing a highlight is a much smaller failure than
+   putting one over the wrong sentence. */
+function AnnotatedAnswer({ answer, notes, defaultOpen = true }){
+  const [open, setOpen] = useState(defaultOpen);
+  const located = useMemo(() => locateNotes(answer, notes), [answer, notes]);
+  const segs = useMemo(() => segmentAnswer(answer, located), [answer, located]);
+  const words = String(answer || '').trim() ? String(answer).trim().split(/\s+/).length : 0;
+  const tint = (kind) => kind === 'good' ? T.green : T.amber;
+
+  return (
+    <div style={{ marginTop: 12, paddingTop: 12, borderTop: `1px dashed ${T.border}` }}>
+      <button className="sf-tap" onClick={() => setOpen(o => !o)}
+        style={{ background: 'none', border: 'none', padding: 0, cursor: 'pointer', width: '100%' }}>
+        <div className="flex items-center justify-between" style={{ marginBottom: open ? 10 : 0 }}>
+          <Chip colour={T.muted}>What you wrote</Chip>
+          <Sub style={{ fontSize: 11.5 }}>
+            {located.length > 0 ? `${located.length} note${located.length === 1 ? '' : 's'} · ` : ''}
+            {words} words · {open ? 'hide' : 'show'}
+          </Sub>
+        </div>
+      </button>
+
+      {open && (
+        <>
+          <div style={{ background: T.well, border: `1px solid ${T.border}`, borderRadius: R.well,
+            padding: '12px 14px', fontFamily: SANS, fontSize: 14.5, lineHeight: 1.7, color: T.ink,
+            whiteSpace: 'pre-wrap' }}>
+            {segs.map((s, i) => s.mark ? (
+              <span key={i} style={{ background: rgba(tint(s.mark.kind), 0.18),
+                borderBottom: `2px solid ${tint(s.mark.kind)}`, borderRadius: 3, padding: '1px 0' }}>
+                {s.text}
+                <sup style={{ fontSize: 10, fontWeight: 800, color: tint(s.mark.kind), padding: '0 1px 0 3px' }}>{s.n}</sup>
+              </span>
+            ) : <span key={i}>{s.text}</span>)}
+          </div>
+
+          {located.length > 0 && (
+            <div className="flex flex-col gap-2" style={{ marginTop: 10 }}>
+              {located.map((l, i) => (
+                <div key={i} className="flex gap-2" style={{ alignItems: 'flex-start' }}>
+                  <span style={{ fontFamily: SANS, fontSize: 11, fontWeight: 800, color: tint(l.kind),
+                    lineHeight: '20px', flexShrink: 0, minWidth: 12 }}>{i + 1}</span>
+                  <span style={{ fontFamily: SANS, fontSize: 13.5, lineHeight: 1.5, color: T.muted }}>
+                    <b style={{ color: tint(l.kind), fontWeight: 700 }}>{l.kind === 'good' ? 'Works: ' : 'Weak: '}</b>
+                    {l.note}
+                  </span>
+                </div>
+              ))}
+            </div>
+          )}
+        </>
+      )}
+    </div>
+  );
+}
+
+function MarkResult({ r, card, answer, level, deck, demo, onEdit }){
   const gc = r.grade === 'Excellence' ? T.green : r.grade === 'Merit' ? T.accent : r.grade === 'Achieved' ? T.muted : T.red;
   const [share, setShare] = useState(false);
   /* Excellence only. Merit is a good day and Achieved is most days; if the card
@@ -2949,7 +3134,18 @@ function MarkResult({ r, card, answer, level, deck, demo }){
         </div>
       )}
       {r.lift && <div style={{ marginTop: 10, fontFamily: SANS, fontSize: 15, fontWeight: 600, color: T.ink, lineHeight: 1.5 }}>{r.lift}</div>}
+      {answer && <AnnotatedAnswer answer={answer} notes={r.notes} />}
       {card && answer && <UpgradePath card={card} answer={answer} r={r} level={level} demo={demo} />}
+      {/* Writing it again with the feedback still on screen is the whole loop —
+          and the second attempt is where the grade actually moves. The answer is
+          kept, not cleared: this is an edit, not a fresh start. */}
+      {onEdit && (
+        <div style={{ marginTop: 12 }}>
+          <Btn full kind="soft" onClick={onEdit} style={{ fontSize: 14 }}>
+            <span className="flex items-center justify-center gap-2"><Ico name="pencil" size={15} />Improve this answer and mark again</span>
+          </Btn>
+        </div>
+      )}
       {canShare && (
         <div style={{ marginTop: 6, paddingTop: 6, borderTop: `1px dashed ${T.border}` }}>
           <ShareLink label="Share this Excellence" onClick={() => setShare(true)} />
@@ -4988,6 +5184,18 @@ const TUT_MARK = {
     'Follow the energy — the cyclist’s kinetic energy is transferred to heat and sound, so there is none left to keep them moving.',
   ],
   lift: 'You have said what happens. The next grade up needs the unbalanced force named AND the energy followed through to where it ends up.',
+  /* Every quote here is copied out of TUT_ANSWER character for character, which
+     is exactly what markPrompt demands of the model — if one of these stops
+     matching, locateNotes drops it and the tour quietly shows fewer highlights
+     than it is describing. */
+  notes: [
+    { quote: 'friction between the tyres and the road', kind: 'good',
+      note: 'The force is named and located, not just called "resistance".' },
+    { quote: 'pushes against the movement', kind: 'good',
+      note: 'Direction is stated, which is what turns a label into an explanation.' },
+    { quote: 'the bike loses speed until it stops', kind: 'weak',
+      note: 'This restates the question. Say WHY the speed goes — the forces are unbalanced, and the kinetic energy has gone somewhere.' },
+  ],
 };
 
 const TUT_HINTS = [
@@ -5009,13 +5217,16 @@ const TUT_STARTERS = [
    that none of it is saved. */
 const TUT_UPGRADE = {
   target: 'Excellence',
+  gap: 'Right now you describe what happens: friction acts, the bike slows. "Explain" asks for the mechanism underneath that — why the motion changes, not just that it does. The two things carrying the top marks here are the resultant force being unbalanced, and the energy going somewhere specific.',
   steps: [
     { move: 'Say the forces are unbalanced, not just that one is present.',
       where: '“friction between the tyres and the road”',
-      example: 'With nothing driving the bike forward, friction is now unbalanced, so the resultant force acts backwards against the direction of travel.' },
+      example: 'With nothing driving the bike forward, friction is now unbalanced, so the resultant force acts backwards against the direction of travel.',
+      why: 'Naming the resultant force is what makes this an explanation of the deceleration rather than a description of it.' },
     { move: 'Follow the energy to where it actually ends up.',
       where: '“the bike loses speed until it stops”',
-      example: 'The kinetic energy the cyclist had is transferred to heat and sound at the tyres and axle, so there is none left to keep them moving.' },
+      example: 'The kinetic energy the cyclist had is transferred to heat and sound at the tyres and axle, so there is none left to keep them moving.',
+      why: 'Energy that is only said to be "lost" reads as unfinished; tracking it to heat and sound closes the mechanism.' },
   ],
   habit: 'When a question asks why something slows or stops, name the unbalanced force AND say where the energy went. That pair is what the top grade is looking for.',
 };
