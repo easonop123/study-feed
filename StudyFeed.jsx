@@ -3076,7 +3076,10 @@ function AnnotatedAnswer({ answer, notes, defaultOpen = true }){
         <>
           <div style={{ background: T.well, border: `1px solid ${T.border}`, borderRadius: R.well,
             padding: '12px 14px', fontFamily: SANS, fontSize: 14.5, lineHeight: 1.7, color: T.ink,
-            whiteSpace: 'pre-wrap' }}>
+            /* pre-wrap keeps the student's own line breaks; overflowWrap stops a
+               single pasted URL or unspaced formula pushing the card sideways on
+               a phone, which pre-wrap alone will happily do */
+            whiteSpace: 'pre-wrap', overflowWrap: 'anywhere' }}>
             {segs.map((s, i) => s.mark ? (
               <span key={i} style={{ background: rgba(tint(s.mark.kind), 0.18),
                 borderBottom: `2px solid ${tint(s.mark.kind)}`, borderRadius: 3, padding: '1px 0' }}>
