@@ -1,4 +1,7 @@
 import React, { useState, useEffect, useRef, useMemo, useCallback } from 'react';
+/* Ready-made decks for anyone who arrives without notes on them. Content only —
+   no model call — so it also works when the free tier is rate limiting. */
+import { STARTER_DECKS, instantiateStarter, starterCounts } from './starter-decks.js';
 
 /* ============================================================================
    STUDY FEED  —  single-file build
@@ -330,8 +333,13 @@ function failureKind(e){
    1.x numbers sitting above the new 1.0.0 cannot cause a mis-fire. They are not
    shown next to the pre-launch entries either — those were dev builds and the
    numbers mean nothing to a student. */
-const APP_VERSION = '1.0.0';
+const APP_VERSION = '1.1.0';
 const PATCH_NOTES = [
+  { v: '1.1.0', date: '2026-08-13', title: 'Decks to start you off', items: [
+    'No notes on you? Take a ready-made deck and start straight away — Genetics, Acids and bases, or Writing about a text.',
+    'Each one has two full exam-style long answers, so you can try the marking without making anything first.',
+    'They behave like your own decks: study them, edit the cards, or delete the lot.',
+  ] },
   { v: '1.0.0', date: '2026-08-07', title: 'Study Feed is here', items: [
     'Turn your own notes, slides or a photo of the whiteboard into cards — including real exam-style long answers.',
     'Write a full answer and have it marked against Achieved, Merit and Excellence, with the exact change that moves you up a grade.',
@@ -2812,7 +2820,12 @@ function ExtendedFace({ card, phase, deck, onReveal, onBack, demo }){
         <Chip colour={T.muted}>{card.marks} marks</Chip>
       </div>
 
-      <div style={QUESTION}>{card.prompt}</div>
+      {/* pre-wrap because an exam question can carry its own structure — an
+          extract to read, then the question about it. Without it the blank
+          line collapses and the passage runs straight into the instruction as
+          one wall of text. Generated prompts are a single paragraph, so this
+          changes nothing for them. */}
+      <div style={{ ...QUESTION, whiteSpace: 'pre-wrap' }}>{card.prompt}</div>
 
       {phase === 'attempt' && (
         <div style={{ marginTop: 16 }}>
@@ -3613,7 +3626,7 @@ function DropZone({ onPicked, attaching, imageCount }){
   );
 }
 
-function Create({ onSave, settings, onSettings, onPending }){
+function Create({ onSave, settings, onSettings, onPending, onStarter }){
   const [mode, setMode] = useState('generate');
   const [cardType, setCardType] = useState('mix');
   const [source, setSource] = useState('');
@@ -3831,6 +3844,18 @@ function Create({ onSave, settings, onSettings, onPending }){
             Your decks are saved on this device.
           </Sub>
         )}
+        {/* Only while the box is empty. Once there is material to work with,
+            offering a pre-made deck is just noise in front of the button they
+            came here to press. */}
+        {!hasMaterial && onStarter && (
+          <div style={{ marginTop: 14, textAlign: 'center' }}>
+            <button onClick={onStarter} className="sf-tap"
+              style={{ background: 'none', border: 'none', cursor: 'pointer', padding: '4px 6px',
+                fontFamily: SANS, fontSize: 13.5, fontWeight: 600, color: T.accentInk }}>
+              Nothing to paste? Take a ready-made deck →
+            </button>
+          </div>
+        )}
       </div>
     </div>
   );
@@ -3926,7 +3951,7 @@ function DraftReview({ drafts, setDrafts, meta, setMeta, onSave, onCancel, short
 /* ==========================================================================
    DECKS
    ========================================================================== */
-function Decks({ decks, progress, onEditCard, onDeleteCard, onDeleteDeck, onRenameDeck, onStudyDeck, onQuiz }){
+function Decks({ decks, progress, onEditCard, onDeleteCard, onDeleteDeck, onRenameDeck, onStudyDeck, onQuiz, onStarter }){
   const [openId, setOpenId] = useState(null);
   const open = decks.find(d => d.id === openId);
 
@@ -3942,7 +3967,8 @@ function Decks({ decks, progress, onEditCard, onDeleteCard, onDeleteDeck, onRena
       <Card style={{ padding: '44px 24px', textAlign: 'center' }}>
         <div style={{ display: 'flex', justifyContent: 'center', marginBottom: 14, color: T.faint }}><Ico name="books" size={38} weight={1.5} /></div>
         <Title>No decks yet</Title>
-        <Sub style={{ marginTop: 6 }}>Make some cards and they'll show up here.</Sub>
+        <Sub style={{ marginTop: 6, marginBottom: 18 }}>Make some cards and they'll show up here.</Sub>
+        <Btn kind="soft" onClick={onStarter}>Try a ready-made deck</Btn>
       </Card>
     );
   }
@@ -4503,7 +4529,7 @@ function longDate(){
   catch { return TODAY(); }
 }
 
-function Home({ library, progress, stats, settings, due, onStart, onCreate, onDecks, onStudyDeck, onQuiz, onSettings, onTutorial }){
+function Home({ library, progress, stats, settings, due, onStart, onCreate, onDecks, onStudyDeck, onQuiz, onSettings, onTutorial, onStarter }){
   const [shareWeek, setShareWeek] = useState(false);
   const today = TODAY();
   const decks = library.decks;
@@ -4587,6 +4613,11 @@ function Home({ library, progress, stats, settings, due, onStart, onCreate, onDe
             ))}
           </div>
           <Btn full kind="primary" onClick={onCreate}>Make your first cards</Btn>
+          {/* Second, not first: making cards from your own notes is the product,
+              and a ready-made deck is the fallback for arriving empty-handed.
+              But it has to be here — step 1 above asks for material, and
+              someone reading this on the bus has none. */}
+          <Btn full kind="soft" onClick={onStarter} style={{ marginTop: 8 }}>Or try a ready-made deck</Btn>
           {/* The way back for anyone who skipped the walkthrough on arrival */}
           <Btn full kind="ghost" onClick={onTutorial} style={{ marginTop: 6, fontSize: 14 }}>Show me how it works</Btn>
         </Card>
@@ -5057,6 +5088,56 @@ function WhatsNew({ onClose }){
         <div style={{ marginTop: 22 }}>
           <Btn full kind="primary" onClick={onClose}>Got it</Btn>
         </div>
+      </div>
+    </ModalScrim>
+  );
+}
+
+/* The way in for someone who has no notes on them. Generation is the app's
+   main event, but it asks for material the visitor may not be carrying, takes
+   ~11s, and is the one path that can fail on the free tier — a bad first
+   minute. These decks are already written, so the first thing a stranger sees
+   is a real long-answer card rather than an upload box. */
+function StarterPicker({ onAdd, onClose }){
+  return (
+    <ModalScrim onClose={onClose} maxW={520}>
+      <div style={{ padding: '22px 22px 20px' }}>
+        <div className="flex items-center justify-between" style={{ marginBottom: 6 }}>
+          <Chip colour={T.accent} solid>Ready-made</Chip>
+          <button onClick={onClose} className="sf-tap" aria-label="Close"
+            style={{ background: 'none', border: 'none', cursor: 'pointer', color: T.faint, padding: 2, display: 'flex' }}><Ico name="cross" size={17} /></button>
+        </div>
+        <Title style={{ marginTop: 10 }}>Start with a deck we made</Title>
+        <Sub style={{ marginTop: 6, marginBottom: 18 }}>
+          No notes on you? Take one of these and start straight away. They work exactly like your own decks — study them, edit them, or delete them later.
+        </Sub>
+        <div className="flex flex-col gap-2.5">
+          {STARTER_DECKS.map(d => {
+            const n = starterCounts(d);
+            const colour = subjectColour(d.subject);
+            return (
+              <button key={d.slug} className="sf-tap" onClick={() => onAdd(d.slug)}
+                style={{ display: 'flex', gap: 13, alignItems: 'flex-start', textAlign: 'left', width: '100%',
+                  background: T.surface, border: `1px solid ${T.border}`, borderRadius: R.card,
+                  padding: 14, cursor: 'pointer', boxShadow: SH.raised }}>
+                <Tile colour={colour} glyph={d.subject.trim().charAt(0).toUpperCase()} />
+                <div style={{ flex: 1, minWidth: 0 }}>
+                  <div style={{ fontFamily: SANS, fontSize: 15.5, fontWeight: 700, color: T.ink }}>{d.topic}</div>
+                  <Sub style={{ fontSize: 13, marginTop: 2 }}>{d.blurb}</Sub>
+                  <div className="flex items-center gap-1.5" style={{ marginTop: 8, flexWrap: 'wrap' }}>
+                    <Chip colour={T.muted}>{d.subject}</Chip>
+                    <Chip colour={T.muted}>{n.total} cards</Chip>
+                    {/* the long answers are the reason to pick one of these up */}
+                    <Chip colour={T.accentInk}>{n.long} long answer{n.long === 1 ? '' : 's'}</Chip>
+                  </div>
+                </div>
+              </button>
+            );
+          })}
+        </div>
+        <Sub style={{ fontSize: 12.5, marginTop: 14 }}>
+          Written for NCEA Level 1, but the marking works the same whatever you study.
+        </Sub>
       </div>
     </ModalScrim>
   );
@@ -5865,6 +5946,7 @@ export default function App(){
   const [showTutorial, setShowTutorial] = useState(false); // first-run walkthrough
   const [askOpen, setAskOpen] = useState(false);         // the ask-anything helper
   const [thread, setThread] = useState([]);              // its conversation, this session only
+  const [starterOpen, setStarterOpen] = useState(false); // the ready-made deck picker
   const reduceMotion = useRef(false);
 
   // a focused deck that then gets deleted shouldn't leave the feed stuck empty
@@ -5994,6 +6076,23 @@ export default function App(){
     setTab('feed');
   };
 
+  /* A starter deck enters the library exactly the way a generated one does —
+     same shape, same scheduler, editable and deletable — so nothing downstream
+     needs to know where it came from. It goes straight to the feed focused on
+     itself, because the whole point is that the next thing on screen is a card
+     rather than another decision.
+     `slug` is one of our own fixed identifiers, never anything the student
+     typed, so it is safe to send with the event. */
+  const addStarter = (slug) => {
+    const deck = instantiateStarter(slug);
+    if (!deck) return;
+    track('starter_deck_added', { slug: slug, cards: deck.cards.length });
+    persistLibrary({ decks: [...library.decks, deck] });
+    setStarterOpen(false);
+    setFocus(deck.id);
+    setTab('feed');
+  };
+
   /* practice=true: count the review, but never touch the scheduler */
   const gradeCard = (card, deck, q, committedWrong, practice) => {
     const today = TODAY();
@@ -6079,7 +6178,7 @@ export default function App(){
         {tab === 'home' && <Home library={library} progress={progress} stats={stats} settings={settings}
           due={dueCount} onStart={() => { setFocus('all'); setTab('feed'); }} onCreate={() => setTab('create')}
           onDecks={() => setTab('decks')} onStudyDeck={startDeck} onQuiz={openQuiz} onSettings={persistSettings}
-          onTutorial={replayTutorial} />}
+          onTutorial={replayTutorial} onStarter={() => setStarterOpen(true)} />}
         {/* key includes focus + mix so switching deck or moving the slider rebuilds the queue */}
         {tab === 'feed' && <Feed key={'feed-' + focus + '-' + cardCount + '-' + longMixOf(settings)}
           decks={library.decks} progress={progress} settings={settings} stats={stats} onGrade={gradeCard}
@@ -6089,11 +6188,12 @@ export default function App(){
             unsaved drafts, pasted notes and attached photos the moment you
             switched tabs, and those drafts cost real API usage to produce. */}
         <div style={{ display: tab === 'create' ? 'block' : 'none' }}>
-          <Create onSave={saveDeck} settings={settings} onSettings={persistSettings} onPending={setPendingCount} />
+          <Create onSave={saveDeck} settings={settings} onSettings={persistSettings} onPending={setPendingCount}
+            onStarter={() => setStarterOpen(true)} />
         </div>
         {tab === 'decks' && <Decks decks={library.decks} progress={progress} onEditCard={editCard}
           onDeleteCard={deleteCard} onDeleteDeck={deleteDeck} onRenameDeck={renameDeck}
-          onStudyDeck={startDeck} onQuiz={openQuiz} />}
+          onStudyDeck={startDeck} onQuiz={openQuiz} onStarter={() => setStarterOpen(true)} />}
         {tab === 'stats' && <Stats decks={library.decks} progress={progress} stats={stats} />}
         {tab === 'changelog' && <Changelog />}
         {tab === 'feedback' && <FeatureRequest />}
@@ -6102,13 +6202,14 @@ export default function App(){
       </div>
     </Shell>
     {quiz && <Quiz decks={library.decks} deckId={quiz.deckId} onClose={() => setQuiz(null)} onDone={recordQuiz} />}
+    {starterOpen && <StarterPicker onAdd={addStarter} onClose={() => setStarterOpen(false)} />}
     {showNews && !showTutorial && <WhatsNew onClose={dismissNews} />}
     {/* the tour drives the tabs itself — it points at the real screens */}
     {showTutorial && <Tutorial onDone={endTutorial} onNavigate={setTab} tab={tab} />}
     {/* the helper is available on every screen — except where something else
         already owns the whole screen (a quiz, the update note, the tutorial) */}
     {askOpen && <AskPanel thread={thread} setThread={setThread} onClose={() => setAskOpen(false)} />}
-    {!askOpen && !quiz && !showNews && !showTutorial && <AskFab onClick={() => setAskOpen(true)} />}
+    {!askOpen && !quiz && !showNews && !showTutorial && !starterOpen && <AskFab onClick={() => setAskOpen(true)} />}
     </>
   );
 }
