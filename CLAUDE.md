@@ -162,9 +162,16 @@ canonical; this section is only where things physically live here.
 - **Two contrast facts worth knowing before changing anything:**
   - White on the violet accent is **4.35:1** — fine for large text, just under
     AA for normal text. It is what primary buttons and solid chips are.
-  - The light theme's `--sf-faint` (`#A6ABB7`) is **2.30:1** on white. That
-    predates the brand and the kit does not govern the light UI, but it is a
-    real defect if anyone touches those tokens.
+  - The light theme's text scale was **fixed on 13 Aug 2026** and the figures
+    below are measured against the **well** (`#F1F4F9`), the darkest of the
+    three light grounds, not against white: `--sf-ink` `#2B2F3A` 12.13:1,
+    `--sf-muted` `#494E5E` 7.52:1, `--sf-faint` `#686E7E` 4.62:1. All clear AA.
+    `--sf-faint` was `#A6ABB7` at **2.09:1** on the well, which was a real
+    defect — it was used for labels, not decoration, and vanished on a phone
+    outdoors. `#686E7E` is the lightest grey that still clears 4.5:1 there, so
+    do not lighten it; `--sf-muted` was darkened at the same time purely to
+    keep a visible step between the two. Dark theme was already compliant
+    (faint 5.07:1) and is untouched.
 - **Typeface:** the app defaults to Inter and offers Plus Jakarta Sans and the
   system stack as reading preferences (Settings → Appearance). Brand surfaces
   are Inter regardless.

@@ -88,7 +88,25 @@ const THEME_CSS = `
   :root[data-font="system"]{ --sf-font: ${SYSTEM_STACK}; }
   :root{
     --sf-bg:#F6F8FB; --sf-surface:#FFFFFF; --sf-well:#F1F4F9; --sf-border:#EBEEF3;
-    --sf-ink:#2B2F3A; --sf-muted:#6E7482; --sf-faint:#A6ABB7;
+    /* Contrast, every figure measured against the WELL (#F1F4F9) — the darkest
+       of the three light grounds, so the worst case. Measuring on white would
+       flatter all of them.
+         ink   12.13: 1
+         muted  7.52: 1  (was #6E7482, 4.25 — marginally under AA)
+         faint  4.62: 1  (was #A6ABB7, 2.09 — nowhere near, and it is used for
+                          real labels, not decoration)
+       The old faint was legible on a good desktop screen and disappeared on a
+       phone outdoors, which is where this app is actually read.
+
+       #686E7E is the LIGHTEST grey that still clears 4.5:1 on the well — one
+       step lighter (#6A7080) is 4.49 and already under. So faint has no room,
+       and the muted/faint hierarchy has to be re-opened from the other end:
+       muted was darkened to #494E5E to keep a visible step between the two
+       (1.63x apart, against 2.04x before this change). Any lighter and the
+       label/value pairs that encode their hierarchy purely in muted-vs-faint
+       collapse into one grey. Nothing here is near black, so the soft look
+       survives. Dark theme is untouched — its faint is already 5.07:1. */
+    --sf-ink:#2B2F3A; --sf-muted:#494E5E; --sf-faint:#686E7E;
     --sf-accent:#7C5CFF; --sf-accent-ink:#5B3FD9;
     --sf-green:#37B98C; --sf-amber:#E1A63E; --sf-red:#E06B62;
     --sf-nav:rgba(255,255,255,.9); --sf-track:#D9DEE8;
