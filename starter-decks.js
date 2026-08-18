@@ -38,6 +38,18 @@ const GENETICS = {
   blurb: 'Alleles, Punnett squares and why two black sheep can have a white lamb.',
   cards: [
     {
+      type: 'typed',
+      front: 'What word describes the characteristic an organism actually shows, such as black wool?',
+      back: 'phenotype',
+      accept: ['the phenotype'],
+    },
+    {
+      type: 'typed',
+      front: 'What is the name of the diagram used to work out the possible allele combinations of offspring?',
+      back: 'Punnett square',
+      accept: ['a Punnett square', 'punnet square'],
+    },
+    {
       type: 'extended',
       verb: 'Explain',
       marks: 6,
@@ -139,6 +151,18 @@ const ACIDS = {
   standard: 'NCEA Level 1',
   blurb: 'Neutralisation, the pH scale, gas tests, and what actually makes a reaction go faster.',
   cards: [
+    {
+      type: 'typed',
+      front: 'What is the pH of a neutral solution?',
+      back: '7',
+      accept: ['pH 7', 'seven'],
+    },
+    {
+      type: 'typed',
+      front: 'What is the general name for the compound formed when an acid is neutralised by a base?',
+      back: 'a salt',
+      accept: ['salt'],
+    },
     {
       type: 'extended',
       verb: 'Explain',
@@ -256,6 +280,17 @@ const ENGLISH = {
   standard: 'NCEA Level 1',
   blurb: 'Language features, evidence and effect — with two extracts to analyse, so you need nothing else to start.',
   cards: [
+    {
+      type: 'typed',
+      front: 'What is the term for repeating a word or phrase deliberately, for effect?',
+      back: 'repetition',
+    },
+    {
+      type: 'typed',
+      front: "What is the term for the writer's reason for writing — what they want the reader to think, feel or do?",
+      back: 'purpose',
+      accept: ["the writer's purpose", 'authorial purpose'],
+    },
     {
       type: 'extended',
       verb: 'Explain',
