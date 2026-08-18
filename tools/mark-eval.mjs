@@ -38,6 +38,29 @@ const SRC = readFileSync(join(HERE, '..', 'StudyFeed.jsx'), 'utf8');
 /* Pull a top-level `function name(...)` out of the source by balancing braces.
    String and comment aware, because the marking prompt is one long template
    literal full of braces and quotes. */
+/* `const NAME = ...;` — the NCEA rules and the level test are consts, not
+   functions, and markPrompt calls them. Scans to the semicolon that closes the
+   statement, ignoring any inside the template literal. */
+function extractConst(name){
+  const start = SRC.indexOf(`const ${name} = `);
+  if (start < 0) throw new Error(`grab: const ${name} not found in StudyFeed.jsx`);
+  let str = null, esc = false, depth = 0;
+  for (let i = start; i < SRC.length; i++){
+    const c = SRC[i];
+    if (str){
+      if (esc){ esc = false; continue; }
+      if (c === '\\'){ esc = true; continue; }
+      if (c === str) str = null;
+      continue;
+    }
+    if (c === '"' || c === "'" || c === '`'){ str = c; continue; }
+    if (c === '(' || c === '[' || c === '{') depth++;
+    else if (c === ')' || c === ']' || c === '}') depth--;
+    else if (c === ';' && depth === 0) return SRC.slice(start, i + 1);
+  }
+  throw new Error(`grab: could not find the end of ${name}`);
+}
+
 function extract(name){
   const start = SRC.indexOf(`function ${name}(`);
   if (start < 0) throw new Error(`grab: function ${name} not found in StudyFeed.jsx`);
@@ -64,13 +87,15 @@ function extract(name){
   throw new Error(`grab: could not find the end of ${name}`);
 }
 
-function grab(names){
-  const src = names.map(extract).join('\n\n');
+function grab(fns, consts){
+  const src = (consts || []).map(extractConst).concat(fns.map(extract)).join('\n\n');
+  const names = (consts || []).concat(fns);
   return new Function(`${src}\nreturn { ${names.join(', ')} };`)();
 }
 
-const { markPrompt, rescueObjects, locateNotes, quoteToRegex } =
-  grab(['markPrompt', 'rescueObjects', 'quoteToRegex', 'locateNotes']);
+const { markPrompt, rescueObjects, locateNotes, placeNotes, quoteToRegex } =
+  grab(['markPrompt', 'rescueObjects', 'trimQuoteWrapper', 'quoteToRegex', 'allOccurrences', 'placeNotes', 'locateNotes'],
+       ['NCEA_RULES', 'isNcea', 'nceaRules']);
 
 /* Exactly what markAnswer sends: callModel(prompt, 1700, MODEL_SMART) with no
    reasoning_effort — MODEL_SMART deliberately keeps its full thinking. Read
@@ -86,10 +111,27 @@ const MARK_MAX_TOKENS = cliMax > 0 ? Number(process.argv[cliMax + 1]) : (SRC_MAX
 
 const GRADES = ['Not yet', 'Achieved', 'Merit', 'Excellence'];
 
+/* --no-ncea strips the NCEA block back off a prompt that has it, so the same
+   corpus can be run with and without and the difference attributed. Cutting at
+   the marker is exact — the block is always the tail of the prompt. */
+const NO_NCEA = process.argv.indexOf('--no-ncea') > 0;
+function promptFor(card, answer, level){
+  const p = markPrompt(card, answer, level);
+  if (!NO_NCEA) return p;
+  const cut = p.indexOf('\n\nNCEA RULES');
+  return cut < 0 ? p : p.slice(0, cut);
+}
+
+/* The complaint this is here to measure: the marker citing achievement
+   standards it half-remembers. Anything that looks like a standard number, or
+   a claim about what NZQA or "the standard" wants, is a citation it should not
+   be making — it has never seen the standard. */
+const STANDARD_CITATION = /\bAS\s?9\d{4}\b|\b9[0-2]\d{3}\b|\bNZQA\b|\bthe standard (?:requires|says|wants|asks)\b|\bmarking schedule\b/gi;
+
 async function mark(card, answer, level){
   const body = {
     model: MODEL,
-    messages: [{ role: 'user', content: markPrompt(card, answer, level) }],
+    messages: [{ role: 'user', content: promptFor(card, answer, level) }],
     temperature: 0.7,
     top_p: 0.9,
     max_tokens: MARK_MAX_TOKENS,
@@ -117,7 +159,7 @@ async function mark(card, answer, level){
   const usage = payload.usage || {};
   const parsed = rescueObjects(reply)[0];
   if (!parsed) return { ok: false, ms, finish, usage, error: 'no JSON object in reply', reply: reply.slice(0, 300) };
-  return { ok: true, ms, finish, usage, r: parsed };
+  return { ok: true, ms, finish, usage, r: parsed, raw: reply };
 }
 
 /* One answer, scored against the band it was written for. */
@@ -132,11 +174,40 @@ function score(kase, card, out){
 
   const notes = Array.isArray(r.notes) ? r.notes : [];
   row.notes = notes.length;
-  const located = locateNotes(kase.answer, notes);
+  /* Ask the real placer rather than re-deriving it here. An earlier version of
+     this file reimplemented the matching, drifted the moment placeNotes learned
+     to strip quote wrappers, and started reporting a NEGATIVE overlap count —
+     the exact class of bug the grab() technique exists to prevent. */
+  const placed = placeNotes(kase.answer, notes);
+  const located = placed.located;
   row.located = located.length;
+  row.unanchored = placed.orphans.length;
+  /* WHY a note was dropped, because the two causes need opposite fixes. A
+     quote that cannot be found at all is the model failing to copy; a quote
+     that was found but overlaps an earlier one is locateNotes throwing away
+     perfectly good feedback. Mirrors locateNotes' own two steps. */
+  /* WHY each note failed to anchor, using the same helpers the app uses. A
+     quote that cannot be found anywhere is the model failing to copy; one that
+     can be found but did not get a home lost its span to another note. */
+  row.notFound = 0; row.overlapDropped = 0; row.malformed = 0;
+  row.missedQuotes = [];
+  const anchoredNotes = {};
+  for (const l of located) anchoredNotes[l.note] = 1;
+  for (const n of notes){
+    const raw = (n && typeof n.quote === 'string') ? n.quote : '';
+    const note = (n && typeof n.note === 'string') ? n.note.trim() : '';
+    if (!note || anchoredNotes[note]) continue;
+    const quote = trimQuoteWrapper(raw);
+    if (quote.length < 4){ row.malformed++; continue; }
+    if (allOccurrences(kase.answer, quote).length){ row.overlapDropped++; continue; }
+    row.notFound++;
+    row.missedQuotes.push(raw);
+  }
   /* Quotes the model invented or tidied. The app drops these silently, so the
      student reads numbered feedback with numbers missing from their answer. */
-  row.dropped = notes.length - located.length;
+  /* Not "dropped" any more: an unanchored note still reaches the student, it
+     just has no highlight over their words. */
+  row.dropped = row.unanchored;
 
   const kinds = notes.map(n => n && n.kind === 'good' ? 'good' : 'weak');
   row.weakNotes = kinds.filter(k => k === 'weak').length;
@@ -146,6 +217,9 @@ function score(kase, card, out){
   row.hasLift = typeof r.lift === 'string' && r.lift.trim().length > 0;
   row.missing = Array.isArray(r.missing) ? r.missing.length : 0;
   row.truncated = out.finish === 'length';
+  const hits = String(out.raw || '').match(STANDARD_CITATION);
+  row.citations = hits ? Array.from(new Set(hits.map(s => s.trim()))) : [];
+  row.cited = row.citations.length > 0;
   return row;
 }
 
@@ -171,12 +245,15 @@ async function main(){
     const longs = deck.cards.filter(c => c.type === 'extended');
     const card = longs[kase.cardIndex];
     if (!card) throw new Error(`${kase.deck} has no extended card ${kase.cardIndex}`);
-    return { card, level: deck.standard };
+    /* --level reproduces the case this was built for: a student who has named
+       their actual standard on the deck. That is when the marker was most
+       tempted to recite what it thought that standard said. */
+    return { card, level: arg('level', deck.standard) };
   };
 
   const total = cases.length * repeat;
   console.log(`Marking eval — ${total} calls against ${ENDPOINT}`);
-  console.log(`Model: ${MODEL}, max_tokens ${MARK_MAX_TOKENS}\n`);
+  console.log(`Model: ${MODEL}, max_tokens ${MARK_MAX_TOKENS}${NO_NCEA ? ', NCEA rules OFF' : ''}${arg('level', null) ? ', level "' + arg('level', '') + '"' : ''}\n`);
 
   const rows = [];
   let n = 0;
@@ -233,9 +310,23 @@ function report(rows){
     const ms = done.map(r => r.ms).sort((a, b) => a - b);
     console.log(`Grade in band    ${gradeOk}/${done.length}  ${pct(gradeOk, done.length)}`);
     console.log(`All-good notes   ${balance}/${done.length}  ${pct(balance, done.length)}   (should be 0)`);
-    console.log(`Quotes dropped   ${totalDropped}/${totalNotes}  ${pct(totalDropped, totalNotes)}  across ${withNotes.length} answers with notes`);
+    console.log(`Unanchored       ${totalDropped}/${totalNotes}  ${pct(totalDropped, totalNotes)}  across ${withNotes.length} answers with notes`);
+    const nf = done.reduce((s, r) => s + (r.notFound || 0), 0);
+    const ov = done.reduce((s, r) => s + (r.overlapDropped || 0), 0);
+    const mal = done.reduce((s, r) => s + (r.malformed || 0), 0);
+    console.log(`  ...not found   ${nf}   (model did not copy the answer at all)`);
+    console.log(`  ...overlapping ${ov}   (findable, but another note took the span)`);
+    console.log(`  ...too short   ${mal}`);
+    console.log(`  (all of these still SHOW — they just carry no highlight)`);
     console.log(`Truncated        ${trunc}`);
     console.log(`Missing "lift"   ${noLift}`);
+    const cited = done.filter(r => r.cited);
+    console.log(`Cited a standard ${cited.length}/${done.length}  ${pct(cited.length, done.length)}   (should be 0 — it has never seen one)`);
+    if (cited.length){
+      const all = {};
+      for (const r of cited) for (const c of r.citations) all[c] = (all[c] || 0) + 1;
+      console.log(`  what it cited: ${Object.entries(all).map(([k, v]) => `${k} x${v}`).join(', ')}`);
+    }
     console.log(`Latency          median ${(ms[Math.floor(ms.length / 2)] / 1000).toFixed(1)}s   slowest ${(ms[ms.length - 1] / 1000).toFixed(1)}s`);
     const toks = rows.map(r => r.completionTokens).filter(Number.isFinite).sort((a, b) => a - b);
     if (toks.length){
