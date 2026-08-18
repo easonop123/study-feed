@@ -1,0 +1,42 @@
+[
+  {
+    "deck": "genetics",
+    "card": 0,
+    "ms": 13726,
+    "citations": [],
+    "cited": false,
+    "steps": 2,
+    "hasGap": true,
+    "gap": "The answer lacks an explanation of the mechanism of allele segregation during meiosis and why the recessive allele becomes expressed when both parents contribute it. The marker needs to see the student describe how gametes are formed and how the absence of a dominant allele leads to the white phenotype."
+  },
+  {
+    "deck": "genetics",
+    "card": 1,
+    "ms": 11072,
+    "citations": [],
+    "cited": false,
+    "steps": 3,
+    "hasGap": true,
+    "gap": "The answer only describes the outcome of predation; it does not explain how the colour variation originated (mutation or existing alleles) or how sexual reproduction and natural selection work together to change allele frequencies over generations. The marker is looking for a causal explanation of the source of variation and the mechanism of change, not just a statement of survival advantage."
+  },
+  {
+    "deck": "acids-bases",
+    "card": 0,
+    "ms": 7583,
+    "citations": [],
+    "cited": false,
+    "steps": 3,
+    "hasGap": true,
+    "gap": "The answer explains why the powdered marble reacts faster but does not link this to the fact that the total amount of product (CO₂) is unchanged, nor does it state that the experiment is a fair test – only surface area is varied while all other factors are constant. These omissions prevent the answer from meeting the Excellence level, which requires a comprehensive explanation that connects the mechanism to the experimental design and outcome."
+  },
+  {
+    "deck": "writing-about-text",
+    "card": 0,
+    "ms": 8974,
+    "citations": [],
+    "cited": false,
+    "steps": 3,
+    "hasGap": true,
+    "gap": "The answer only identifies the use of personification; it does not explain the effect of that device on the theme of loss. To reach Merit the student must show how the personification changes the reader’s understanding of loss – i.e., explain the cause–effect link between the house’s ‘learning’ and the sense of absence, and link this to the other details (clock, dust, piano) that reinforce the idea that loss is felt through the quiet, ordinary life that continues."
+  }
+]

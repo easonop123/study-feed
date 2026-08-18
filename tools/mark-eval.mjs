@@ -93,7 +93,10 @@ function grab(fns, consts){
   return new Function(`${src}\nreturn { ${names.join(', ')} };`)();
 }
 
-const { markPrompt, rescueObjects, locateNotes, placeNotes, quoteToRegex } =
+/* Every name in the grab list has to be destructured too, or it is fetched and
+   then thrown away — which is how trimQuoteWrapper came to be undefined at the
+   one point score() needed it, and why a whole run died three cases in. */
+const { markPrompt, rescueObjects, locateNotes, placeNotes, quoteToRegex, trimQuoteWrapper, allOccurrences } =
   grab(['markPrompt', 'rescueObjects', 'trimQuoteWrapper', 'quoteToRegex', 'allOccurrences', 'placeNotes', 'locateNotes'],
        ['NCEA_RULES', 'isNcea', 'nceaRules']);
 

@@ -1,0 +1,42 @@
+[
+  {
+    "deck": "genetics",
+    "card": 0,
+    "ms": 14046,
+    "citations": [],
+    "cited": false,
+    "steps": 3,
+    "hasGap": true,
+    "gap": "The answer does not describe the mechanism of allele segregation during meiosis and how the absence of a dominant allele allows the recessive phenotype to be expressed. It only states the genotypes and the result, missing the explanatory link between meiosis, gamete formation, fertilisation and phenotype."
+  },
+  {
+    "deck": "genetics",
+    "card": 1,
+    "ms": 11268,
+    "citations": [],
+    "cited": false,
+    "steps": 3,
+    "hasGap": true,
+    "gap": "The answer lacks an explanation of the origin of the colour variation (mutation) and the genetic mechanisms that allow allele frequencies to change each generation (sexual reproduction and selection). It only describes the selective outcome. The marker needs a discussion that links the source of variation to the evolutionary process and shows how brown becomes more common."
+  },
+  {
+    "deck": "acids-bases",
+    "card": 0,
+    "ms": 10744,
+    "citations": [],
+    "cited": false,
+    "steps": 3,
+    "hasGap": true,
+    "gap": "The answer needs to show that the total CO₂ produced is identical in both runs and that the experiment is a fair test, linking these points to the observed faster rate. The marker is looking for a clear explanation of how the unchanged amount of product and the controlled variables justify attributing the rate difference solely to surface area."
+  },
+  {
+    "deck": "writing-about-text",
+    "card": 0,
+    "ms": 16635,
+    "citations": [],
+    "cited": false,
+    "steps": 3,
+    "hasGap": true,
+    "gap": "Your answer identifies the personification but does not explain its effect on the reader’s understanding of loss. The marker needs you to describe how the writer’s choice of personifying the house (and the clock) shows the absence of the woman and what that reveals about the experience of loss. You must link the evidence to the idea of loss, not just state the feature."
+  }
+]
