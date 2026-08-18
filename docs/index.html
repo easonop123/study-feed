@@ -356,7 +356,7 @@ footer{ padding:0 0 56px; }
       <a href="#gap" class="hide-sm">The Merit gap</a>
       <a href="#verbs" class="hide-sm">Command verbs</a>
       <a href="#how" class="hide-sm">How it works</a>
-      <a class="btn btn-primary btn-sm" href="/app/">Open the app →</a>
+      <a class="btn btn-primary btn-sm" href="/app/" data-cta="nav">Open the app →</a>
     </div>
   </div>
 </nav>
@@ -372,7 +372,7 @@ footer{ padding:0 0 56px; }
         <h1 class="rise d2">Flashcards get you <span class="dim">Achieved.</span><br><span class="accent">Excellence</span> is a writing problem.</h1>
         <p class="lede rise d3">Externals aren't multi-choice. They're six-mark questions you have to <em>write</em>. Study Feed marks what you actually wrote against the real Achieved / Merit / Excellence criteria — then shows you the sentence that would have moved you up a grade.</p>
         <div class="cta-row rise d4">
-          <a class="btn btn-primary btn-lg" href="/app/">Start writing — free →</a>
+          <a class="btn btn-primary btn-lg" href="/app/" data-cta="hero">Start writing — free →</a>
           <span class="cta-note">No account. No card. Opens in your browser.</span>
         </div>
       </div>
@@ -647,7 +647,7 @@ footer{ padding:0 0 56px; }
     <div class="close reveal">
       <h2>Your notes are already written.</h2>
       <p>Put them somewhere that will actually make you write. Free, no account, nothing to install.</p>
-      <a class="btn btn-white btn-lg" href="/app/">Start writing →</a>
+      <a class="btn btn-white btn-lg" href="/app/" data-cta="closing">Start writing →</a>
     </div>
   </div>
 </main>
@@ -659,8 +659,8 @@ footer{ padding:0 0 56px; }
       Study Feed
     </span>
     <nav>
-      <a href="/app/">Open the app</a>
-      <a href="/app/">Request a feature</a>
+      <a href="/app/" data-cta="footer">Open the app</a>
+      <a href="/app/" data-cta="footer-feature">Request a feature</a>
       <a href="#top">Back to top</a>
     </nav>
     <small>
@@ -759,6 +759,89 @@ footer{ padding:0 0 56px; }
   var tick = function(){ nav.classList.toggle('stuck', window.scrollY > 12); };
   tick();
   window.addEventListener('scroll', tick, { passive: true });
+})();
+
+/* ---- counting, without a library -----------------------------------------
+   The app reports to PostHog, this page reported nothing, so app opens had no
+   denominator: there was no way to tell "nobody visited" apart from "plenty
+   visited and bounced". That is the difference between a traffic problem and
+   a conversion problem, and they need opposite responses.
+
+   This posts straight to the ingest endpoint instead of loading posthog-js.
+   The library is 41 KB gzipped and this page is hand-written, dependency-free
+   and fast, which is the point of it — a marketing page that loads slowly
+   loses the very visitors it is measuring. Two events and a device id do not
+   need a library.
+
+   Same privacy rule as the app: counts and fixed words only. There is no
+   input on this page, so nothing a visitor typed can end up here, and the
+   URL carries no query or hash. */
+(function(){
+  var KEY = 'phc_qz4CaKZsLaQZapNSo9AAJ5oSB3x5g2SCeEnSxRpjmpX7';
+  var HOST = 'https://us.i.posthog.com/e/';
+
+  /* THE ID HAS TO BE THE SAME ID THE APP USES, or this measures nothing.
+     /app/ is the same origin, and posthog-js keeps its distinct_id in
+     localStorage under ph_<token>_posthog. Minting a separate landing id
+     would make one visitor into two people, and the landing → app funnel
+     this whole block exists to build would read 0% for every real
+     conversion. So: reuse that id if the app has already run here, and
+     otherwise seed the same key, which posthog-js then adopts when the
+     visitor opens the app.
+     If posthog-js ever changes that storage shape the seed is ignored and we
+     are back to two ids — no worse than having no landing analytics at all,
+     which is where this started. */
+  var PH_KEY = 'ph_' + KEY + '_posthog';
+  var id;
+  try {
+    var store = JSON.parse(localStorage.getItem(PH_KEY) || '{}');
+    id = store.distinct_id;
+    if (!id){
+      id = Date.now().toString(36) + Math.random().toString(36).slice(2, 12);
+      store.distinct_id = id;
+      localStorage.setItem(PH_KEY, JSON.stringify(store));
+    }
+  } catch (e){
+    /* private mode, blocked storage, or a value we could not parse */
+    id = 'anon_' + Math.random().toString(36).slice(2, 12);
+  }
+
+  function send(event, props){
+    var payload = JSON.stringify({
+      api_key: KEY,
+      event: event,
+      properties: Object.assign({
+        distinct_id: id,
+        $current_url: location.origin + location.pathname,
+        /* The app is person_profiles:'never'. Without this flag these raw
+           posts would create a stored person profile per visitor — the exact
+           opposite, on the same project. */
+        $process_person_profile: false,
+      }, props || {}),
+      timestamp: new Date().toISOString(),
+    });
+    /* text/plain, NOT application/json: a JSON Blob makes this a non-simple
+       request, so the browser preflights it. sendBeacon returns true on
+       queueing either way, so a preflight the endpoint does not answer would
+       drop the event silently AND skip the fallback below. text/plain keeps
+       it a simple request with no preflight, which is what posthog-js sends
+       for the same reason. The endpoint reads the body as JSON regardless. */
+    try {
+      if (navigator.sendBeacon && navigator.sendBeacon(HOST, new Blob([payload], { type: 'text/plain' }))) return;
+    } catch (e){}
+    try { fetch(HOST, { method: 'POST', headers: { 'Content-Type': 'text/plain' }, body: payload, keepalive: true }); } catch (e){}
+  }
+
+  send('$pageview');
+
+  /* Which CTA moved them, so a rewrite of one can be judged against the
+     others. `where` is read from a fixed attribute in this file's own markup,
+     never from anything on screen. */
+  document.addEventListener('click', function(ev){
+    var a = ev.target.closest ? ev.target.closest('a[href^="/app"]') : null;
+    if (!a) return;
+    send('landing_cta_click', { where: a.getAttribute('data-cta') || 'other' });
+  }, { passive: true });
 })();
 </script>
 </body>

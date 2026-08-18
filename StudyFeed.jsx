@@ -88,7 +88,25 @@ const THEME_CSS = `
   :root[data-font="system"]{ --sf-font: ${SYSTEM_STACK}; }
   :root{
     --sf-bg:#F6F8FB; --sf-surface:#FFFFFF; --sf-well:#F1F4F9; --sf-border:#EBEEF3;
-    --sf-ink:#2B2F3A; --sf-muted:#6E7482; --sf-faint:#A6ABB7;
+    /* Contrast, every figure measured against the WELL (#F1F4F9) — the darkest
+       of the three light grounds, so the worst case. Measuring on white would
+       flatter all of them.
+         ink   12.13: 1
+         muted  7.52: 1  (was #6E7482, 4.25 — marginally under AA)
+         faint  4.62: 1  (was #A6ABB7, 2.09 — nowhere near, and it is used for
+                          real labels, not decoration)
+       The old faint was legible on a good desktop screen and disappeared on a
+       phone outdoors, which is where this app is actually read.
+
+       #686E7E is the LIGHTEST grey that still clears 4.5:1 on the well — one
+       step lighter (#6A7080) is 4.49 and already under. So faint has no room,
+       and the muted/faint hierarchy has to be re-opened from the other end:
+       muted was darkened to #494E5E to keep a visible step between the two
+       (1.63x apart, against 2.04x before this change). Any lighter and the
+       label/value pairs that encode their hierarchy purely in muted-vs-faint
+       collapse into one grey. Nothing here is near black, so the soft look
+       survives. Dark theme is untouched — its faint is already 5.07:1. */
+    --sf-ink:#2B2F3A; --sf-muted:#494E5E; --sf-faint:#686E7E;
     --sf-accent:#7C5CFF; --sf-accent-ink:#5B3FD9;
     --sf-green:#37B98C; --sf-amber:#E1A63E; --sf-red:#E06B62;
     --sf-nav:rgba(255,255,255,.9); --sf-track:#D9DEE8;
@@ -1582,9 +1600,24 @@ RULES FOR "notes" — these are shown highlighted on top of the student's own wr
 /* Bigger ceiling than the other calls because this one now carries the inline
    notes as well as the grade. Marking is the critical path — if the reply is
    truncated the JSON does not close and the student loses the whole mark, not
-   just the highlights. */
+   just the highlights.
+
+   1700 was not enough, and this was measured rather than guessed. Running 42
+   answers through the live endpoint (tools/mark-eval.mjs, 13 Aug 2026):
+   completion tokens came in at median 1256, p90 1749, max 2497, so 15% of
+   marks wanted more than 1700 and 17% of the run came back truncated with
+   finish_reason "length" — every one of those a total loss of the mark, and
+   NOT retried, because a truncated reply is a perfectly good HTTP 200.
+   Re-running the identical corpus at 3000 took truncation to zero and left
+   the grades unchanged (97% in band both times), for about 1.5s on the median
+   response. 3000 clears the worst observed reply by ~20%.
+
+   This is a ceiling, not a spend: the median answer still costs ~1256 output
+   tokens, so raising it does not make the ordinary call more expensive. If
+   more required output is ever added to this prompt, re-run the eval rather
+   than assuming the headroom is still there. */
 async function markAnswer(card, answer, level){
-  const reply = await callModel(markPrompt(card, answer, level), 1700, MODEL_SMART);
+  const reply = await callModel(markPrompt(card, answer, level), 3000, MODEL_SMART);
   const objs = rescueObjects(reply);
   return objs[0] || null;
 }
@@ -2803,7 +2836,17 @@ function ExtendedFace({ card, phase, deck, onReveal, onBack, demo }){
         else if (r.grade === 'Achieved'){ play('right', 1); buzz(10); }
         else play('ok');
       }
-      else setErr('Could not read the marking. Try again.');
+      else {
+        /* A reply that arrived but could not be read. This is NOT the catch
+           below: the request succeeded, so nothing threw, nothing was retried,
+           and until now nothing was counted either — which made this the most
+           common way marking failed and the only one invisible in the
+           analytics. Measured at 17% of marks before the token ceiling was
+           raised, and still the residual failure when the model answers in
+           prose instead of JSON. A fixed word, like every other reason. */
+        if (!demo) track('mark_failed', { reason: 'unparseable' });
+        setErr('Could not read the marking. Try again.');
+      }
     } catch (e){
       if (!demo) track('mark_failed', { reason: failureKind(e) });
       setErr(friendlyApiError(e) + ' Your answer is safe.');

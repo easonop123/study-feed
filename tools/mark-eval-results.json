@@ -1,0 +1,128 @@
+[
+  {
+    "deck": "genetics",
+    "card": 0,
+    "kind": "merit",
+    "ms": 13073,
+    "ceiling": 3000,
+    "completionTokens": 1605,
+    "grade": "Merit",
+    "expected": [
+      "Merit"
+    ],
+    "gradeOk": true,
+    "notes": 5,
+    "located": 5,
+    "dropped": 0,
+    "weakNotes": 1,
+    "balanceBroken": false,
+    "hasLift": true,
+    "missing": 3,
+    "truncated": false
+  },
+  {
+    "deck": "genetics",
+    "card": 1,
+    "kind": "merit",
+    "ms": 24003,
+    "ceiling": 3000,
+    "completionTokens": 1968,
+    "grade": "Merit",
+    "expected": [
+      "Merit"
+    ],
+    "gradeOk": true,
+    "notes": 5,
+    "located": 5,
+    "dropped": 0,
+    "weakNotes": 1,
+    "balanceBroken": false,
+    "hasLift": true,
+    "missing": 3,
+    "truncated": false
+  },
+  {
+    "deck": "acids-bases",
+    "card": 0,
+    "kind": "merit",
+    "ms": 7243,
+    "ceiling": 3000,
+    "completionTokens": 978,
+    "grade": "Merit",
+    "expected": [
+      "Merit"
+    ],
+    "gradeOk": true,
+    "notes": 3,
+    "located": 3,
+    "dropped": 0,
+    "weakNotes": 1,
+    "balanceBroken": false,
+    "hasLift": true,
+    "missing": 3,
+    "truncated": false
+  },
+  {
+    "deck": "acids-bases",
+    "card": 1,
+    "kind": "merit",
+    "ms": 15744,
+    "ceiling": 3000,
+    "completionTokens": 1803,
+    "grade": "Merit",
+    "expected": [
+      "Merit"
+    ],
+    "gradeOk": true,
+    "notes": 4,
+    "located": 4,
+    "dropped": 0,
+    "weakNotes": 1,
+    "balanceBroken": false,
+    "hasLift": true,
+    "missing": 1,
+    "truncated": false
+  },
+  {
+    "deck": "writing-about-text",
+    "card": 0,
+    "kind": "merit",
+    "ms": 10939,
+    "ceiling": 3000,
+    "completionTokens": 1180,
+    "grade": "Merit",
+    "expected": [
+      "Merit"
+    ],
+    "gradeOk": true,
+    "notes": 5,
+    "located": 2,
+    "dropped": 3,
+    "weakNotes": 1,
+    "balanceBroken": false,
+    "hasLift": true,
+    "missing": 3,
+    "truncated": false
+  },
+  {
+    "deck": "writing-about-text",
+    "card": 1,
+    "kind": "merit",
+    "ms": 8190,
+    "ceiling": 3000,
+    "completionTokens": 991,
+    "grade": "Merit",
+    "expected": [
+      "Merit"
+    ],
+    "gradeOk": true,
+    "notes": 4,
+    "located": 0,
+    "dropped": 4,
+    "weakNotes": 1,
+    "balanceBroken": false,
+    "hasLift": true,
+    "missing": 3,
+    "truncated": false
+  }
+]
