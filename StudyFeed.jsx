@@ -351,8 +351,14 @@ function failureKind(e){
    1.x numbers sitting above the new 1.0.0 cannot cause a mis-fire. They are not
    shown next to the pre-launch entries either — those were dev builds and the
    numbers mean nothing to a student. */
-const APP_VERSION = '1.2.0';
+const APP_VERSION = '1.2.1';
 const PATCH_NOTES = [
+  { v: '1.2.1', date: '2026-08-18', title: 'Marking that knows what year it is', items: [
+    'The marker no longer talks about achievement standards it half-remembers. NCEA has been rebuilt — the old Level 1 standards were retired at the end of 2023 — so it is now barred from naming a standard number, quoting a marking schedule, or telling you what "NZQA wants". It marks against the criteria on your card and the Achieved / Merit / Excellence ladder, which is the part that does not change.',
+    'You can name your actual standard when you make a deck — pick "Something else…" under Pitch the questions at and type it. The marker will use yours; it just will not invent one.',
+    'Feedback on your writing is no longer lost when the marker mis-copies your words. It used to quietly bin any note it could not line up with your answer — about one note in nine. Those notes now appear underneath without a highlight, so you get the whole mark.',
+    'And far fewer go missing in the first place: most of those failures were the marker wrapping your words in quote marks or swapping a ’ for a ".',
+  ] },
   { v: '1.2.0', date: '2026-08-18', title: 'Learn it, type it, note it', items: [
     'New Learn mode: it takes a deck and drills you until you can produce every answer, not just recognise it. You pick from four options the first time, then have to write it from memory. Rounds of seven with a checkpoint, and anything you miss comes straight back.',
     'Cards you actually type into. Fill-the-blanks are now filled in, and there is a new "type the answer" card for terms, names and values — because answering in your head is a generous marker.',
@@ -1245,6 +1251,41 @@ function batchText(text, size = 6000){
 
 /* When the student wants cards drawn ONLY from what they uploaded — no outside
    knowledge padded in. Appended to whichever prompt is used. */
+
+/* ---- NCEA ----------------------------------------------------------------
+   A model's memory of NCEA is always a year or two stale, and NCEA has moved
+   more than most: the Level 1 achievement standards were rebuilt for 2024, the
+   old 90xxx Level 1 standards expired at the end of 2023, and the upper levels
+   have been through their own review since. A student working on a current
+   standard was getting feedback framed around the one it replaced — marked
+   against criteria that no longer exist, and told to add things the retired
+   version asked for.
+
+   The fix is NOT to teach the model the current list of standards. That list
+   changes, this file would go stale in exactly the same way, and it cannot be
+   verified from inside a prompt. The fix is to stop the model asserting
+   anything about the standards at all.
+
+   Two things are stable and both are already in front of it: the grade ladder
+   (demonstrate / in-depth / comprehensive understanding), which has survived
+   every version of NCEA; and the card's own achieved/merit/excellence
+   descriptors, which were written from the student's own material. Those are
+   the only authorities the marker is allowed to appeal to. */
+const NCEA_RULES = `
+
+NCEA RULES — these override anything you remember about NZQA:
+- NEVER cite, quote or invent an achievement standard number (AS90xxx, AS91xxx, AS92xxx), a standard title, a credit count, or an internal/external label. The Level 1 standards were replaced for 2024 and the old 90xxx Level 1 standards are retired, so whatever you recall about them is out of date — naming one is worse than naming none.
+- Do not state what "the standard requires", what "NZQA is looking for", or what the marking schedule says. You have not seen it. Judge the answer against the criteria given to you above and nothing else.
+- If the student's own material names a standard or a context, you may refer to it in their words. Never assert its criteria from memory.
+- Mark against the ladder, which does not change between versions: Achieved demonstrates understanding; Merit shows in-depth understanding, explaining how and why with cause and effect; Excellence shows comprehensive understanding, linking ideas together, applying them to the specific context in the question, and evaluating or justifying.
+- The command verb in the question is the test of what the answer had to do. Judge it against that verb, not against a generic essay.
+- Use New Zealand spelling and NCEA vocabulary (Achieved / Merit / Excellence, not grades or percentages).`;
+
+/* Only bolted on when the student is actually working to NCEA. The app is
+   curriculum-agnostic and the deck's level is a free-text box — someone
+   revising for A-levels or a university paper should not be told about NZQA. */
+const isNcea = (level) => /ncea|nzqa/i.test(String(level == null ? '' : level));
+const nceaRules = (level) => (isNcea(level) ? NCEA_RULES : '');
 const STRICT_CLAUSE = '\n\nSTRICT SOURCE MODE — this overrides everything else: use ONLY facts, terms, examples and figures that are written explicitly in the material below. Do not add outside knowledge, extra context, or anything you happen to know that is not on the page. If the material is thin, make fewer cards rather than inventing content. Every card must be traceable to a specific line in the material.';
 
 function flipPrompt(source, level, strict){
@@ -1606,11 +1647,12 @@ Be specific to THIS answer. Reward construction (mechanism, links, context) over
 
 RULES FOR "notes" — these are shown highlighted on top of the student's own writing, so they must line up with it exactly:
 - "quote" must be an EXACT substring of the student answer. Copy it character for character. Do not paraphrase, correct spelling, or join text from two different sentences.
+- Give the BARE words, with no quotation marks wrapped around them, and no full stop added at the end. If the student's own sentence contains quotation marks, keep theirs exactly as they typed them — do not swap ' for " or tidy them.
 - Keep each quote short — a clause or a phrase, roughly 3 to 15 words.
 - Quotes must not overlap each other.
 - BALANCE IS NOT OPTIONAL. Unless you graded this answer Excellence, at least one note MUST be "weak" — you have just said the answer is not yet at the top grade, so something in it is holding it there. Find that phrase and point at it. An all-"good" set of notes on an answer graded below Excellence is wrong.
 - A "weak" note is not an insult. Vague wording, a missing mechanism, a sentence that restates the question, or a common misconception all qualify.
-- If the answer is too short or empty to quote meaningfully, return "notes": [].`;
+- If the answer is too short or empty to quote meaningfully, return "notes": [].${nceaRules(level)}`;
 }
 /* Bigger ceiling than the other calls because this one now carries the inline
    notes as well as the grade. Marking is the critical path — if the reply is
@@ -1645,45 +1687,125 @@ async function markAnswer(card, answer, level){
    approximated: a highlight sitting over the wrong words is worse than no
    highlight, because the student would read it as the marker's judgement of a
    sentence they didn't write. */
+/* The model likes to hand back its quote already dressed as a quotation —
+   wrapped in double quotes, sometimes with the full stop pulled inside. None
+   of that is in the student's answer, so the match failed and a perfectly good
+   note was thrown away. Measured on 42 marked answers, this and the quote-mark
+   swap below accounted for 13 of the 14 notes that could not be anchored.
+
+   Only ever shrinks the quote, so a stripped quote can never match MORE than
+   the original would have — it cannot drag a highlight onto the wrong words. */
+function trimQuoteWrapper(q){
+  let s = String(q == null ? '' : q).trim();
+  let before;
+  do {
+    before = s;
+    s = s.replace(/^[\s"'‘’“”]+/, '').replace(/[\s"'‘’“”.,;:]+$/, '');
+  } while (s !== before && s.length);
+  return s;
+}
+
 function quoteToRegex(quote){
   let out = '';
   for (const ch of quote){
     if (/\s/.test(ch)){ if (!out.endsWith('\\s+')) out += '\\s+'; continue; }
-    if (ch === "'" || ch === '‘' || ch === '’'){ out += "['‘’]"; continue; }
-    if (ch === '"' || ch === '“' || ch === '”'){ out += '["“”]'; continue; }
+    /* Every quotation mark is treated as every other one. The model routinely
+       re-punctuates the student's nested quotes — writing 'Forty-one' where
+       they wrote "Forty-one" — and which flavour of quote mark got used is
+       never the thing that should decide whether feedback survives. */
+    if (ch === "'" || ch === '‘' || ch === '’' || ch === '"' || ch === '“' || ch === '”'){ out += '[\'‘’"“”]'; continue; }
     if (ch === '-' || ch === '–' || ch === '—'){ out += '[-–—]'; continue; }
     out += ch.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
   }
   return out;
 }
 
-function locateNotes(answer, notes){
-  const text = String(answer || '');
-  if (!text || !Array.isArray(notes)) return [];
-  const found = [];
-  notes.forEach((n) => {
-    const quote = (n && typeof n.quote === 'string') ? n.quote.trim() : '';
-    const note = (n && typeof n.note === 'string') ? n.note.trim() : '';
-    /* one or two characters would highlight a stray letter mid-word */
-    if (quote.length < 4 || !note) return;
-    let at = text.indexOf(quote);
-    let len = quote.length;
-    if (at < 0){
-      try {
-        const m = new RegExp(quoteToRegex(quote), 'i').exec(text);
-        if (!m || !m[0]) return;
-        at = m.index; len = m[0].length;
-      } catch { return; }
+/* Every place a quote could sit, exact matches first. The tolerant regex is
+   only consulted when the literal string appears nowhere, so a quote copied
+   properly can never be dragged onto a fuzzy match somewhere else. */
+function allOccurrences(text, quote){
+  const spots = [];
+  const seen = {};
+  const add = (at, len) => {
+    if (at < 0 || spots.length >= 8) return;
+    const k = at + ':' + len;
+    if (seen[k]) return;
+    seen[k] = 1;
+    spots.push({ at, len });
+  };
+  let i = text.indexOf(quote);
+  while (i >= 0){ add(i, quote.length); i = text.indexOf(quote, i + 1); }
+  /* The tolerant pass runs even when an exact hit was found, because the two
+     find different things: a phrase the student wrote twice with different
+     capitalisation has two homes, and indexOf only ever sees one of them.
+     Exact hits are added first, so they are still the ones preferred when a
+     span has to be chosen — the tolerant matches are alternatives, not
+     replacements. */
+  try {
+    const re = new RegExp(quoteToRegex(quote), 'gi');
+    let m;
+    while ((m = re.exec(text)) !== null){
+      if (!m[0]){ re.lastIndex++; continue; }
+      add(m.index, m[0].length);
+      /* A quote that matches everywhere identifies nothing; stop rather than
+         build a huge list for a phrase like "it is". */
+      if (spots.length >= 8) break;
     }
-    found.push({ at, len, kind: n.kind === 'good' ? 'good' : 'weak', note });
+  } catch (e){}
+  return spots;
+}
+
+/* Fit as many notes onto the answer as will sit side by side, and hand back
+   the ones that would not fit rather than dropping them.
+
+   The old version walked the notes in the order the model happened to emit
+   them, took the first match for each, and threw away anything that overlapped
+   something already placed. That lost feedback twice over: a phrase the
+   student had written more than once was only ever tried in one spot, and a
+   note that lost the race disappeared completely — text and all — so the
+   numbered list quietly referred to highlights that were not on screen.
+
+   Two changes. Quotes with the fewest possible positions are placed first,
+   because a phrase that occurs once has no alternative and should claim its
+   span before one that could sit in three places. And anything still homeless
+   comes back as an orphan, so the marker's point survives even when it cannot
+   be pinned to particular words. */
+function placeNotes(answer, notes){
+  const text = String(answer || '');
+  const out = { located: [], orphans: [] };
+  if (!text || !Array.isArray(notes)) return out;
+
+  const cand = [];
+  notes.forEach((n) => {
+    const quote = (n && typeof n.quote === 'string') ? trimQuoteWrapper(n.quote) : '';
+    const note = (n && typeof n.note === 'string') ? n.note.trim() : '';
+    if (!note) return;
+    const kind = (n && n.kind === 'good') ? 'good' : 'weak';
+    /* One or two characters would highlight a stray letter mid-word. The note
+       is still worth showing; it just cannot be anchored. */
+    if (quote.length < 4){ out.orphans.push({ kind, note }); return; }
+    const spots = allOccurrences(text, quote);
+    if (!spots.length){ out.orphans.push({ kind, note }); return; }
+    cand.push({ spots, kind, note });
   });
-  /* Overlaps would nest one <mark> inside another and scramble the numbering,
-     so the earlier span wins and the later one is dropped. */
-  found.sort((a, b) => a.at - b.at || b.len - a.len);
-  const kept = [];
-  let cursor = 0;
-  found.forEach((f) => { if (f.at >= cursor){ kept.push(f); cursor = f.at + f.len; } });
-  return kept;
+
+  cand.sort((a, b) => (a.spots.length - b.spots.length) || (a.spots[0].at - b.spots[0].at));
+
+  const taken = [];
+  const clashes = (s) => taken.some(t => s.at < t.at + t.len && t.at < s.at + s.len);
+  for (const c of cand){
+    const spot = c.spots.find(s => !clashes(s));
+    if (spot){ taken.push(spot); out.located.push({ at: spot.at, len: spot.len, kind: c.kind, note: c.note }); }
+    else out.orphans.push({ kind: c.kind, note: c.note });
+  }
+  /* Reading order, so the numbering runs down the page. */
+  out.located.sort((a, b) => a.at - b.at);
+  return out;
+}
+
+/* Kept as the anchored-only view, which is what the highlighting needs. */
+function locateNotes(answer, notes){
+  return placeNotes(answer, notes).located;
 }
 
 /* The answer sliced into plain and highlighted runs, ready to render. */
@@ -1713,7 +1835,7 @@ Give 3-5 short writing points that guide them to build the answer themselves:
 - phrase each as a prompt or a fill-in, e.g. "Start by defining ___" or "Then link it to ___ because…"
 - for a ${card.verb} question, remind them what that verb demands
 Do NOT state the actual facts, terms, values or model answer — leave the thinking to them.
-
+${isNcea(level) ? 'Never name or cite an achievement standard number or title, and never say what the standard or NZQA "wants" — the NCEA standards have been rebuilt and whatever you recall about them is out of date. Point at the command verb instead.\n' : ''}
 Return ONLY a JSON array of short strings. No prose outside it.`;
 }
 async function getHints(card, level){
@@ -1825,7 +1947,7 @@ Return ONLY JSON:
   "habit": "one sentence: the habit that would earn this grade next time without being told" }
 Quote their real words in "where". Write "example" as a finished sentence they could have written — this is feedback after marking, so showing the better version is the point.
 
-"gap" and "why" are the parts that teach. Be concrete about the level of thinking each grade wants — describing what happens, explaining why it happens by naming the mechanism, and evaluating or justifying with linked reasoning are different demands, and the command verb "${card.verb}" decides which one this question is asking for. Say which one they did and which one they need. Do not invent data, quotes or NZQA codes.`;
+"gap" and "why" are the parts that teach. Be concrete about the level of thinking each grade wants — describing what happens, explaining why it happens by naming the mechanism, and evaluating or justifying with linked reasoning are different demands, and the command verb "${card.verb}" decides which one this question is asking for. Say which one they did and which one they need. Do not invent data, quotes or NZQA codes.${nceaRules(level)}`;
 }
 async function getUpgrade(card, answer, result, level){
   const reply = await callModel(upgradePrompt(card, answer, result, level), 1600, MODEL_SMART);
@@ -3444,7 +3566,9 @@ function UpgradePath({ card, answer, r, level, demo }){
    putting one over the wrong sentence. */
 function AnnotatedAnswer({ answer, notes, defaultOpen = true }){
   const [open, setOpen] = useState(defaultOpen);
-  const located = useMemo(() => locateNotes(answer, notes), [answer, notes]);
+  const placed = useMemo(() => placeNotes(answer, notes), [answer, notes]);
+  const located = placed.located;
+  const orphans = placed.orphans;
   const segs = useMemo(() => segmentAnswer(answer, located), [answer, located]);
   const words = String(answer || '').trim() ? String(answer).trim().split(/\s+/).length : 0;
   const tint = (kind) => kind === 'good' ? T.green : T.amber;
@@ -3456,7 +3580,7 @@ function AnnotatedAnswer({ answer, notes, defaultOpen = true }){
         <div className="flex items-center justify-between" style={{ marginBottom: open ? 10 : 0 }}>
           <Chip colour={T.muted}>What you wrote</Chip>
           <Sub style={{ fontSize: 11.5 }}>
-            {located.length > 0 ? `${located.length} note${located.length === 1 ? '' : 's'} · ` : ''}
+            {(located.length + orphans.length) > 0 ? `${located.length + orphans.length} note${(located.length + orphans.length) === 1 ? '' : 's'} · ` : ''}
             {words} words · {open ? 'hide' : 'show'}
           </Sub>
         </div>
@@ -3488,6 +3612,30 @@ function AnnotatedAnswer({ answer, notes, defaultOpen = true }){
                   <span style={{ fontFamily: SANS, fontSize: 13.5, lineHeight: 1.5, color: T.muted }}>
                     <b style={{ color: tint(l.kind), fontWeight: 700 }}>{l.kind === 'good' ? 'Works: ' : 'Weak: '}</b>
                     {l.note}
+                  </span>
+                </div>
+              ))}
+            </div>
+          )}
+
+          {/* Notes the marker made about the answer that could not be pinned to
+              particular words — usually because it tidied the wording of its
+              own quote, or because two of its notes wanted the same phrase.
+              These used to be discarded outright, which meant the student
+              silently lost part of their marking. A point with no underline is
+              worth far more than no point at all, so it is shown here without
+              a number rather than thrown away. */}
+          {orphans.length > 0 && (
+            <div className="flex flex-col gap-2" style={{ marginTop: located.length > 0 ? 10 : 12 }}>
+              {orphans.map((o, i) => (
+                <div key={'o' + i} className="flex gap-2" style={{ alignItems: 'flex-start' }}>
+                  <span style={{ color: tint(o.kind), lineHeight: '20px', flexShrink: 0, minWidth: 12,
+                    display: 'flex', justifyContent: 'center' }}>
+                    <Ico name="check" size={11} weight={3} />
+                  </span>
+                  <span style={{ fontFamily: SANS, fontSize: 13.5, lineHeight: 1.5, color: T.muted }}>
+                    <b style={{ color: tint(o.kind), fontWeight: 700 }}>{o.kind === 'good' ? 'Works: ' : 'Weak: '}</b>
+                    {o.note}
                   </span>
                 </div>
               ))}
@@ -4187,7 +4335,10 @@ function Create({ onSave, settings, onSettings, onPending, onStarter }){
       {mode === 'generate' && (
         <div style={{ marginTop: 14 }} data-tour="create-level">
           <div style={{ fontFamily: SANS, fontSize: 14, fontWeight: 700, color: T.ink }}>Pitch the questions at</div>
-          <Sub style={{ marginTop: 2, fontSize: 12.5 }}>Sets how hard they are and what the marking expects.</Sub>
+          {/* Naming the standard is worth encouraging: the marker is forbidden
+              from recalling standards itself (its memory of NCEA is out of
+              date), but it will happily use one the student supplies. */}
+          <Sub style={{ marginTop: 2, fontSize: 12.5 }}>Sets how hard they are and what the marking expects. Pick <b>Something else…</b> to name your actual standard, like "NCEA Level 1 AS92022 genetic variation".</Sub>
           <div style={{ position: 'relative', marginTop: 8 }}>
             <select value={LEVEL_PRESETS.includes(level) ? level : '__other'}
               onChange={e => setLevel(e.target.value === '__other' ? '' : e.target.value)}
