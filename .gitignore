@@ -16,3 +16,7 @@ Thumbs.db
 
 .check-out.js
 dev/
+
+# scratch files options-eval.mjs writes while bundling the app for test
+.options-eval-src.jsx
+tools/.options-eval-bundle.mjs
