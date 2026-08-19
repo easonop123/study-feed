@@ -20,3 +20,5 @@ dev/
 # scratch files options-eval.mjs writes while bundling the app for test
 .options-eval-src.jsx
 tools/.options-eval-bundle.mjs
+.diagnose-eval-src.jsx
+tools/.diagnose-eval-bundle.mjs
