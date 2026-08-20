@@ -52,8 +52,8 @@ tint rather than `T.accent`.
 | `/app/` | The app itself | `docs/app/index.html` + `docs/app.js` |
 
 The landing page is deliberately not part of the React bundle: a marketing page
-lives or dies on how fast it paints, and this one is one ~60KB file with inline
-CSS and three small scripts. It shares the app's palette and typeface so arriving
+lives or dies on how fast it paints, and this one is one file — 83KB raw, 24KB
+gzipped — with inline CSS and four small scripts. It shares the app's palette and typeface so arriving
 in the app doesn't feel like a different product. The PWA manifest points at
 `/app/`, so installing to the home screen opens the app, not the pitch.
 
@@ -76,10 +76,39 @@ nothing in this repo can rasterise a font; canvas can. **Replacing the file does
 not refresh anyone's cached preview** — force a re-scrape with Facebook's Sharing
 Debugger, or iMessage, WhatsApp and the rest keep showing the old card for days.
 
-Everything on it that starts hidden (`.rise`, `.reveal`) has a failsafe: if the
-IntersectionObserver hasn't reported within two seconds the page reveals
-everything, and a `<noscript>` block does the same with JS off. A missing
-animation is a far smaller failure than a blank page.
+Everything on it that starts hidden (`.rise`, `.reveal`, `.words .w`) has a
+failsafe: if the IntersectionObserver hasn't reported within two seconds the page
+reveals everything, and a `<noscript>` block does the same with JS off. Anything
+whose *resting* state is hidden — the mark that draws itself in the nav — is
+gated behind a `.js` class set by a one-line script in `<head>`, so with JS off
+the hidden state is never reachable. A missing animation is a far smaller failure
+than a blank page; a logo that never draws is a missing logo.
+
+**The effects layer** (spotlights, tilt, magnetic buttons, parallax, scroll
+progress, aurora) plays by four rules, all of them load-bearing:
+
+- **Only `transform`, `opacity` and `background-image` animate.** Nothing can
+  trigger layout, so nothing can drop a frame. The card spotlight is a
+  *background-image* rather than a `::before` overlay specifically because a
+  background image paints above the background colour and below the content, so
+  it can never wash over text however the card is built.
+- **One rAF loop for the whole page.** Every listener does nothing but record a
+  number; a single frame callback does all the writing. Reads never interleave
+  with writes, so pointer and scroll effects cannot compound into layout
+  thrash. Scroll *state* (the nav's background, the parallax offset) is applied
+  synchronously at load, not on the first frame — a page opened already scrolled
+  had a transparent nav over content until then.
+- **Pointer effects are behind `(hover:hover) and (pointer:fine)`** at both the
+  JS and CSS layer. A `:hover` that sticks after a tap reads as a bug.
+- **Reduced motion switches all of it off**, and every effect that rests at
+  opacity 0 or a transform is named individually in that block and put back.
+  The universal `animation:none` is not sufficient on its own: without the
+  named overrides those elements would simply never arrive.
+
+The blur on `.reveal` is desktop-only (`min-width:760px`) — `filter:blur()`
+promotes an element to its own layer and is the one property here with a real
+paint cost, and the cheapest device is the one most likely to be reading this on
+a bus.
 
 ## Build & deploy
 
