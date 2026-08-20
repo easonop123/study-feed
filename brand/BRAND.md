@@ -126,6 +126,13 @@ Copy everything in `public/` into the project's `public/` directory, then add to
 <meta name="twitter:image" content="https://studyfeed.app/og-image.png">
 ```
 
+**The og:image is generated, not hand-drawn.** `brand/make-og.html` retypesets the
+card from the values in this file — near-black ground, the mark at the 12.5 stroke
+weight, a two-line headline with the second line in the accent, one muted sub, and the
+standard chip row. Change the copy at the top of that file, open it, download, and
+replace both `docs/og-image.png` and `brand/social/og-image.png`. It runs in a browser
+because the card is set in Inter and nothing here can rasterise a font.
+
 **The og:image URL must be absolute.** Relative paths silently fail in iMessage, WhatsApp,
 Instagram DMs and most chat apps — and link previews in group chats are load-bearing for
 how this app spreads. After deploying, force a re-scrape with Facebook's Sharing Debugger

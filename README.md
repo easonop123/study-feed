@@ -68,9 +68,13 @@ link: `/app/#gaps` opens the diagnostic and `/app/#ideas` opens the feature
 form, both read once on load and then cleared from the URL. TikTok and Instagram
 (@studyfeednz) are linked from the footer and from the app's You tab.
 
-**Known gap:** `og-image.png` is a drawn asset and still carries the old headline,
-so link previews are off-message until it is redrawn. It is a brand asset rather
-than generated code — see `brand/social/`.
+`og-image.png` is redrawn to match, by `brand/make-og.html` — a canvas that
+retypesets the SAME template (ground, mark, wordmark, two-line headline with the
+second line in the accent, standard chip row) so the card cannot drift from the
+kit. It runs in a browser rather than Node because the card is set in Inter and
+nothing in this repo can rasterise a font; canvas can. **Replacing the file does
+not refresh anyone's cached preview** — force a re-scrape with Facebook's Sharing
+Debugger, or iMessage, WhatsApp and the rest keep showing the old card for days.
 
 Everything on it that starts hidden (`.rise`, `.reveal`) has a failsafe: if the
 IntersectionObserver hasn't reported within two seconds the page reveals
