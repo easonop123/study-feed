@@ -1,0 +1,161 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<title>Study Feed — og:image generator</title>
+<!--
+  Redraws docs/og-image.png (1200x630) to the SAME template as the one shipped
+  on 5 Aug 2026 — near-black ground, mark plus wordmark top left, a two-line
+  headline with the second line in the accent, one muted sub, and the standard
+  chip row. Only the words change. This is not a new brand asset; it is the
+  existing one re-typeset, which is why the geometry and palette below are
+  copied from CLAUDE.md rather than chosen here.
+
+  Why a browser and not a Node script: the card is typeset in Inter, and there
+  is no font rasteriser in this repo's dependencies (make-maskable.mjs gets away
+  with pure zlib because it only rescales pixels). Canvas has one.
+
+  Run: serve the repo and open this file, or open it directly from disk — then
+  click Download and replace docs/og-image.png and brand/social/og-image.png.
+
+  After replacing it, the preview stays cached in iMessage, WhatsApp and every
+  chat app for days. Force a re-scrape with Facebook's Sharing Debugger.
+-->
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700;800&display=swap" />
+<style>
+  body{ margin:0; padding:28px; background:#0d0b16; color:#EDEAF6;
+    font:15px/1.5 "Inter", system-ui, sans-serif; }
+  canvas{ width:100%; max-width:900px; height:auto; border-radius:10px; display:block; }
+  button{ margin-top:16px; font:inherit; font-weight:700; padding:11px 18px; border-radius:999px;
+    border:none; background:#7C5CFF; color:#fff; cursor:pointer; }
+  p{ max-width:900px; color:#B0A8C8; }
+</style>
+</head>
+<body>
+<canvas id="c" width="1200" height="630"></canvas>
+<button id="dl">Download og-image.png</button>
+<p>1200×630. Replace <code>docs/og-image.png</code> and <code>brand/social/og-image.png</code>,
+then force a re-scrape or the old preview stays cached for days.</p>
+
+<script>
+/* ---- the kit, verbatim from CLAUDE.md ---------------------------------- */
+var GROUND = '#141024', WHITE = '#FFFFFF', ACCENT = '#7C5CFF', MUTED = '#B0A8C8';
+var W = 1200, H = 630, PAD = 72;
+
+/* ---- the copy — the only part that changes ----------------------------- */
+var LINE1 = 'Stop revising what you already know.';
+var LINE2 = "Find the bit you don't.";
+var SUB   = 'Five minutes of writing shows you exactly what is missing.';
+var CHIPS = ['Free', 'No sign-up', 'NCEA 1–3'];
+
+/* The mark: brand/svg/mark-small-on-dark.svg, 100x100, 12.5 strokes, round
+   caps and joins. Top layer violet and NEVER filled; the lower two are white
+   on this ground. */
+function drawMark(ctx, x, y, size){
+  var s = size / 100;
+  ctx.save();
+  ctx.translate(x, y); ctx.scale(s, s);
+  ctx.lineWidth = 12.5; ctx.lineCap = 'round'; ctx.lineJoin = 'round';
+  ctx.strokeStyle = ACCENT;
+  ctx.beginPath();
+  ctx.moveTo(50, 14); ctx.lineTo(85, 34); ctx.lineTo(50, 54); ctx.lineTo(15, 34); ctx.closePath();
+  ctx.stroke();
+  ctx.strokeStyle = WHITE;
+  ctx.beginPath(); ctx.moveTo(15, 51); ctx.lineTo(50, 71); ctx.lineTo(85, 51); ctx.stroke();
+  ctx.beginPath(); ctx.moveTo(15, 68); ctx.lineTo(50, 88); ctx.lineTo(85, 68); ctx.stroke();
+  ctx.restore();
+}
+
+/* Shrink until the longest line fits the content width. The headline is the
+   one thing that must never be clipped, and copy changes length. */
+function fitSize(ctx, lines, weight, start, min, maxW){
+  for (var px = start; px >= min; px -= 1){
+    ctx.font = weight + ' ' + px + 'px Inter, system-ui, sans-serif';
+    var ok = true;
+    for (var i = 0; i < lines.length; i++){
+      if (ctx.measureText(lines[i]).width > maxW){ ok = false; break; }
+    }
+    if (ok) return px;
+  }
+  return min;
+}
+
+function roundRect(ctx, x, y, w, h, r){
+  ctx.beginPath();
+  ctx.moveTo(x + r, y);
+  ctx.arcTo(x + w, y, x + w, y + h, r);
+  ctx.arcTo(x + w, y + h, x, y + h, r);
+  ctx.arcTo(x, y + h, x, y, r);
+  ctx.arcTo(x, y, x + w, y, r);
+  ctx.closePath();
+}
+
+function draw(){
+  var ctx = document.getElementById('c').getContext('2d');
+  ctx.fillStyle = GROUND; ctx.fillRect(0, 0, W, H);
+  ctx.textBaseline = 'alphabetic';
+
+  /* masthead */
+  drawMark(ctx, PAD, 74, 76);
+  ctx.fillStyle = WHITE;
+  ctx.font = '800 40px Inter, system-ui, sans-serif';
+  try { ctx.letterSpacing = '2.5px'; } catch (e){}
+  ctx.fillText('STUDY FEED', PAD + 100, 138);
+  try { ctx.letterSpacing = '0px'; } catch (e){}
+
+  /* headline — two lines, the second in the accent */
+  var maxW = W - PAD * 2;
+  var hs = fitSize(ctx, [LINE1, LINE2], '800', 66, 40, maxW);
+  ctx.font = '800 ' + hs + 'px Inter, system-ui, sans-serif';
+  try { ctx.letterSpacing = '-1.5px'; } catch (e){}
+  var lh = Math.round(hs * 1.24);
+  var top = 300;
+  ctx.fillStyle = WHITE;  ctx.fillText(LINE1, PAD, top);
+  ctx.fillStyle = ACCENT; ctx.fillText(LINE2, PAD, top + lh);
+  try { ctx.letterSpacing = '0px'; } catch (e){}
+
+  /* sub */
+  var ss = fitSize(ctx, [SUB], '400', 34, 22, maxW);
+  ctx.font = '400 ' + ss + 'px Inter, system-ui, sans-serif';
+  ctx.fillStyle = MUTED;
+  var subY = top + lh + Math.round(hs * 1.05);
+  ctx.fillText(SUB, PAD, subY);
+
+  /* chip row — outlined pills, the standard three */
+  var chipY = subY + 44, cx = PAD, ch = 62;
+  ctx.font = '600 25px Inter, system-ui, sans-serif';
+  for (var i = 0; i < CHIPS.length; i++){
+    var tw = ctx.measureText(CHIPS[i]).width, cw = tw + 56;
+    ctx.strokeStyle = 'rgba(255,255,255,0.28)'; ctx.lineWidth = 2;
+    roundRect(ctx, cx, chipY, cw, ch, ch / 2); ctx.stroke();
+    ctx.fillStyle = WHITE;
+    ctx.fillText(CHIPS[i], cx + 28, chipY + 41);
+    cx += cw + 16;
+  }
+}
+
+/* Inter has to be loaded before anything is measured, or the fit runs against
+   the fallback and the headline comes out the wrong size. */
+function go(){
+  var want = ['800 66px Inter', '600 25px Inter', '400 34px Inter', '800 40px Inter'];
+  if (!document.fonts){ draw(); return; }
+  Promise.all(want.map(function(f){ return document.fonts.load(f); }))
+    .then(function(){ return document.fonts.ready; })
+    .then(draw, draw);
+}
+go();
+
+document.getElementById('dl').onclick = function(){
+  var a = document.createElement('a');
+  a.download = 'og-image.png';
+  a.href = document.getElementById('c').toDataURL('image/png');
+  a.click();
+};
+
+/* Used by the build tooling to lift the bytes out without a download. */
+window.__ogPng = function(){ return document.getElementById('c').toDataURL('image/png'); };
+</script>
+</body>
+</html>

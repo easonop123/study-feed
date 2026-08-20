@@ -52,11 +52,29 @@ tint rather than `T.accent`.
 | `/app/` | The app itself | `docs/app/index.html` + `docs/app.js` |
 
 The landing page is deliberately not part of the React bundle: a marketing page
-lives or dies on how fast it paints, and this one is one ~20KB file with inline
-CSS and three small scripts. It shares the app's palette and typeface so
-arriving in the app doesn't feel like a different product. The PWA manifest
-points at `/app/`, so installing to the home screen opens the app, not the
-pitch.
+lives or dies on how fast it paints, and this one is one ~60KB file with inline
+CSS and three small scripts. It shares the app's palette and typeface so arriving
+in the app doesn't feel like a different product. The PWA manifest points at
+`/app/`, so installing to the home screen opens the app, not the pitch.
+
+**Its pitch leads with the diagnostic**, changed 19 Aug 2026: *"Stop revising what
+you already know. Find the bit you don't."* The previous headline — *"Flashcards
+get you Achieved. Excellence is a writing problem."* — was true and is still the
+argument, but it names a problem without naming an action, so it now leads the
+"three ways to not know something" section instead of the page. The rung
+vocabulary (name it / link it / apply it) is shared verbatim with the marking and
+with Find my gaps, so the page teaches the thing the app then uses. Two CTAs deep
+link: `/app/#gaps` opens the diagnostic and `/app/#ideas` opens the feature
+form, both read once on load and then cleared from the URL. TikTok and Instagram
+(@studyfeednz) are linked from the footer and from the app's You tab.
+
+`og-image.png` is redrawn to match, by `brand/make-og.html` — a canvas that
+retypesets the SAME template (ground, mark, wordmark, two-line headline with the
+second line in the accent, standard chip row) so the card cannot drift from the
+kit. It runs in a browser rather than Node because the card is set in Inter and
+nothing in this repo can rasterise a font; canvas can. **Replacing the file does
+not refresh anyone's cached preview** — force a re-scrape with Facebook's Sharing
+Debugger, or iMessage, WhatsApp and the rest keep showing the old card for days.
 
 Everything on it that starts hidden (`.rise`, `.reveal`) has a failsafe: if the
 IntersectionObserver hasn't reported within two seconds the page reveals
@@ -165,7 +183,11 @@ Decks are portable: export the whole library, a chosen subset, or one deck on it
 - **Explain this further:** on any revealed card — the reasoning behind the answer, plus **Simpler** and **Go deeper** when the first pass lands at the wrong level.
 - **Ask anything:** a chat helper on every screen. It keeps the thread and is handed the card on screen, so "why is that the answer?" works without retyping. Memory-only — no fifth storage key.
 - **Feed:** ends deliberately ("put the phone down"); **Keep practising anyway** opens opt-in endless practice (recorded as practice, never touches the schedule). A deck bar at the top drills one subject at a time.
-- **Quiz mode:** a finite graded test built from a deck's own cards. No API cost — distractors come from other cards.
+- **Find my gaps (diagnostic):** type a topic and it builds a short written test whose output is a list of what is missing, not a score. Two model calls: one plans the test, one reads every answer together — reading them as a set is the point, because the pattern across the misses is the finding and a per-question marker cannot see it. Probes climb three rungs in order — **name** it (Achieved), **link** it with cause and effect (Merit), **apply** it to an unseen situation and justify (Excellence) — and the report names the rung where understanding stops, then gives each gap as a sentence that has to point at something specific ("you did not connect the larger surface area to the number of particles exposed"). "Not sure" is a first-class answer. One button turns the gaps into study material and lands it in Create as drafts, so nothing is saved unlooked-at. The last report is kept in `settings:main` — it is a to-do list, and one you cannot reopen is a worse one. Measured by `tools/diagnose-eval.mjs` against answers written with a designed flaw.
+- **Why the diagnostic is built on the ladder, not on a list of standards:** the standards get rebuilt (the Level 1 ones were replaced for 2024, which is why `NCEA_RULES` bars the model from naming any of them) and a list shipped in this file would rot exactly the way the model's memory did. The **ladder** does not get rebuilt — it has survived every version and is already what the marking runs on. It also happens to be the distinction a student actually needs: "you can name it, you cannot link it" is a study instruction; "7/10" is not. The student still names their real standard and it is passed through in their words. A sourced NZQA standards file is a possible follow-up, not a prerequisite.
+- **Quiz mode:** a finite graded test built from a deck's own cards. No API cost — distractors come from other cards. 1–4 answers and Enter carries on.
+- **Learn mode:** takes a deck and drills it until you can *produce* every answer, not just recognise one. A card needs two correct answers to be done and the second is harder than the first: you pick it out of a list first, then have to write it from memory (or, where nobody could reproduce the wording, say it and mark yourself). Rounds of seven with a checkpoint; a miss drops the card back to recognition and it returns before the round is out. It keeps your place if you close it, ends by naming the cards that fought back, and offers to drill just those. Like Quiz, it counts as practice and never moves a due date — the feed is the only scheduler.
+- **Options that don't answer themselves:** wrong answers used to be drawn at random from every other answer in scope, so a one-word answer could sit beside a paragraph and the odd one out was free marks. Candidates are now ranked against the answer they have to hide among — same rough length, same word count, number against numbers, term against terms — and a near-spelling of the right answer is never offered, since picking it would be right in spirit. Numbers get invented neighbours (doubled, halved, an order of magnitude out; years get years). Where a deck holds nothing that could pass for the answer, Learn shows the card once and asks for it properly later instead of faking a question, and long answers are asked with three options rather than four so the question is not a reading test. Measured by `tools/options-eval.mjs`, which scores a guesser that only looks at option lengths: on the mixed deck that prompted it, free marks went 11% → 0% and the shortest-to-longest option ratio 0.06 → 0.47.
 - **First run:** a seven-panel walkthrough (`Tutorial`) opens for a genuinely new visitor and ends by handing them to the generator. It teaches the A/M/E ladder off a *canned* marked answer rendered through the real `MarkResult` — no API call, so it can't spin, cost tokens or fail on a bad connection before the student has made a single card. The trade-off is that `TUT_MARK` must keep the shape `markPrompt` asks for. Skippable from every panel; reachable again from Settings → How this app works, and from the Home empty state. "New" means `!onboarded && !lastSeenVersion && no decks` — `onboarded` alone would have shown it to every existing user, who instead get backfilled as onboarded on load.
 - **Shareable cards:** clearing the due feed, or earning an Excellence on a written answer, offers a 1080×1920 PNG built for a story. Drawn on a canvas (`drawShareCard`), not screenshotted — html2canvas is a dependency the Artifact build can't take, and a phone-width screenshot is the wrong shape anyway. It is a *contained* light card floating on a violet backdrop, not a full-bleed slab: laid out in two passes so the card sizes to its own content and centres, which is what lets a four-line answer and a one-line answer both look deliberate. Three entry points: **Home → This week → Share your week** (the findable one; the other two sit behind clearing the whole feed or earning an Excellence, which a new student may not reach for days), the finish screen, and an Excellence mark. The session card leads with a headline chosen from the actual history (`sessionHeadline` — best day yet, first session in N days, N subjects in one sitting) and carries a seven-day bar strip, so someone who shares twice does not post the same picture twice; both come from `reviewsByDate`, which already exists. The grade card carries an excerpt of **the student's own answer** and one line of the marking, so it is evidence rather than a claim; **the question stays off it**, being generated from a teacher's slides and past papers. The card clears the top and bottom ~250px that Instagram and Snapchat overlay with their own furniture, since the footer URL is the whole point. Sharing goes through `navigator.share({files})` — there is no API to post to a story directly, so the OS sheet does it — and falls back to a download everywhere else, including the Artifact.
 - **Home dashboard:** greeting, exam countdown, due hero, streak, this-week bars, subject mastery, quick actions. All from local data.

@@ -153,6 +153,13 @@ function subjectColour(name){
 const TYPE_LABEL = { flip: 'Flip', cloze: 'Fill the blank', short: 'Short answer', mcq: 'Multiple choice', extended: 'Long answer', typed: 'Type the answer' };
 const LEVEL_PRESETS = ['NCEA Level 1', 'NCEA Level 2', 'NCEA Level 3'];
 
+/* The accounts, in one place. docs/index.html carries the same two in its
+   footer; if these ever change, both move together. */
+const SOCIAL = [
+  { k: 'tiktok', label: 'TikTok', url: 'https://www.tiktok.com/@studyfeednz' },
+  { k: 'instagram', label: 'Instagram', url: 'https://www.instagram.com/studyfeednz/' },
+];
+
 /* Symbols that are a pain to type when answering chemistry/physics/maths.
    Subscripts build formulae (H + ₂ + O = H₂O); superscripts build charges
    and powers (SO₄ + ² + ⁻ = SO₄²⁻; ×10 + ⁻ + ⁷). */
@@ -206,7 +213,7 @@ async function save(key, value){
 
 /* longMix = what % of your cards should be long (extended-response) answers.
    Drives both what gets generated and how the feed is blended. */
-const DEFAULT_SETTINGS = { interleave: true, newPerDay: 12, capNew: false, longMix: 30, theme: 'system', name: '', examDate: '', lastSeenVersion: '', onboarded: false, dismissedTips: {}, sound: true, font: 'inter' };
+const DEFAULT_SETTINGS = { interleave: true, newPerDay: 12, capNew: false, longMix: 30, theme: 'system', name: '', examDate: '', lastSeenVersion: '', onboarded: false, dismissedTips: {}, sound: true, font: 'inter', learnSession: null, diagnosis: null };
 
 /* ---- sound ---------------------------------------------------------------
    Synthesised, not sampled. Three reasons: a card grade fires 30+ times in a
@@ -351,8 +358,29 @@ function failureKind(e){
    1.x numbers sitting above the new 1.0.0 cannot cause a mis-fire. They are not
    shown next to the pre-launch entries either — those were dev builds and the
    numbers mean nothing to a student. */
-const APP_VERSION = '1.2.1';
+const APP_VERSION = '1.4.0';
 const PATCH_NOTES = [
+  { v: '1.4.0', date: '2026-08-19', title: 'Find my gaps', items: [
+    'New: type in a topic and it builds a short written test whose point is not the score. It tells you WHERE your understanding stops and exactly what was missing — "you did not connect the larger surface area to the number of particles exposed" rather than "6 out of 10".',
+    'It asks you three kinds of question in order: name it, then explain how it links, then use it on a situation you have not seen. Those are the three rungs your written answers are graded on, so the report tells you which rung you fall off — the naming, the linking, or the applying.',
+    'Every gap comes with the question, what you wrote, and the specific thing that was absent. Then a short list of what to work on, in order.',
+    'One button turns everything you missed into cards. They land in Create as drafts, so you still look through them before they are kept.',
+    'Quick (6 questions) or Full (12). "Not sure" is a real answer — it is more useful to the diagnosis than a guess, and it is not held against you.',
+    'It keeps your last diagnosis so you can come back to the list while you study.',
+    'As everywhere else, it will use the standard YOU name and is barred from recalling one of its own.',
+    'Find my gaps, Learn and Quiz now sit in a row near the top of Home under "Test yourself", instead of in small print at the very bottom. Learn in particular was only reachable by scrolling past the whole dashboard.',
+    'Study Feed is on TikTok and Instagram — @studyfeednz on both. Links are at the bottom of You.',
+  ] },
+  { v: '1.3.0', date: '2026-08-19', title: 'Options that make you think', items: [
+    'The wrong answers in Learn and Quiz used to be pulled at random from your other cards, so a one-word answer could sit next to a whole paragraph — and you could pick the odd one out without reading the question. Wrong answers are now matched to the right one: same sort of length, same sort of thing, a number against numbers and a name against names.',
+    'Where a deck holds nothing that could pass for the answer, Learn stops pretending. It shows you that card once, then asks you for it properly later in the same round.',
+    'Dates and figures get proper wrong answers now — the year ten out, the value doubled or an order of magnitude off — instead of whatever number happened to be on another card.',
+    'Learn keeps your place. Close it mid-round and it offers to pick up where you left off, with the ones that caught you out still marked.',
+    'It ends by naming the cards that fought back, and offers to drill just those.',
+    'On a keyboard: 1–4 picks an answer and Enter carries on. A right answer moves on by itself, so a long session is half the taps it was.',
+    'The Learn progress bar was reading a hundredth of the real number and never appeared to move. It moves.',
+    '"I was right" now finishes the card off properly instead of quietly costing you a round.',
+  ] },
   { v: '1.2.1', date: '2026-08-18', title: 'Marking that knows what year it is', items: [
     'The marker no longer talks about achievement standards it half-remembers. NCEA has been rebuilt — the old Level 1 standards were retired at the end of 2023 — so it is now barred from naming a standard number, quoting a marking schedule, or telling you what "NZQA wants". It marks against the criteria on your card and the Achieved / Merit / Excellence ladder, which is the part that does not change.',
     'You can name your actual standard when you make a deck — pick "Something else…" under Pitch the questions at and type it. The marker will use yours; it just will not invent one.',
@@ -2219,6 +2247,8 @@ const ICON_PATHS = {
   speaker:  'M11 5.5 6.8 9H4a1 1 0 0 0-1 1v4a1 1 0 0 0 1 1h2.8L11 18.5zM15.2 9.4a3.6 3.6 0 0 1 0 5.2M18 6.8a7.4 7.4 0 0 1 0 10.4',
   muted:    'M11 5.5 6.8 9H4a1 1 0 0 0-1 1v4a1 1 0 0 0 1 1h2.8L11 18.5zM16 10l5 4M21 10l-5 4',
   pencil:   'M4.5 19.5h3.6L19.4 8.2a2.3 2.3 0 0 0-3.2-3.2L4.5 15.9zM14.7 6.5l2.8 2.8',
+  instagram:'M7.5 3.5h9a4 4 0 0 1 4 4v9a4 4 0 0 1-4 4h-9a4 4 0 0 1-4-4v-9a4 4 0 0 1 4-4zM12 8.2a3.8 3.8 0 1 0 0 7.6 3.8 3.8 0 0 0 0-7.6zM17.4 6.6v.01',
+  tiktok:   'M16.6 5.82A4.28 4.28 0 0 1 15.54 3h-3.09v12.4a2.59 2.59 0 0 1-2.59 2.5 2.59 2.59 0 0 1 0-5.18c.27 0 .52.04.76.12v-3.2a5.86 5.86 0 0 0-.76-.05 5.78 5.78 0 1 0 5.78 5.78V9.01a7.35 7.35 0 0 0 4.3 1.38V7.3a4.29 4.29 0 0 1-3.34-1.48z',
 };
 
 /* `fill` is only for the couple of glyphs that read better solid (the flame on
@@ -4162,7 +4192,7 @@ function DropZone({ onPicked, attaching, imageCount }){
   );
 }
 
-function Create({ onSave, settings, onSettings, onPending, onStarter }){
+function Create({ onSave, settings, onSettings, onPending, onStarter, seed, onSeedUsed }){
   const [mode, setMode] = useState('generate');
   const [cardType, setCardType] = useState('mix');
   const [source, setSource] = useState('');
@@ -4183,6 +4213,22 @@ function Create({ onSave, settings, onSettings, onPending, onStarter }){
   useEffect(() => {
     if (onPending) onPending(drafts ? drafts.filter(d => d.keep).length : 0);
   }, [drafts, onPending]);
+
+  /* "Make cards from what's missing" hands the gaps over as material and lands
+     HERE rather than saving a deck behind the student's back — the drafts
+     screen is where cards get looked at before they are kept, and a deck built
+     from a diagnosis has no more right to skip that than one built from notes.
+     Strict source mode is on: the gap list already says exactly what is
+     missing, so there is nothing for the model to helpfully add.
+     Consumed once; the parent clears it. */
+  useEffect(() => {
+    if (!seed) return;
+    setMode('generate');
+    setSource(seed.source || '');
+    if (seed.level) setLevel(seed.level);
+    setDrafts(null); setErr(''); setImages([]); setStrictSource(true);
+    if (onSeedUsed) onSeedUsed();
+  }, [seed]);
 
   /* Takes a plain array so the hidden input and the drop target share one path. */
   const takeFiles = async (files) => {
@@ -5065,6 +5111,17 @@ function Settings({ settings, onChange, library, progress, onImport, onTutorial 
       <Card style={{ padding: 15, marginTop: 10, boxShadow: SH.raised }}>
         <div style={{ fontFamily: SANS, fontSize: 15, fontWeight: 700, color: T.ink }}>About</div>
         <Sub style={{ fontSize: 12.5, marginTop: 2 }}>Study Feed · version {APP_VERSION}. See <b>Updates</b> for what's new.</Sub>
+        <div className="flex items-center gap-2" style={{ marginTop: 12, flexWrap: 'wrap' }}>
+          {SOCIAL.map(sc => (
+            <a key={sc.k} href={sc.url} target="_blank" rel="me noopener noreferrer" className="sf-tap"
+              style={{ display: 'inline-flex', alignItems: 'center', gap: 7, textDecoration: 'none',
+                background: T.well, border: `1px solid ${T.border}`, borderRadius: R.pill, padding: '8px 13px',
+                fontFamily: SANS, fontSize: 13, fontWeight: 650, color: T.muted }}>
+              {/* the TikTok mark is a fill, the Instagram one a stroke */}
+              <Ico name={sc.k} size={15} weight={sc.k === 'tiktok' ? 0 : 1.9} fill={sc.k === 'tiktok'} />{sc.label}
+            </a>
+          ))}
+        </div>
       </Card>
     </div>
   );
@@ -5087,7 +5144,7 @@ function longDate(){
   catch { return TODAY(); }
 }
 
-function Home({ library, progress, stats, settings, due, onStart, onCreate, onDecks, onStudyDeck, onQuiz, onLearn, onSettings, onTutorial, onStarter }){
+function Home({ library, progress, stats, settings, due, onStart, onCreate, onDecks, onStudyDeck, onQuiz, onLearn, onDiagnose, onSettings, onTutorial, onStarter }){
   const [shareWeek, setShareWeek] = useState(false);
   const today = TODAY();
   const decks = library.decks;
@@ -5210,6 +5267,37 @@ function Home({ library, progress, stats, settings, due, onStart, onCreate, onDe
             </div>
           </Card>
 
+          {/* The three ways to test yourself, directly under the hero.
+              They lived at the very bottom of this screen, in the same small
+              row as "make new cards", which meant the only way to reach Learn
+              was to scroll past the whole dashboard — so nobody found it. They
+              are the answer to "what should I do now?", which is what this
+              screen is for, so they go above the fold. */}
+          <div style={{ marginBottom: 16 }}>
+            <div style={{ ...LBL, marginBottom: 9 }}>Test yourself</div>
+            <div style={{ display: 'flex', gap: 10 }}>
+              {[
+                /* First on purpose: quiz and learn both assume you already know
+                   what to work on, and this is the one that tells you. */
+                { icon: 'search', t: 'Find my gaps', s: 'What am I missing?', on: onDiagnose },
+                { icon: 'puzzle', t: 'Learn a deck', s: 'Until you can produce it', on: () => onLearn('all') },
+                { icon: 'target', t: 'Quiz me', s: 'A quick graded test', on: () => onQuiz('all') },
+              ].map((q, i) => (
+                <button key={i} className="sf-tap" onClick={q.on}
+                  style={{ flex: '1 1 0', minWidth: 0, display: 'flex', flexDirection: 'column', alignItems: 'flex-start',
+                    gap: 9, textAlign: 'left', cursor: 'pointer', background: T.surface,
+                    border: `1px solid ${T.border}`, borderRadius: R.well, boxShadow: SH.raised, padding: '15px 14px' }}>
+                  <span style={{ width: 38, height: 38, borderRadius: 11, background: rgba(T.accent, 0.12),
+                    color: T.accentInk, display: 'grid', placeItems: 'center', flexShrink: 0 }}><Ico name={q.icon} size={19} /></span>
+                  <span style={{ minWidth: 0 }}>
+                    <span style={{ display: 'block', fontFamily: SANS, fontSize: 14.5, fontWeight: 700, color: T.ink, letterSpacing: '-0.01em' }}>{q.t}</span>
+                    <span className="sf-act-sub" style={{ fontFamily: SANS, fontSize: 11.5, color: T.faint, marginTop: 2 }}>{q.s}</span>
+                  </span>
+                </button>
+              ))}
+            </div>
+          </div>
+
           {/* stat strip */}
           <div style={{ display: 'flex', flexWrap: 'wrap', gap: 12, marginBottom: 16 }}>
             {[{ n: due, label: 'Due now', col: T.accentInk }, { n: streak, label: 'Day streak', col: T.amber, icon: 'flame' },
@@ -5298,8 +5386,7 @@ function Home({ library, progress, stats, settings, due, onStart, onCreate, onDe
               flagged > 0
                 ? { icon: 'warn', t: 'Review your tricky ones', s: `${flagged} card${flagged > 1 ? 's' : ''} keep tripping you up`, on: onStart }
                 : { icon: 'stack', t: 'Study your feed', s: 'Review what\'s due today', on: onStart },
-              { icon: 'target', t: 'Take a quiz', s: 'A quick graded test from your cards', on: () => onQuiz('all') },
-              { icon: 'puzzle', t: 'Learn a deck', s: 'Until you can produce every answer', on: () => onLearn('all') },
+              { icon: 'folder', t: 'All my decks', s: 'Edit, rename, export or delete', on: onDecks },
             ].map((q, i) => (
               <button key={i} className="sf-tap" onClick={q.on}
                 style={{ flex: '1 1 220px', display: 'flex', alignItems: 'center', gap: 12, textAlign: 'left', cursor: 'pointer',
@@ -5325,9 +5412,228 @@ function Home({ library, progress, stats, settings, due, onStart, onCreate, onDe
 }
 
 /* ==========================================================================
+   OPTIONS  —  building a multiple-choice question worth answering.
+
+   The complaint that produced this section: a question whose right answer was
+   one word was offered next to an option that ran to a paragraph. Distractors
+   were drawn at random from every other answer in scope, so nothing kept them
+   the same shape as the answer they were meant to hide among — and length
+   alone gives the game away. A student can score full marks on a deck like
+   that without recalling a word of it, which is worse than a bad question,
+   because the score then says they know it.
+
+   A wrong option has to be plausible in SHAPE before it can be plausible in
+   content. Candidates are ranked against the answer: same rough length, same
+   rough word count, the same kind of thing. Where the deck cannot supply
+   enough lookalikes, numbers are invented — the figure doubled, halved, an
+   order of magnitude out — and only after that does it settle for the closest
+   of a bad lot, which is all the old build ever did.
+   ========================================================================== */
+/* Is there a keyboard? The number hints on the options are help on a laptop
+   and clutter on a phone. */
+const HAS_KEYBOARD = (() => {
+  try { return window.matchMedia('(hover: hover) and (pointer: fine)').matches; } catch (e){ return false; }
+})();
+
+const MCQ_OPTIONS = 4;
+const MCQ_LONG = 90;     /* past this an option is a paragraph, not a choice */
+const FIT_GOOD = 0.45;   /* could pass for the answer at a glance */
+const FIT_POOR = 0.26;   /* visibly different, but still worth offering */
+
+/* What an answer looks like from across the room — which is all anyone needs
+   to rule an option out without reading it. */
+function answerShape(s){
+  const t = String(s == null ? '' : s).trim();
+  const words = t ? t.split(/\s+/).length : 0;
+  const letters = t.replace(/[^A-Za-z]/g, '').length;
+  return {
+    len: t.length,
+    words: words,
+    /* "1840", "6.02 x 10^23", "37 degrees" — opens with a figure and is mostly
+       figures. A number offered against a word is never picked. */
+    numeric: /^[\s(]*[-+]?\d/.test(t) && letters <= Math.max(3, Math.round(t.length * 0.34)),
+    /* A written answer rather than a term. Mixing the two is the whole
+       complaint this section exists to answer. */
+    sentence: words >= 7,
+  };
+}
+
+/* 0 = unusable, 1 = indistinguishable in shape. Length is weighted hardest
+   because it is the tell the eye reads first, before any of the words. */
+function distractorFit(a, b){
+  if (!a.len || !b.len) return 0;
+  if (a.numeric !== b.numeric) return 0;
+  if (a.sentence !== b.sentence) return 0;
+  const lenFit = Math.min(a.len, b.len) / Math.max(a.len, b.len);
+  const wordFit = Math.min(a.words, b.words) / Math.max(a.words, b.words);
+  return lenFit * 0.65 + wordFit * 0.35;
+}
+
+/* Every candidate in the pool, best fit first, with the ones that must never
+   be offered taken out: the answer itself, the same answer spelled another
+   way, and anything close enough that picking it would be right in spirit —
+   the same test the typed check uses to accept a near miss. */
+function rankDistractors(correct, pool){
+  const shape = answerShape(correct);
+  const want = normaliseAnswer(correct);
+  const cap = typoAllowance(want.length);
+  const seen = new Set([want]);
+  const out = [];
+  for (const cand of pool){
+    const text = String(cand == null ? '' : cand).trim();
+    if (!text) continue;
+    const key = normaliseAnswer(text);
+    if (!key || seen.has(key)) continue;
+    if (cap > 0 && editDistance(key, want, cap) <= cap) continue;
+    seen.add(key);
+    out.push({ text: text, fit: distractorFit(shape, answerShape(text)) });
+  }
+  out.sort((a, b) => b.fit - a.fit);
+  return out;
+}
+
+/* Numbers are the one answer type whose wrong answers can be made rather than
+   found, and the made ones are better: an order of magnitude out, doubled,
+   halved — the mistakes actually made. Years get years, not orders of
+   magnitude, because 3680 is not a wrong answer anybody would consider. */
+function numericDistractors(correct, want){
+  const s = String(correct);
+  const m = s.match(/-?\d[\d,]*(?:\.\d+)?/);
+  if (!m) return [];
+  const raw = m[0];
+  const n = parseFloat(raw.replace(/,/g, ''));
+  if (!isFinite(n) || n === 0) return [];
+  const dec = (raw.split('.')[1] || '').length;
+  const yearish = !dec && n >= 1000 && n <= 2999 && s.length <= 14;
+  const steps = yearish
+    ? [n - 10, n + 10, n - 1, n + 1, n - 50, n + 50, n - 100, n + 100]
+    : [n * 2, n / 2, n * 10, n / 10, n * 1.5, n * 100, n / 100];
+  /* The first four are the plausible ones either way, so they get shuffled
+     among themselves and the long shots stay at the back. */
+  const tiered = shuffle(steps.slice(0, 4)).concat(steps.slice(4));
+  const seen = new Set([normaliseAnswer(s)]);
+  const out = [];
+  for (const v of tiered){
+    if (out.length >= want) break;
+    if (!isFinite(v) || v === n) continue;
+    const txt = dec ? v.toFixed(dec) : String(Math.round(v));
+    const full = s.replace(raw, txt);
+    const key = normaliseAnswer(full);
+    if (!key || seen.has(key)) continue;
+    seen.add(key);
+    out.push(full);
+  }
+  return out;
+}
+
+/* A card that came with its own options keeps them — they were written for
+   this question and no pool will beat them. Only duplicates go, because two
+   identical options mean one of them is marked wrong for saying the right
+   thing. */
+function ownOptions(card){
+  const raw = (card.options || []).map(o => String(o == null ? '' : o).trim()).filter(Boolean);
+  if (raw.length < 2) return null;
+  const correct = String(card.options[card.answer] != null ? card.options[card.answer] : raw[0]).trim();
+  const seen = new Set();
+  const kept = [];
+  for (const o of raw){
+    const k = normaliseAnswer(o);
+    if (seen.has(k)) continue;
+    seen.add(k); kept.push(o);
+  }
+  const options = shuffle(kept);
+  let at = options.indexOf(correct);
+  if (at < 0) at = options.findIndex(o => normaliseAnswer(o) === normaliseAnswer(correct));
+  return at < 0 ? null : { options: options, answer: at };
+}
+
+/* The options for one question: the answer plus up to three wrong ones,
+   shuffled so position carries nothing. Returns null when the pool cannot make
+   a question worth asking — Learn takes that as a reason to ask the card a
+   different way, Quiz has to ask something and lowers its floor instead.
+
+   Three plausible options beat four where one is visibly not in the running,
+   so a short question is never padded out with a bad option. Padding only
+   happens below `minPicks`, which is the point where it stops being a
+   question at all. */
+function buildOptions(correct, pool, opts){
+  const answer = String(correct == null ? '' : correct).trim();
+  if (!answer) return null;
+  const o = opts || {};
+  /* Four options of eighty words each is a reading test rather than a recall
+     test — on a phone it is the whole screen twice over. Where the answers are
+     that long the question drops to three, which halves the reading for eight
+     points of guess rate. */
+  const need = (answer.length > MCQ_LONG ? 3 : MCQ_OPTIONS) - 1;
+  const minFit = o.minFit == null ? FIT_POOR : o.minFit;
+  const minPicks = o.minPicks == null ? 2 : o.minPicks;
+  const ranked = rankDistractors(answer, pool);
+  const taken = new Set([normaliseAnswer(answer)]);
+  const picks = [];
+  const add = (text) => {
+    const key = normaliseAnswer(text);
+    if (!key || taken.has(key)) return;
+    taken.add(key); picks.push(text);
+  };
+
+  /* Real answers off the student's own cards first: a wrong option that is
+     something they have to know anyway is the one that teaches twice. Taken
+     from a window rather than strictly the top three, so the same card does
+     not come round with the same three every single time. */
+  const good = ranked.filter(r => r.fit >= FIT_GOOD);
+  const near = good.length > need ? shuffle(good.slice(0, need * 3)) : good;
+  for (const r of near){ if (picks.length >= need) break; add(r.text); }
+
+  if (picks.length < need && answerShape(answer).numeric){
+    for (const d of numericDistractors(answer, need - picks.length)) add(d);
+  }
+  /* Last resort, and only to get up to the minimum. `ranked` is sorted, so the
+     first one under the floor means nothing after it passes either. */
+  if (picks.length < minPicks){
+    for (const r of ranked){
+      if (picks.length >= minPicks || r.fit < minFit) break;
+      add(r.text);
+    }
+  }
+  if (picks.length < minPicks) return null;
+  const options = shuffle([answer].concat(picks));
+  return { options: options, answer: options.indexOf(answer) };
+}
+
+/* Which deck are we working on? A pill per deck that wraps, rather than a
+   segmented control — past three decks a segmented row squeezes every label
+   down to its first two letters. Shared by Quiz and Learn. */
+function ScopePicker({ decks, value, onChange, label }){
+  if (!decks || decks.length < 2) return null;
+  const opts = [{ id: 'all', label: 'All decks', colour: T.accent }].concat(
+    decks.map(d => ({ id: d.id, label: d.topic || d.subject || 'Untitled', colour: subjectColour(d.subject) })));
+  return (
+    <Card style={{ padding: 15, marginBottom: 12, boxShadow: SH.raised }}>
+      <div style={{ fontFamily: SANS, fontSize: 13, fontWeight: 700, color: T.muted, marginBottom: 10 }}>{label || 'Which deck?'}</div>
+      <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+        {opts.map(o => {
+          const active = value === o.id;
+          return (
+            <button key={o.id} className="sf-tap" onClick={() => onChange(o.id)} aria-pressed={active}
+              style={{ display: 'flex', alignItems: 'center', gap: 7, cursor: 'pointer',
+                background: active ? T.surface : T.well, border: `1.5px solid ${active ? rgba(o.colour, 0.5) : 'transparent'}`,
+                borderRadius: R.pill, padding: '8px 13px', boxShadow: active ? SH.pop : 'none' }}>
+              <span style={{ width: 8, height: 8, borderRadius: 8, background: o.colour }} />
+              <span style={{ fontFamily: SANS, fontSize: 13, fontWeight: active ? 700 : 550, color: active ? T.ink : T.muted,
+                whiteSpace: 'nowrap', maxWidth: 160, overflow: 'hidden', textOverflow: 'ellipsis' }}>{o.label}</span>
+            </button>
+          );
+        })}
+      </div>
+    </Card>
+  );
+}
+
+/* ==========================================================================
    QUIZ  —  a quick, finite, self-graded test built from a deck's own cards.
    No API cost: multiple-choice, correct answer from the card, distractors
-   pulled from other cards in the pool. Extended (essay) cards sit this out.
+   ranked out of the pool by the section above. Extended (essay) cards sit
+   this out.
    ========================================================================== */
 function quizAnswerText(c){
   if (c.type === 'mcq') return (c.options && c.options[c.answer] != null) ? String(c.options[c.answer]) : '';
@@ -5342,18 +5648,28 @@ const QUIZ_MIN = 4;
 function buildQuiz(cards, count){
   const usable = cards.filter(quizUsable);
   const answerPool = Array.from(new Set(usable.map(quizAnswerText)));
-  const chosen = shuffle(usable).slice(0, count);
+  const ask = (c, opts) => {
+    const built = (c.type === 'mcq' && c.options && c.options.length >= 2)
+      ? ownOptions(c) : buildOptions(quizAnswerText(c), answerPool, opts);
+    return built ? { cardId: c.id, q: quizQuestionText(c), options: built.options, answer: built.answer } : null;
+  };
+  const order = shuffle(usable);
   const out = [];
-  for (const c of chosen){
-    if (c.type === 'mcq' && c.options && c.options.length >= 2){
-      const correctText = String(c.options[c.answer] != null ? c.options[c.answer] : c.options[0]);
-      const options = shuffle(c.options.map(String));
-      out.push({ cardId: c.id, q: quizQuestionText(c), options, answer: options.indexOf(correctText) });
-    } else {
-      const correct = quizAnswerText(c);
-      const distractors = shuffle(answerPool.filter(a => a !== correct)).slice(0, 3);
-      const options = shuffle([correct].concat(distractors));
-      out.push({ cardId: c.id, q: quizQuestionText(c), options, answer: options.indexOf(correct) });
+  const held = [];
+  for (const c of order){
+    if (out.length >= count) break;
+    const q = ask(c, { minPicks: 2 });
+    if (q) out.push(q); else held.push(c);
+  }
+  /* Asking fewer questions is better than asking a bad one: the count you
+     chose is a request, not a promise, and the score is out of what you were
+     actually asked. The floor only drops to the bottom when the deck cannot
+     make a single fair question, where the choice is a rough quiz or none. */
+  if (!out.length){
+    for (const c of held){
+      if (out.length >= count) break;
+      const q = ask(c, { minFit: 0, minPicks: 1 });
+      if (q) out.push(q);
     }
   }
   return out;
@@ -5403,6 +5719,26 @@ function Quiz({ decks, deckId, onClose, onDone }){
   };
   const next = () => { if (idx + 1 >= questions.length) setPhase('done'); else { setIdx(idx + 1); setPicked(null); } };
 
+  /* Same keys as Learn — 1-4 to answer, Enter to carry on. Re-bound every
+     render so it is never holding a stale question. */
+  useEffect(() => {
+    if (phase !== 'run') return;
+    const onKey = (e) => {
+      if (e.metaKey || e.ctrlKey || e.altKey) return;
+      if (e.key === 'Escape'){ onClose(); return; }
+      const q = questions[idx];
+      if (!q) return;
+      if (picked !== null){
+        if (e.key === 'Enter' || e.key === ' '){ e.preventDefault(); next(); }
+        return;
+      }
+      const n = (e.key >= '1' && e.key <= '9') ? Number(e.key) : 0;
+      if (n && n <= q.options.length){ e.preventDefault(); choose(n - 1); }
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  });
+
   const score = answers.reduce((s, a, i) => s + ((a != null && questions[i] && a === questions[i].answer) ? 1 : 0), 0);
   const pct = questions.length ? Math.round((score / questions.length) * 100) : 0;
 
@@ -5435,28 +5771,7 @@ function Quiz({ decks, deckId, onClose, onDone }){
             <Title style={{ fontSize: 23, marginBottom: 6 }}>Test yourself</Title>
             <Sub style={{ marginBottom: 18 }}>A quick multiple-choice check built from your cards. It's graded but never changes your review schedule.</Sub>
 
-            {decks.length > 1 && (
-              <Card style={{ padding: 15, marginBottom: 12, boxShadow: SH.raised }}>
-                <div style={{ fontFamily: SANS, fontSize: 13, fontWeight: 700, color: T.muted, marginBottom: 10 }}>Which deck?</div>
-                <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
-                  {[{ id: 'all', label: 'All decks', colour: T.accent }].concat(
-                    decks.map(d => ({ id: d.id, label: d.topic || d.subject || 'Untitled', colour: subjectColour(d.subject) }))
-                  ).map(o => {
-                    const active = scope === o.id;
-                    return (
-                      <button key={o.id} className="sf-tap" onClick={() => setScope(o.id)}
-                        style={{ display: 'flex', alignItems: 'center', gap: 7, cursor: 'pointer',
-                          background: active ? T.surface : T.well, border: `1.5px solid ${active ? rgba(o.colour, 0.5) : 'transparent'}`,
-                          borderRadius: R.pill, padding: '8px 13px', boxShadow: active ? SH.pop : 'none' }}>
-                        <span style={{ width: 8, height: 8, borderRadius: 8, background: o.colour }} />
-                        <span style={{ fontFamily: SANS, fontSize: 13, fontWeight: active ? 700 : 550, color: active ? T.ink : T.muted,
-                          whiteSpace: 'nowrap', maxWidth: 160, overflow: 'hidden', textOverflow: 'ellipsis' }}>{o.label}</span>
-                      </button>
-                    );
-                  })}
-                </div>
-              </Card>
-            )}
+            <ScopePicker decks={decks} value={scope} onChange={setScope} />
 
             {usableCount < QUIZ_MIN ? (
               <Card style={{ padding: '30px 22px', textAlign: 'center' }}>
@@ -5508,6 +5823,11 @@ function Quiz({ decks, deckId, onClose, onDone }){
                       style={{ display: 'flex', alignItems: 'center', gap: 12, textAlign: 'left', width: '100%',
                         cursor: answered ? 'default' : 'pointer', background: bg, border: `1.5px solid ${bd}`,
                         borderRadius: R.well, padding: '15px 16px', boxShadow: answered ? 'none' : SH.raised }}>
+                      {HAS_KEYBOARD && !answered && (
+                        <span aria-hidden="true" style={{ flexShrink: 0, minWidth: 18, height: 18, borderRadius: 5,
+                          background: T.well, color: T.faint, fontFamily: SANS, fontSize: 11, fontWeight: 700,
+                          lineHeight: '18px', textAlign: 'center' }}>{i + 1}</span>
+                      )}
                       <span style={{ flex: 1, fontFamily: SANS, fontSize: 15.5, fontWeight: 550, color: col, lineHeight: 1.4 }}>{opt}</span>
                       {mark && <span style={{ color: isCorrect ? T.green : T.red }}><Ico name={mark} size={17} weight={2.6} /></span>}
                     </button>
@@ -5612,38 +5932,61 @@ function Quiz({ decks, deckId, onClose, onDone }){
    - Extended cards sit it out. A six-mark written answer is marked, not
      recalled, and it already has a better home in the feed.
    ========================================================================== */
-const LEARN_ROUND = 7;      /* cards per round before the checkpoint */
-const LEARN_MASTER = 2;     /* correct answers to master, the second one harder */
+const LEARN_ROUND = 7;       /* cards per round before the checkpoint */
+const LEARN_MASTER = 2;      /* correct answers to master, the second one harder */
+const LEARN_KEEP_DAYS = 14;  /* how long a half-finished run is worth offering back */
+const LEARN_AUTO_MS = 800;   /* pause on a right answer before moving on by itself */
 
-/* Recognition while it is new, production once it is not. A card that cannot
-   fairly be typed — its answer is a sentence — escalates to free recall graded
-   by the student instead. Still harder than picking from four, and honest
-   about the fact that nobody reproduces three sentences word for word. */
-function learnFormat(item){
-  if (item.box <= 0) return 'mcq';
-  return typedCheckable(item.card) ? 'typed' : 'recall';
-}
+/* One question, decided in one place. The format follows how well the card is
+   known — recognition while it is new, production once it is not — but it also
+   has to be a question this deck can actually ask.
 
-function buildLearnMcq(card, answerPool){
-  if (card.type === 'mcq' && card.options && card.options.length >= 2){
-    const correctText = String(card.options[card.answer] != null ? card.options[card.answer] : card.options[0]);
-    const options = shuffle(card.options.map(String));
-    return { options, answer: options.indexOf(correctText) };
+   A card whose answer nothing in the deck resembles cannot be made into four
+   options: three of them would be obviously wrong on sight, which tests
+   eyesight rather than memory. That card gets shown once instead, and then
+   comes back later in the same round with the answer off the screen. */
+function buildLearnQuestion(item, answerPool){
+  const card = item.card;
+  if (item.box <= 0){
+    const built = (card.type === 'mcq' && card.options && card.options.length >= 2)
+      ? ownOptions(card)
+      : buildOptions(quizAnswerText(card), answerPool, { minPicks: 2 });
+    if (built && built.options.length >= 3) return { format: 'mcq', mcq: built };
+    if (!item.seen) return { format: 'preview', mcq: null };
   }
-  const correct = quizAnswerText(card);
-  const distractors = shuffle(answerPool.filter(a => a !== correct)).slice(0, 3);
-  const options = shuffle([correct].concat(distractors));
-  return { options, answer: options.indexOf(correct) };
+  return { format: typedCheckable(card) ? 'typed' : 'recall', mcq: null };
 }
 
-function LearnMode({ decks, deckId, onClose, onDone }){
+/* A run is stored as boxes by card id — small, and it survives the deck being
+   edited underneath it. A card that has gone takes its progress with it, and
+   one that is new starts where everything else started. */
+function packLearn(scope, items, round){
+  const cards = {};
+  for (const it of items) cards[it.card.id] = [it.box, it.misses, it.seen ? 1 : 0];
+  return { scope: scope, round: round, at: Date.now(), cards: cards };
+}
+function unpackLearn(session, scopeCards){
+  if (!session || !session.cards) return null;
+  const list = scopeCards.map(x => {
+    const s = session.cards[x.card.id];
+    return { card: x.card, deck: x.deck,
+      box: s ? Math.max(0, Math.min(LEARN_MASTER, s[0] | 0)) : 0,
+      misses: s ? Math.max(0, s[1] | 0) : 0,
+      seen: s ? !!s[2] : false };
+  });
+  /* Nothing to come back to if none of it was started, or if it was finished. */
+  if (!list.some(it => it.box > 0 || it.misses > 0)) return null;
+  if (!list.some(it => it.box < LEARN_MASTER)) return null;
+  return list;
+}
+
+function LearnMode({ decks, deckId, session, onSaveSession, onClose, onDone }){
   const [scope, setScope] = useState(deckId && deckId !== 'all' && decks.some(d => d.id === deckId) ? deckId : 'all');
   const [phase, setPhase] = useState('setup');   // setup | run | round | done
-  const [items, setItems] = useState([]);        // [{ card, deck, box, misses }]
+  const [items, setItems] = useState([]);        // [{ card, deck, box, misses, seen }]
   const [order, setOrder] = useState([]);        // item indices queued for this round
   const [qi, setQi] = useState(0);
   const [round, setRound] = useState(1);
-  const [mcq, setMcq] = useState(null);
   const [pick, setPick] = useState(null);
   const [typedValue, setTypedValue] = useState('');
   const [result, setResult] = useState(null);    // { verdict, expected } once answered
@@ -5652,6 +5995,9 @@ function LearnMode({ decks, deckId, onClose, onDone }){
   const answeredRef = useRef(0);
   const doneRef = useRef(false);
   const inputRef = useRef(null);
+  const timerRef = useRef(null);                 // pending auto-advance
+  const leftRef = useRef('');                    // question key already advanced past
+  const preBoxRef = useRef(0);                   // box before this answer, for "I was right"
 
   const scopeDecks = scope === 'all' ? decks : decks.filter(d => d.id === scope);
   const scopeCards = useMemo(() => {
@@ -5659,12 +6005,47 @@ function LearnMode({ decks, deckId, onClose, onDone }){
     for (const d of scopeDecks) for (const c of d.cards) if (quizUsable(c)) o.push({ card: c, deck: d });
     return o;
   }, [scope, decks]);
-  const answerPool = useMemo(() => Array.from(new Set(scopeCards.map(x => quizAnswerText(x.card)))), [scopeCards]);
+  const poolRef = useRef([]);
   const subject = scope === 'all' ? '' : ((scopeDecks[0] && scopeDecks[0].subject) || '');
 
   const masteredCount = items.filter(i => i.box >= LEARN_MASTER).length;
   const current = order.length && qi < order.length ? items[order[qi]] : null;
-  const format = current ? learnFormat(current) : null;
+
+  /* The question is built once per card shown and cached against its key, not
+     rebuilt on every render — otherwise the options reshuffle under the finger
+     every time any state changes. The key changes only when a different card
+     comes up, which is exactly when new options are wanted. */
+  const qKey = phase === 'run' && current ? (round + ':' + qi + ':' + order[qi]) : '';
+  const qRef = useRef({ key: '', value: null });
+  if (qKey && qRef.current.key !== qKey) qRef.current = { key: qKey, value: buildLearnQuestion(current, poolRef.current) };
+  const view = qKey ? qRef.current.value : null;
+  const format = view ? view.format : null;
+
+  /* Mirrors, so the auto-advance timer and the unmount handler are not reading
+     the state as it was when they were created. */
+  const itemsRef = useRef(items);
+  itemsRef.current = items;
+  const snapRef = useRef(null);
+  snapRef.current = { scope: scope, phase: phase, items: items, round: round };
+  const saveRef = useRef(onSaveSession);
+  saveRef.current = onSaveSession;
+
+  /* An unfinished run is worth picking up, but only for the deck it was for,
+     and only while it is still recent enough to remember starting. */
+  const saved = useMemo(() => {
+    if (!session || session.scope !== scope) return null;
+    if (session.at && Date.now() - session.at > LEARN_KEEP_DAYS * 86400000) return null;
+    const list = unpackLearn(session, scopeCards);
+    if (!list) return null;
+    return { list: list, round: session.round || 1,
+      mastered: list.filter(i => i.box >= LEARN_MASTER).length,
+      part: list.filter(i => i.box > 0 && i.box < LEARN_MASTER).length };
+  }, [session, scope, scopeCards]);
+
+  const clearTimer = () => { if (timerRef.current){ clearTimeout(timerRef.current); timerRef.current = null; } };
+  const persist = (list, roundNo) => {
+    if (saveRef.current) saveRef.current(packLearn(scope, list, roundNo));
+  };
 
   /* Everything not yet mastered, hardest first: cards you have missed lead the
      next round, and one you have never seen comes before one already half
@@ -5675,59 +6056,88 @@ function LearnMode({ decks, deckId, onClose, onDone }){
     return left.slice(0, LEARN_ROUND).map(x => x.i);
   };
 
-  const resetQuestion = () => { setPick(null); setTypedValue(''); setResult(null); setShown(false); setMcq(null); };
+  const resetQuestion = () => { clearTimer(); setPick(null); setTypedValue(''); setResult(null); setShown(false); };
 
-  const start = () => {
-    const list = shuffle(scopeCards).map(x => ({ card: x.card, deck: x.deck, box: 0, misses: 0 }));
+  const begin = (list, roundNo) => {
     if (!list.length) return;
     answeredRef.current = 0;
     doneRef.current = false;
+    /* Wrong answers come out of the run's OWN cards, fixed here rather than
+       read off the scope picker while the run is going. In normal use they are
+       the same set; when they disagree, the run is the one telling the truth,
+       and the difference is a history card offered biology distractors. */
+    poolRef.current = Array.from(new Set(list.map(x => quizAnswerText(x.card))));
     setItems(list);
     setOrder(buildRound(list));
-    setQi(0); setRound(1); setRun(0);
+    setQi(0); setRound(roundNo || 1); setRun(0);
+    leftRef.current = '';
+    qRef.current = { key: '', value: null };
     resetQuestion();
     setPhase('run');
-    track('learn_started', { cards: list.length });
   };
-
-  /* Options are built once per question, not per render — otherwise they
-     reshuffle under the finger every time any state changes. */
-  useEffect(() => {
-    if (phase !== 'run' || !current) return;
-    if (learnFormat(current) === 'mcq') setMcq(buildLearnMcq(current.card, answerPool));
-    else setMcq(null);
-  }, [phase, qi, order, round]);
+  const start = () => {
+    begin(shuffle(scopeCards).map(x => ({ card: x.card, deck: x.deck, box: 0, misses: 0, seen: false })), 1);
+    track('learn_started', { cards: scopeCards.length, resumed: 0 });
+  };
+  const resume = () => {
+    if (!saved) return;
+    begin(shuffle(saved.list), saved.round);
+    track('learn_started', { cards: saved.list.length, resumed: 1 });
+  };
+  /* Straight back into the ones that fought back, at the bottom of the ladder
+     again. A fresh run rather than a continuation — they have been mastered
+     once already, and the point is to do it a second time from cold. */
+  const drillMissed = () => {
+    const hard = items.filter(i => i.misses > 0).map(i => ({ card: i.card, deck: i.deck, box: 0, misses: 0, seen: true }));
+    if (!hard.length) return;
+    begin(shuffle(hard), 1);
+    track('learn_started', { cards: hard.length, resumed: 0 });
+  };
 
   useEffect(() => {
     if (phase !== 'run' || format !== 'typed' || result || !inputRef.current) return;
     try { inputRef.current.focus({ preventScroll: true }); } catch (e){}
-  }, [phase, qi, format, result]);
+  }, [phase, qKey, format, result]);
 
   /* One place where a card's fate is decided, whatever asked the question. */
   const settle = (correct) => {
     answeredRef.current += 1;
+    preBoxRef.current = current ? current.box : 0;
     if (correct){ setRun(n => n + 1); play(run + 1 >= 5 && (run + 1) % 5 === 0 ? 'milestone' : 'right', run); buzz(10); }
     else { setRun(0); play('wrong'); buzz(34); }
     setItems(list => list.map((it, i) => {
       if (i !== order[qi]) return it;
       /* A miss drops it back to recognition. Being asked to produce an answer
          you have just failed to recognise teaches nothing but frustration. */
-      return correct ? { ...it, box: it.box + 1 } : { ...it, box: 0, misses: it.misses + 1 };
+      return correct
+        ? { ...it, box: it.box + 1, seen: true }
+        : { ...it, box: 0, misses: it.misses + 1, seen: true };
     }));
   };
 
+  /* A right answer has nothing left on screen to read, and over forty cards
+     the extra tap each time is a real part of the session. Everything else
+     waits — a correction is the one thing worth stopping for. */
+  const armAdvance = (verdict) => {
+    if (verdict !== 'right') return;
+    clearTimer();
+    timerRef.current = setTimeout(() => { timerRef.current = null; next(false); }, LEARN_AUTO_MS);
+  };
+
   const answerMcq = (i) => {
-    if (result || !mcq) return;
+    if (result || !view || !view.mcq) return;
     setPick(i);
-    const correct = i === mcq.answer;
-    setResult({ verdict: correct ? 'right' : 'wrong', expected: mcq.options[mcq.answer] });
+    const correct = i === view.mcq.answer;
+    setResult({ verdict: correct ? 'right' : 'wrong', expected: view.mcq.options[view.mcq.answer] });
     settle(correct);
+    armAdvance(correct ? 'right' : 'wrong');
   };
   const answerTyped = () => {
     if (result || !typedValue.trim()) return;
     const r = checkTyped(typedValue, current.card);
     setResult(r);
     settle(r.verdict !== 'wrong');
+    armAdvance(r.verdict);
   };
   const revealTyped = () => {
     if (result) return;
@@ -5735,49 +6145,116 @@ function LearnMode({ decks, deckId, onClose, onDone }){
     settle(false);
   };
   /* The override moves the card as well as the message, or "I was right" would
-     be sympathy with no consequence. */
+     be sympathy with no consequence. It has to undo the miss as well as credit
+     the answer: the miss has already knocked the card back to recognition, and
+     leaving it there would make being right cost a round. */
   const claimRight = () => {
     setResult(r => ({ ...r, verdict: 'right' }));
     setItems(list => list.map((it, i) => (i === order[qi]
-      ? { ...it, box: Math.min(LEARN_MASTER, it.box + 1), misses: Math.max(0, it.misses - 1) } : it)));
+      ? { ...it, box: Math.min(LEARN_MASTER, preBoxRef.current + 1), misses: Math.max(0, it.misses - 1) } : it)));
+    setRun(n => n + 1);
     play('right', run); buzz(10);
   };
   const answerRecall = (got) => {
     if (result) return;
     setResult({ verdict: got ? 'right' : 'wrong', expected: quizAnswerText(current.card) });
     settle(got);
+    armAdvance(got ? 'right' : 'wrong');
+  };
+  /* Reading a card is not answering it, so nothing is scored and the card
+     comes back before this round is out — with the answer off the screen. */
+  const ackPreview = () => {
+    setItems(list => list.map((it, i) => (i === order[qi] ? { ...it, seen: true } : it)));
+    next(true);
   };
 
-  const next = () => {
+  const next = (missed) => {
+    if (leftRef.current === qKey) return;   /* the timer and a tap can land together */
+    leftRef.current = qKey;
+    clearTimer();
+    const list = itemsRef.current;
+    const wasMissed = missed == null
+      ? !!(result && (result.verdict === 'wrong' || result.verdict === 'shown'))
+      : missed;
     /* A missed card goes back at the end of THIS round rather than being held
        over — the point of a round is that you leave it knowing them. Capped at
        one repeat so a card you cannot get does not trap you in the round. */
-    const missedNow = result && (result.verdict === 'wrong' || result.verdict === 'shown');
     let nextOrder = order;
-    if (missedNow && order.filter(x => x === order[qi]).length < 2) nextOrder = order.concat([order[qi]]);
+    if (wasMissed && order.filter(x => x === order[qi]).length < 2) nextOrder = order.concat([order[qi]]);
     const at = qi + 1;
     resetQuestion();
     setOrder(nextOrder);
     if (at < nextOrder.length){ setQi(at); return; }
-    const left = items.filter(i => i.box < LEARN_MASTER).length;
-    if (!left){ setPhase('done'); return; }
+    if (!list.filter(i => i.box < LEARN_MASTER).length){ setPhase('done'); return; }
+    /* Round boundaries are where the run is written down, so closing the tab
+       between rounds costs nothing. */
+    persist(list, round);
     setPhase('round');
   };
 
   const nextRound = () => {
-    setOrder(buildRound(items));
+    setOrder(buildRound(itemsRef.current));
     setQi(0); setRound(r => r + 1);
+    leftRef.current = '';
     resetQuestion();
     setPhase('run');
   };
 
+  /* Keyboard: pick with 1–4, carry on with Enter. Re-bound every render on
+     purpose, so it is never holding a stale answer handler. */
+  useEffect(() => {
+    if (phase !== 'run') return;
+    const onKey = (e) => {
+      if (e.metaKey || e.ctrlKey || e.altKey) return;
+      if (e.key === 'Escape'){ onClose(); return; }
+      const tag = e.target && e.target.tagName;
+      const typing = tag === 'INPUT' || tag === 'TEXTAREA';
+      if (result){
+        if (e.key === 'Enter' || e.key === ' '){ e.preventDefault(); next(); }
+        return;
+      }
+      if (typing || !view) return;   /* the answer box owns its own keys */
+      if (view.format === 'preview'){
+        if (e.key === 'Enter' || e.key === ' '){ e.preventDefault(); ackPreview(); }
+        return;
+      }
+      if (view.format === 'mcq' && view.mcq){
+        const n = (e.key >= '1' && e.key <= '9') ? Number(e.key) : 0;
+        if (n && n <= view.mcq.options.length){ e.preventDefault(); answerMcq(n - 1); }
+        return;
+      }
+      if (view.format === 'recall'){
+        if (!shown && (e.key === 'Enter' || e.key === ' ')){ e.preventDefault(); setShown(true); return; }
+        if (!shown) return;
+        if (e.key === '1' || e.key === 'y'){ e.preventDefault(); answerRecall(true); }
+        else if (e.key === '2' || e.key === 'n'){ e.preventDefault(); answerRecall(false); }
+      }
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  });
+
   useEffect(() => {
     if (phase !== 'done' || doneRef.current) return;
     doneRef.current = true;
+    if (saveRef.current) saveRef.current(null);   /* finished runs are not resumed */
     onDone(answeredRef.current, subject);
     track('learn_finished', { cards: items.length, answered: answeredRef.current, rounds: round });
     play('done'); buzz([16, 60, 16, 60, 26]);
   }, [phase]);
+
+  /* Whichever way you leave — the cross, Escape, Stop here, the tab — the run
+     is written down on the way out. Someone who only opened the setup screen
+     and closed it again has not replaced anything, so their old run stands. */
+  useEffect(() => () => {
+    clearTimer();
+    const s = snapRef.current;
+    if (!s || !saveRef.current || s.phase === 'setup' || s.phase === 'done') return;
+    const worth = s.items.length
+      && s.items.some(i => i.box < LEARN_MASTER)
+      && s.items.some(i => i.box > 0 || i.misses > 0);
+    saveRef.current(worth ? packLearn(s.scope, s.items, s.round) : null);
+  }, []);
 
   const closeBtn = (
     <button onClick={onClose} className="sf-tap" aria-label="Close Learn"
@@ -5800,29 +6277,45 @@ function LearnMode({ decks, deckId, onClose, onDone }){
   if (phase === 'setup'){
     const enough = scopeCards.length >= QUIZ_MIN;
     return shell(
-      <Card style={{ padding: 20 }}>
-        <Title>Learn this deck properly</Title>
-        <Sub style={{ marginTop: 6, marginBottom: 18 }}>
-          You will see every card twice over — picking it out of four options first, then producing it from
-          memory. A card is only done once you have had it both ways. Nothing here changes when your cards
-          are next due.
-        </Sub>
-        <div style={{ marginBottom: 16 }}>
-          <div style={{ fontFamily: SANS, fontSize: 12.5, fontWeight: 700, color: T.muted, marginBottom: 7 }}>What to learn</div>
-          <Segmented value={scope} onChange={setScope}
-            options={[{ v: 'all', label: 'Everything' }].concat(decks.map(d => ({ v: d.id, label: d.topic || d.subject || 'Untitled' })))} />
-        </div>
-        {enough ? (
-          <>
+      <>
+        <ScopePicker decks={decks} value={scope} onChange={setScope} label="What to learn" />
+        {saved && (
+          <Card style={{ padding: 18, marginBottom: 12, borderColor: rgba(T.accent, 0.35) }}>
+            <div className="flex items-center gap-2" style={{ marginBottom: 8, color: T.accentInk }}>
+              <Ico name="clock" size={16} />
+              <div style={{ fontFamily: SANS, fontSize: 14.5, fontWeight: 700, color: T.ink }}>You were part-way through</div>
+            </div>
+            {/* "0 of 15 learned" is true and sounds like nothing happened. What
+                was actually kept is which ones caught you out, so say that. */}
             <Sub style={{ marginBottom: 14 }}>
-              {scopeCards.length} cards in this run. Long answers sit this one out — they belong in the feed, where they get marked.
+              {saved.mastered > 0
+                ? saved.mastered + ' of ' + saved.list.length + ' learned, ' + (saved.part ? saved.part + ' part-way there' : 'and the rest still to go') + '.'
+                : 'You got as far as round ' + saved.round + '. Nothing mastered yet, but it remembers which ones caught you out.'}
+              {' '}Carry on from there, or wipe it and start cold.
             </Sub>
-            <Btn full kind="primary" onClick={start}>Start learning →</Btn>
-          </>
-        ) : (
-          <Sub>You need at least {QUIZ_MIN} cards to learn from. Make a few more first.</Sub>
+            <Btn full kind="primary" onClick={resume}>Pick up where you left off →</Btn>
+            <Btn full kind="ghost" onClick={start} style={{ marginTop: 6, fontSize: 14 }}>Start again from scratch</Btn>
+          </Card>
         )}
-      </Card>
+        <Card style={{ padding: 20 }}>
+          <Title>Learn this deck properly</Title>
+          <Sub style={{ marginTop: 6, marginBottom: 18 }}>
+            You will see every card twice over — picking it out of four options first, then producing it from
+            memory. A card is only done once you have had it both ways, and anything you miss drops back to
+            the easy version and comes round again. Nothing here changes when your cards are next due.
+          </Sub>
+          {enough ? (
+            <>
+              <Sub style={{ marginBottom: 14 }}>
+                {scopeCards.length} cards in this run. Long answers sit this one out — they belong in the feed, where they get marked.
+              </Sub>
+              {!saved && <Btn full kind="primary" onClick={start}>Start learning →</Btn>}
+            </>
+          ) : (
+            <Sub>You need at least {QUIZ_MIN} cards to learn from. Make a few more first.</Sub>
+          )}
+        </Card>
+      </>
     );
   }
 
@@ -5834,7 +6327,7 @@ function LearnMode({ decks, deckId, onClose, onDone }){
         <Title>Round {round} done</Title>
         <Sub style={{ marginTop: 6, marginBottom: 20 }}>Keep going — the ones you missed come back first.</Sub>
         <div style={{ marginBottom: 20 }}>
-          <Progress label="Mastered" value={items.length ? masteredCount / items.length : 0}
+          <Progress label="Mastered" value={items.length ? (masteredCount / items.length) * 100 : 0}
             valueText={masteredCount + ' of ' + items.length} colour={T.green} />
         </div>
         <div className="flex items-center justify-center gap-3" style={{ marginBottom: 20, flexWrap: 'wrap' }}>
@@ -5842,12 +6335,13 @@ function LearnMode({ decks, deckId, onClose, onDone }){
           <Chip colour={T.amber}>{still} still learning</Chip>
         </div>
         <Btn full kind="primary" onClick={nextRound}>Next round →</Btn>
-        <Btn full kind="ghost" onClick={onClose} style={{ marginTop: 6, fontSize: 14 }}>Stop here</Btn>
+        <Btn full kind="ghost" onClick={onClose} style={{ marginTop: 6, fontSize: 14 }}>Stop here — it will keep</Btn>
       </Card>
     );
   }
 
   if (phase === 'done'){
+    const hard = items.filter(i => i.misses > 0).sort((a, b) => b.misses - a.misses);
     return shell(
       <Card style={{ padding: 28, textAlign: 'center' }}>
         <div style={{ display: 'flex', justifyContent: 'center', marginBottom: 14, color: T.amber }}><Ico name="trophy" size={40} weight={1.8} fill /></div>
@@ -5856,121 +6350,706 @@ function LearnMode({ decks, deckId, onClose, onDone }){
           You got every one of them twice, the second time from memory. That is the half that sticks.
           Your due dates have not moved — the feed still decides when you see these next.
         </Sub>
+        {hard.length > 0 && (
+          <div style={{ ...PANEL, textAlign: 'left', marginBottom: 18 }}>
+            <div style={{ fontFamily: SANS, fontSize: 12.5, fontWeight: 700, color: T.muted, marginBottom: 9 }}>
+              {hard.length === 1 ? 'This one fought back' : 'These ' + hard.length + ' fought back'}
+            </div>
+            {hard.slice(0, 4).map((it, i) => (
+              <div key={i} className="flex items-start justify-between gap-3" style={{ marginBottom: i === Math.min(hard.length, 4) - 1 ? 0 : 7 }}>
+                <div style={{ fontFamily: SANS, fontSize: 13.5, lineHeight: 1.4, color: T.ink,
+                  overflow: 'hidden', textOverflow: 'ellipsis', display: '-webkit-box',
+                  WebkitLineClamp: 2, WebkitBoxOrient: 'vertical' }}>{quizQuestionText(it.card)}</div>
+                <Chip colour={T.amber} style={{ flexShrink: 0 }}>{it.misses}×</Chip>
+              </div>
+            ))}
+            {hard.length > 4 && <Sub style={{ marginTop: 8, fontSize: 12.5 }}>and {hard.length - 4} more</Sub>}
+          </div>
+        )}
+        {hard.length > 1 && (
+          <Btn full kind="soft" onClick={drillMissed} style={{ marginBottom: 6 }}>
+            Drill the {hard.length} that fought back
+          </Btn>
+        )}
         <Btn full kind="primary" onClick={onClose}>Done</Btn>
       </Card>
     );
   }
 
-  if (!current) return shell(<Card style={{ padding: 24 }}><Sub>Nothing left to learn here.</Sub></Card>);
+  if (!current || !view) return shell(<Card style={{ padding: 24 }}><Sub>Nothing left to learn here.</Sub></Card>);
 
   const card = current.card;
   const TONE = { right: T.green, close: T.amber, wrong: T.red, shown: T.muted };
   const LABEL = { right: 'Correct', close: 'Nearly — check the spelling', wrong: 'Not quite', shown: 'The answer' };
+  const STEP = { mcq: 'Pick the answer', typed: 'From memory', recall: 'Say it, then check', preview: 'Take this one in' };
 
-  return shell(
+  return (
     <>
-      <div style={{ marginBottom: 14 }}>
-        <Progress label={'Round ' + round} value={items.length ? masteredCount / items.length : 0}
-          valueText={masteredCount + ' of ' + items.length + ' mastered'} colour={T.accent} />
-      </div>
-      <Card style={{ padding: '18px 18px 20px', minHeight: 340 }}>
-        <div className="flex items-center justify-between" style={{ marginBottom: 16 }}>
-          <Chip colour={T.muted}>{current.deck.topic || current.deck.subject || 'Card'}</Chip>
-          {/* Naming the step is what makes the escalation read as progress
-              rather than as the app randomly getting harder. */}
-          <Chip colour={current.box > 0 ? T.accentInk : T.faint}>
-            {format === 'mcq' ? 'Pick the answer' : format === 'typed' ? 'From memory' : 'Say it, then check'}
-          </Chip>
+      {shell(
+        <>
+          <div style={{ marginBottom: 14 }}>
+            <Progress label={'Round ' + round} value={items.length ? (masteredCount / items.length) * 100 : 0}
+              valueText={masteredCount + ' of ' + items.length + ' mastered'} colour={T.accent} />
+          </div>
+          <Card style={{ padding: '18px 18px 20px', minHeight: 340 }}>
+            <div className="flex items-center justify-between gap-2" style={{ marginBottom: 16 }}>
+              <Chip colour={T.muted}>{current.deck.topic || current.deck.subject || 'Card'}</Chip>
+              {/* Naming the step is what makes the escalation read as progress
+                  rather than as the app randomly getting harder. */}
+              <Chip colour={format === 'preview' ? T.faint : (current.box > 0 ? T.accentInk : T.faint)}>{STEP[format]}</Chip>
+            </div>
+
+            <div style={{ ...QUESTION, whiteSpace: 'pre-wrap' }}>{quizQuestionText(card)}</div>
+
+            {format === 'mcq' && view.mcq && (
+              <div className="flex flex-col gap-2" style={{ marginTop: 18 }} role="group" aria-label="Answer options">
+                {view.mcq.options.map((o, i) => {
+                  const isRight = i === view.mcq.answer;
+                  const chosen = pick === i;
+                  const c = !result ? T.border : isRight ? T.green : (chosen ? T.red : T.border);
+                  return (
+                    <button key={i} className="sf-tap" onClick={() => answerMcq(i)} disabled={!!result}
+                      style={{ display: 'flex', alignItems: 'flex-start', gap: 10, textAlign: 'left', width: '100%',
+                        background: result && (isRight || chosen) ? rgba(c, 0.10) : T.surface,
+                        border: `1.5px solid ${result && (isRight || chosen) ? c : T.border}`, borderRadius: R.well,
+                        padding: '13px 15px', cursor: result ? 'default' : 'pointer',
+                        fontFamily: SANS, fontSize: 15.5, lineHeight: 1.45, color: T.ink }}>
+                      {HAS_KEYBOARD && (
+                        <span aria-hidden="true" style={{ flexShrink: 0, minWidth: 18, height: 18, borderRadius: 5,
+                          background: T.well, color: T.faint, fontSize: 11, fontWeight: 700, lineHeight: '18px',
+                          textAlign: 'center', marginTop: 2 }}>{i + 1}</span>
+                      )}
+                      <span>{o}</span>
+                    </button>
+                  );
+                })}
+              </div>
+            )}
+
+            {format === 'preview' && (
+              <div style={{ marginTop: 18 }}>
+                <Chip colour={T.green} style={{ marginBottom: 8 }}>Answer</Chip>
+                <div style={ANSWER}>{quizAnswerText(card)}</div>
+                <Sub style={{ marginTop: 14, fontSize: 12.5 }}>
+                  Nothing else in this deck looks anything like that, so four options would answer itself.
+                  Read it — it comes back before this round is out.
+                </Sub>
+                <Btn full kind="primary" onClick={ackPreview} style={{ marginTop: 14 }}>Got it — ask me later →</Btn>
+              </div>
+            )}
+
+            {format === 'typed' && (
+              <div style={{ marginTop: 18 }}>
+                {!result ? (
+                  <>
+                    <input ref={inputRef} value={typedValue} onChange={e => setTypedValue(e.target.value)}
+                      onKeyDown={e => { if (e.key === 'Enter'){ e.preventDefault(); answerTyped(); } }}
+                      placeholder="Type your answer" aria-label="Your answer"
+                      autoComplete="off" autoCorrect="off" autoCapitalize="off" spellCheck={false}
+                      style={{ ...INPUT, fontSize: 17, fontWeight: 600 }} />
+                    <SymbolBar onInsert={(s) => setTypedValue(v => v + s)} />
+                    <div className="flex items-center gap-2" style={{ marginTop: 12 }}>
+                      <Btn kind="primary" onClick={answerTyped} disabled={!typedValue.trim()} style={{ flex: 1 }}>Check</Btn>
+                      <Btn kind="soft" onClick={revealTyped} style={{ whiteSpace: 'nowrap' }}>Show me</Btn>
+                    </div>
+                  </>
+                ) : (
+                  result.verdict !== 'shown' && (
+                    <div style={{ ...INPUT, fontSize: 17, fontWeight: 600, background: T.surface,
+                      borderColor: rgba(TONE[result.verdict], 0.5) }}>{typedValue}</div>
+                  )
+                )}
+              </div>
+            )}
+
+            {format === 'recall' && (
+              <div style={{ marginTop: 18 }}>
+                {!shown && !result && <Btn full kind="primary" onClick={() => setShown(true)}>Show answer</Btn>}
+                {shown && (
+                  <div>
+                    <Chip colour={T.green} style={{ marginBottom: 8 }}>Answer</Chip>
+                    <div style={ANSWER}>{quizAnswerText(card)}</div>
+                    {!result && (
+                      <div className="flex items-center gap-2" style={{ marginTop: 16 }}>
+                        <Btn kind="primary" onClick={() => answerRecall(true)} style={{ flex: 1 }}>I had it</Btn>
+                        <Btn kind="soft" onClick={() => answerRecall(false)} style={{ flex: 1 }}>I did not</Btn>
+                      </div>
+                    )}
+                  </div>
+                )}
+              </div>
+            )}
+
+            <div aria-live="polite">
+              {result && (
+                <div style={{ marginTop: 16 }}>
+                  <div className="flex items-center gap-2" style={{ flexWrap: 'wrap' }}>
+                    <Chip colour={TONE[result.verdict]} solid={result.verdict === 'right'}>{LABEL[result.verdict]}</Chip>
+                    {format === 'typed' && (result.verdict === 'wrong' || result.verdict === 'close') && (
+                      <button onClick={claimRight} className="sf-tap"
+                        style={{ background: 'none', border: 'none', cursor: 'pointer', padding: '4px 2px',
+                          fontFamily: SANS, fontSize: 13.5, fontWeight: 600, color: T.accentInk }}>I was right →</button>
+                    )}
+                  </div>
+                  {format !== 'mcq' && result.verdict !== 'right' && result.expected && (
+                    <div style={{ marginTop: 12 }}>
+                      <Chip colour={T.green} style={{ marginBottom: 8 }}>Answer</Chip>
+                      <div style={ANSWER}>{result.expected}</div>
+                    </div>
+                  )}
+                </div>
+              )}
+            </div>
+          </Card>
+
+          {result && (
+            <div style={{ marginTop: 14 }}>
+              <Btn full kind="primary" onClick={() => next()}>Continue →</Btn>
+            </div>
+          )}
+        </>
+      )}
+    </>
+  );
+}
+/* ==========================================================================
+   DIAGNOSE  —  a short test whose output is a list of gaps, not a score.
+
+   The ask behind it: "I want to know what to work on." A quiz answers that
+   badly. It tells you 7/10 and leaves you to guess which three, and worse,
+   getting a question wrong does not tell you WHY it was wrong — whether the
+   term was missing, the mechanism, or the ability to use either one on a
+   situation you had not seen.
+
+   So every question here is aimed at ONE checkpoint, and every checkpoint sits
+   on a rung of the ladder:
+
+     name   you can NAME or state the thing            (Achieved)
+     link   you can EXPLAIN how and why it follows     (Merit)
+     apply  you can USE it on a situation and justify  (Excellence)
+
+   That is deliberate, and it is where the NCEA grounding comes from. The
+   standards themselves get rebuilt — the Level 1 ones were replaced for 2024
+   and the model's memory of them is out of date, which is why NCEA_RULES bars
+   it from naming any of them. The LADDER does not get rebuilt. It has survived
+   every version, it is already what the marking runs on, and it happens to be
+   exactly the distinction a student needs to hear: "you can name it, you
+   cannot link it" is a study instruction. "You got 7/10" is not.
+
+   The student can still name their real standard, and it is passed through in
+   their words like everywhere else in the app. Nothing here recalls one.
+
+   Two model calls per run — one to plan the test, one to read every answer at
+   once. Reading them together is the point: the pattern across the misses is
+   the finding, and a per-question marker cannot see it.
+   ========================================================================== */
+const RUNGS = ['name', 'link', 'apply'];
+const RUNG = {
+  name:  { label: 'Naming it',   grade: 'Achieved',   blurb: 'stating the terms, processes and facts' },
+  link:  { label: 'Linking it',  grade: 'Merit',      blurb: 'explaining how and why one thing causes another' },
+  apply: { label: 'Applying it', grade: 'Excellence', blurb: 'using it on a situation you have not seen' },
+};
+const DIAG_LENGTHS = [
+  { v: 6,  label: 'Quick',  note: 'about 5 minutes' },
+  { v: 12, label: 'Full',   note: 'about 12 minutes' },
+];
+const DIAG_KEEP_DAYS = 30;
+
+/* The split is weighted down the ladder on purpose. A gap at "name" makes
+   every rung above it fail too, so there is no point asking six Excellence
+   questions of someone who cannot name the process — the report would say
+   "everything is missing" and be useless. Establish the floor first. */
+function rungSplit(n){
+  const nameN = Math.max(2, Math.round(n * 0.4));
+  const linkN = Math.max(2, Math.round(n * 0.35));
+  return { name: nameN, link: linkN, apply: Math.max(1, n - nameN - linkN) };
+}
+
+function blueprintPrompt(topic, level, n){
+  const s = rungSplit(n);
+  return `You are an expert ${level} examiner planning a DIAGNOSTIC on: ${topic}
+
+The purpose is NOT to score the student. It is to find exactly WHERE their understanding stops, so each checkpoint must test ONE separable thing. A student who misses one should learn one specific thing about themselves, not "I am bad at this topic".
+
+Write exactly ${n} checkpoints across three rungs:
+- "name" (${s.name} of them): can they NAME, state or define the thing. Demonstrating understanding.
+- "link" (${s.link} of them): can they EXPLAIN how and why, with cause and effect joined up. In-depth understanding.
+- "apply" (${s.apply} of them): can they use it on a SPECIFIC situation given in the question, linking more than one idea and justifying. Comprehensive understanding.
+
+Return ONLY a JSON array. Each element:
+{ "rung": "name" | "link" | "apply",
+  "checkpoint": the one thing they must be able to do, 4-12 words, starting with a verb ("name the...", "explain why...", "apply... to...")
+  "probe": the question to ask them,
+  "expect": what a correct answer MUST contain — the key terms and the causal steps, as a compact note to the marker, NOT a model answer }
+
+Rules:
+- PITCH EVERY PROBE AT ${level} AND NO HIGHER. A checkpoint drawn from a level above this one manufactures a gap the student is not supposed to have closed yet, which is worse than asking nothing. If you are unsure whether something is on this course, leave it out.
+- A "name" probe must test something worth knowing — a process, a structure, a factor, a rule. Never ask for a word that the question itself defines ("what is the term for how fast a reaction goes"): that tests vocabulary trivia and diagnoses nothing.
+- Order them: all "name" first, then "link", then "apply". A student who cannot name it should meet that before being asked to apply it.
+- A "name" probe is answerable in a word or a short phrase. A "link" or "apply" probe in one to three sentences. Say so in the probe if it is not obvious.
+- NEVER ask two things in one probe.
+- An "apply" probe MUST contain a short concrete situation to apply the idea to — invent a plausible one.
+- Probes must stand alone. Do not refer to a diagram, a table, a graph, "the text" or "the material" — the student has none in front of them.
+- Cover the topic's main ideas rather than circling one.
+- No JSON outside the array.${nceaRules(level)}
+
+TOPIC: ${topic}`;
+}
+
+function diagnosePrompt(topic, level, items){
+  const body = items.map((it, i) => `#${i}  [${it.rung}]  CHECKPOINT: ${it.checkpoint}
+PROBE: ${it.probe}
+A CORRECT ANSWER MUST CONTAIN: ${it.expect}
+STUDENT ANSWER: ${it.answer && it.answer.trim() ? it.answer.trim() : '(left blank — they said they did not know)'}`).join('\n\n');
+
+  return `You are an expert ${level} examiner reading one student's answers to a diagnostic on: ${topic}
+
+You are NOT scoring them. You are telling them what is missing, precisely enough that they know what to study tonight. Judge each answer ONLY against the checkpoint and the expectation printed with it.
+
+${body}
+
+Return ONLY ONE JSON object:
+{ "items": [ one per answer, in order:
+    { "i": the number after the #,
+      "verdict": "solid" | "shaky" | "missing",
+      "got": a short phrase naming what they DID get right, or "" if nothing,
+      "gap": ONE sentence addressed to the student ("you"), naming the specific thing that is missing — a term, a step, a link, a condition. "" when solid. } ],
+  "headline": one sentence naming the rung where their understanding stops and what that means, addressed to them,
+  "pattern": one sentence naming what the misses have in common, or "" if they have nothing in common,
+  "next": [ 2 to 4 things to go and do, most useful first, each a short phrase. Say what they should be able to DO — "explain temperature using collision frequency AND activation energy" — not "review collision theory". ] }
+
+How to judge:
+- "solid": the answer contains what the expectation asks for. Different wording is fine. Do not require their phrasing to match yours.
+- "shaky": the right idea is there but incomplete — a term missing, a step of the mechanism skipped, or a link asserted without explaining why it follows.
+- "missing": not there, blank, or wrong.
+- A blank answer is "missing", and its gap should still name what they would have needed to say.
+- Be generous about spelling and grammar. This is a diagnosis of understanding, not of writing.
+
+How to write the gap sentence — this is the whole point of the exercise:
+- Name the specific thing. "You named the reactants but did not say the collisions have to exceed the activation energy" is useful. "Revise rates of reaction" is useless and is not an acceptable answer.
+- Point at the missing LINK where one is missing: "you know both facts but did not connect the surface area to the number of collisions".
+- Never praise, never soften, never pad. One sentence.
+- Do not tell them to "review your notes" or "study more".${nceaRules(level)}`;
+}
+
+/* Blueprint items the student could actually be asked. A malformed one is
+   dropped rather than repaired: a probe with no question in it wastes a slot
+   and, worse, produces a "gap" that means nothing. */
+function cleanBlueprint(arr, want){
+  const out = [];
+  for (const o of arr || []){
+    if (!o || typeof o !== 'object') continue;
+    const probe = String(o.probe == null ? '' : o.probe).trim();
+    const checkpoint = String(o.checkpoint == null ? '' : o.checkpoint).trim();
+    if (!probe || !checkpoint) continue;
+    const rung = RUNGS.indexOf(String(o.rung || '').toLowerCase()) >= 0 ? String(o.rung).toLowerCase() : 'name';
+    out.push({ rung: rung, checkpoint: checkpoint, probe: probe,
+      expect: String(o.expect == null ? '' : o.expect).trim(), answer: '' });
+  }
+  /* Up the ladder, whatever order they came back in. */
+  out.sort((a, b) => RUNGS.indexOf(a.rung) - RUNGS.indexOf(b.rung));
+  return out.slice(0, want);
+}
+
+async function buildDiagnostic(topic, level, n){
+  const reply = await callModel(blueprintPrompt(topic, level, n), 3000, MODEL_GEN, true);
+  return cleanBlueprint(parseJsonArray(reply), n);
+}
+
+/* One call for every answer, because the finding is the pattern across them.
+   Anything the model failed to judge comes back "shaky" with no gap sentence
+   rather than being dropped — a checkpoint that silently vanished from the
+   report would read as a pass. */
+async function runDiagnosis(topic, level, items){
+  const reply = await callModel(diagnosePrompt(topic, level, items), 3000, MODEL_SMART);
+  const obj = rescueObjects(reply)[0] || {};
+  const byIndex = {};
+  for (const r of (Array.isArray(obj.items) ? obj.items : [])){
+    const i = Number(r && r.i);
+    if (Number.isInteger(i) && i >= 0 && i < items.length) byIndex[i] = r;
+  }
+  const verdicts = ['solid', 'shaky', 'missing'];
+  const results = items.map((it, i) => {
+    const r = byIndex[i] || {};
+    const v = verdicts.indexOf(String(r.verdict || '').toLowerCase()) >= 0 ? String(r.verdict).toLowerCase() : 'shaky';
+    /* A blank answer is a gap whatever the model says about it — the student
+       told us they did not know. */
+    const blank = !String(it.answer || '').trim();
+    return { ...it, verdict: blank ? 'missing' : v,
+      got: blank ? '' : String(r.got == null ? '' : r.got).trim(),
+      gap: String(r.gap == null ? '' : r.gap).trim() };
+  });
+  return {
+    topic: topic, level: level, at: Date.now(), items: results,
+    headline: String(obj.headline == null ? '' : obj.headline).trim(),
+    pattern: String(obj.pattern == null ? '' : obj.pattern).trim(),
+    next: (Array.isArray(obj.next) ? obj.next : []).map(s => String(s).trim()).filter(Boolean).slice(0, 4),
+  };
+}
+
+/* Where the wall is: the first rung that is more wrong than right. Named
+   rather than scored, because "your naming is fine, your linking is not" is
+   the sentence that changes what someone does next. */
+function rungTally(items){
+  const t = {};
+  for (const r of RUNGS) t[r] = { solid: 0, shaky: 0, missing: 0, total: 0 };
+  for (const it of items || []){
+    const row = t[it.rung];
+    if (!row) continue;
+    row[it.verdict === 'solid' ? 'solid' : it.verdict === 'missing' ? 'missing' : 'shaky']++;
+    row.total++;
+  }
+  return t;
+}
+function wallRung(items){
+  const t = rungTally(items);
+  for (const r of RUNGS){
+    if (t[r].total && t[r].solid < t[r].total / 2) return r;
+  }
+  return null;
+}
+
+/* The gaps, turned into material the generator can make cards from. Written as
+   study notes rather than as a list of failures, because that is what the card
+   prompts expect to read — and because a card that says "you got this wrong"
+   is not a card, it is a scold. */
+function gapsToSource(report){
+  const gaps = (report.items || []).filter(it => it.verdict !== 'solid');
+  const lines = ['Revision notes for ' + report.topic + ', focused on the specific points this student has not got yet.', ''];
+  for (const g of gaps){
+    lines.push('- ' + g.checkpoint.charAt(0).toUpperCase() + g.checkpoint.slice(1) + '.');
+    if (g.expect) lines.push('  What a full answer needs: ' + g.expect);
+    if (g.gap) lines.push('  What is currently missing: ' + g.gap);
+    lines.push('');
+  }
+  return lines.join('\n');
+}
+
+function Diagnose({ decks, defaultLevel, report, onSaveReport, onClose, onMakeCards }){
+  const [phase, setPhase] = useState(report ? 'report' : 'setup');  // setup | building | run | marking | report
+  const [topic, setTopic] = useState('');
+  const [level, setLevel] = useState(defaultLevel || 'NCEA Level 1');
+  const [want, setWant] = useState(6);
+  const [items, setItems] = useState([]);
+  const [qi, setQi] = useState(0);
+  const [answer, setAnswer] = useState('');
+  const [out, setOut] = useState(report || null);
+  const [err, setErr] = useState('');
+  const inputRef = useRef(null);
+
+  const current = items[qi] || null;
+  const topics = useMemo(() => {
+    const seen = [];
+    for (const d of (decks || [])){
+      const t = (d.topic || d.subject || '').trim();
+      if (t && seen.indexOf(t) < 0) seen.push(t);
+    }
+    return seen.slice(0, 6);
+  }, [decks]);
+
+  useEffect(() => {
+    if (phase !== 'run' || !inputRef.current) return;
+    try { inputRef.current.focus({ preventScroll: true }); } catch (e){}
+  }, [phase, qi]);
+
+  const start = async () => {
+    const t = topic.trim();
+    if (t.length < 3){ setErr('Type what you want tested — a topic, a standard, or a question you keep getting wrong.'); return; }
+    setErr(''); setPhase('building');
+    try {
+      const built = await buildDiagnostic(t, level.trim() || 'NCEA Level 1', want);
+      if (built.length < 4) throw new Error('The AI did not return enough questions. Try naming the topic a bit more specifically.');
+      setItems(built); setQi(0); setAnswer(''); setPhase('run');
+      track('diagnostic_started', { probes: built.length, length: want });
+    } catch (e){
+      setErr(friendlyApiError(e)); setPhase('setup');
+    }
+  };
+
+  const submit = async (skipped) => {
+    const list = items.map((it, i) => (i === qi ? { ...it, answer: skipped ? '' : answer } : it));
+    setItems(list);
+    setAnswer('');
+    if (qi + 1 < list.length){ setQi(qi + 1); return; }
+    setPhase('marking');
+    try {
+      const r = await runDiagnosis(topic.trim(), level.trim() || 'NCEA Level 1', list);
+      setOut(r); setPhase('report');
+      if (onSaveReport) onSaveReport(r);
+      const gaps = r.items.filter(x => x.verdict !== 'solid').length;
+      track('diagnostic_finished', { probes: r.items.length, gaps: gaps, wall: wallRung(r.items) || 'none' });
+      play(gaps ? 'ok' : 'done'); buzz(16);
+    } catch (e){
+      setErr(friendlyApiError(e)); setPhase('run');
+    }
+  };
+
+  /* Keeps the old report rather than binning it: it is a to-do list, and
+     "test me on something else" is not a request to throw the last one away.
+     Holding it is also what makes the "see it again" card on the setup screen
+     reachable at all. The topic goes, since something else is the point. */
+  const restart = () => {
+    setPhase('setup'); setItems([]); setQi(0); setAnswer(''); setTopic(''); setErr('');
+  };
+
+  const closeBtn = (
+    <button onClick={onClose} className="sf-tap" aria-label="Close"
+      style={{ width: 38, height: 38, borderRadius: R.pill, background: T.surface, border: `1px solid ${T.border}`,
+        cursor: 'pointer', color: T.muted, boxShadow: SH.raised, flexShrink: 0, display: 'flex',
+        alignItems: 'center', justifyContent: 'center' }}><Ico name="cross" size={15} weight={2.2} /></button>
+  );
+  const shell = (children) => (
+    <div style={{ position: 'fixed', inset: 0, zIndex: 50, background: T.bg, overflowY: 'auto' }}>
+      <div style={{ width: '100%', maxWidth: 560, margin: '0 auto', padding: '16px 16px 64px' }}>
+        <div className="flex items-center justify-between" style={{ marginBottom: 20 }}>
+          <div style={{ fontFamily: SANS, fontSize: 20, fontWeight: 800, color: T.ink, letterSpacing: '-0.02em' }}>Find my gaps</div>
+          {closeBtn}
         </div>
+        {children}
+      </div>
+    </div>
+  );
 
-        <div style={{ ...QUESTION, whiteSpace: 'pre-wrap' }}>{quizQuestionText(card)}</div>
+  if (phase === 'building' || phase === 'marking'){
+    return shell(
+      <Card style={{ padding: 30 }}>
+        <Loading
+          title={phase === 'building' ? 'Working out what to ask you' : 'Reading all your answers together'}
+          subtitle={phase === 'building'
+            ? 'Breaking ' + (topic.trim() || 'the topic') + ' into the separate things you have to be able to do.'
+            : 'The pattern across your answers is the part that matters, so they get read as a set.'} />
+      </Card>
+    );
+  }
 
-        {format === 'mcq' && mcq && (
-          <div className="flex flex-col gap-2" style={{ marginTop: 18 }}>
-            {mcq.options.map((o, i) => {
-              const isRight = i === mcq.answer;
-              const chosen = pick === i;
-              const c = !result ? T.border : isRight ? T.green : (chosen ? T.red : T.border);
+  if (phase === 'setup'){
+    return shell(
+      <>
+        <Card style={{ padding: 20 }}>
+          <Title>What do you want tested?</Title>
+          <Sub style={{ marginTop: 6, marginBottom: 14 }}>
+            A short written test whose point is not the score. It asks you to name things, then to explain
+            how they link, then to use them on a situation — and tells you which of those three you stop at,
+            and exactly what was missing.
+          </Sub>
+          <input value={topic} onChange={e => setTopic(e.target.value)}
+            onKeyDown={e => { if (e.key === 'Enter'){ e.preventDefault(); start(); } }}
+            placeholder="e.g. rates of reaction, or genetic variation"
+            aria-label="Topic to be tested on"
+            style={{ ...INPUT, fontSize: 16, fontWeight: 600 }} />
+          {topics.length > 0 && (
+            <div style={{ marginTop: 10 }}>
+              <div style={{ fontFamily: SANS, fontSize: 12, fontWeight: 600, color: T.faint, marginBottom: 7 }}>Or from your decks</div>
+              <div style={{ display: 'flex', gap: 7, flexWrap: 'wrap' }}>
+                {topics.map(t => (
+                  <button key={t} className="sf-tap" onClick={() => setTopic(t)}
+                    style={{ background: T.well, border: 'none', borderRadius: R.pill, padding: '7px 12px', cursor: 'pointer',
+                      fontFamily: SANS, fontSize: 12.5, fontWeight: 600, color: T.muted, maxWidth: 200,
+                      whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{t}</button>
+                ))}
+              </div>
+            </div>
+          )}
+
+          <div style={{ marginTop: 16 }}>
+            <div style={{ fontFamily: SANS, fontSize: 13, fontWeight: 700, color: T.ink }}>Pitch it at</div>
+            <Sub style={{ marginTop: 2, fontSize: 12.5 }}>
+              Pick <b>Something else…</b> to name your actual standard. It will use yours — it is not allowed to recall one of its own.
+            </Sub>
+            <div style={{ position: 'relative', marginTop: 8 }}>
+              <select value={LEVEL_PRESETS.includes(level) ? level : '__other'}
+                onChange={e => setLevel(e.target.value === '__other' ? '' : e.target.value)}
+                aria-label="Level"
+                style={{ ...INPUT, paddingRight: 38, fontWeight: 500, appearance: 'none', WebkitAppearance: 'none' }}>
+                {LEVEL_PRESETS.map(p => <option key={p} value={p}>{p}</option>)}
+                <option value="__other">Something else…</option>
+              </select>
+              <span style={{ position: 'absolute', right: 14, top: '50%', transform: 'translateY(-50%)',
+                color: T.faint, pointerEvents: 'none', display: 'flex' }}><Ico name="chevron" size={15} /></span>
+            </div>
+            {!LEVEL_PRESETS.includes(level) && (
+              <input value={level} onChange={e => setLevel(e.target.value)} autoFocus
+                placeholder='e.g. NCEA Level 1 AS92022 genetic variation'
+                aria-label="Your standard"
+                style={{ ...INPUT, marginTop: 8, fontSize: 14 }} />
+            )}
+          </div>
+
+          <div style={{ marginTop: 16 }}>
+            <div style={{ fontFamily: SANS, fontSize: 13, fontWeight: 700, color: T.ink, marginBottom: 8 }}>How long</div>
+            <Segmented value={want} onChange={setWant}
+              options={DIAG_LENGTHS.map(l => ({ v: l.v, label: l.label + ' · ' + l.v }))} />
+            <Sub style={{ marginTop: 7, fontSize: 12.5 }}>
+              {(DIAG_LENGTHS.find(l => l.v === want) || DIAG_LENGTHS[0]).note}. You type short answers — a phrase for the
+              naming ones, a sentence or two for the rest.
+            </Sub>
+          </div>
+
+          {err && <Sub style={{ marginTop: 14, color: T.red }}>{err}</Sub>}
+          <Btn full kind="primary" onClick={start} style={{ marginTop: 16 }}>Build my test →</Btn>
+        </Card>
+
+        {out && (
+          <Card style={{ padding: 16, marginTop: 12 }}>
+            <Sub>You have a diagnosis from before on <b>{out.topic}</b>.</Sub>
+            <Btn full kind="soft" onClick={() => setPhase('report')} style={{ marginTop: 10, fontSize: 14 }}>See it again</Btn>
+          </Card>
+        )}
+      </>
+    );
+  }
+
+  if (phase === 'run' && current){
+    const r = RUNG[current.rung] || RUNG.name;
+    const short = current.rung === 'name';
+    return shell(
+      <>
+        <div style={{ marginBottom: 14 }}>
+          <Progress label={r.label} value={(qi / items.length) * 100}
+            valueText={(qi + 1) + ' of ' + items.length} colour={T.accent} />
+        </div>
+        <Card style={{ padding: '18px 18px 20px' }}>
+          <div className="flex items-center justify-between gap-2" style={{ marginBottom: 16 }}>
+            <Chip colour={T.accentInk}>{r.label}</Chip>
+            {/* Naming the rung is half the teaching: it tells them what kind of
+                thinking is being asked for before they are judged on it. */}
+            <Sub style={{ fontSize: 12 }}>{r.blurb}</Sub>
+          </div>
+          <div style={{ ...QUESTION, whiteSpace: 'pre-wrap' }}>{current.probe}</div>
+          <textarea ref={inputRef} value={answer} onChange={e => setAnswer(e.target.value)}
+            onKeyDown={e => { if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)){ e.preventDefault(); submit(false); } }}
+            rows={short ? 2 : 4}
+            placeholder={short ? 'A word or a short phrase' : 'One to three sentences'}
+            aria-label="Your answer"
+            style={{ ...INPUT, marginTop: 18, fontSize: 16, resize: 'vertical' }} />
+          <SymbolBar onInsert={(s) => setAnswer(v => v + s)} />
+          {err && <Sub style={{ marginTop: 12, color: T.red }}>{err}</Sub>}
+          <div className="flex items-center gap-2" style={{ marginTop: 14 }}>
+            <Btn kind="primary" onClick={() => submit(false)} disabled={!answer.trim()} style={{ flex: 1 }}>
+              {qi + 1 >= items.length ? 'Finish and diagnose →' : 'Next →'}
+            </Btn>
+            {/* Not knowing is a finding, not a failure — and pretending
+                otherwise would have them guess, which pollutes the diagnosis. */}
+            <Btn kind="soft" onClick={() => submit(true)} style={{ whiteSpace: 'nowrap' }}>Not sure</Btn>
+          </div>
+        </Card>
+        <Sub style={{ marginTop: 12, textAlign: 'center', fontSize: 12.5 }}>
+          Answer in your own words. Half an answer is more useful here than a guess.
+        </Sub>
+      </>
+    );
+  }
+
+  if (phase === 'report' && out){
+    const tally = rungTally(out.items);
+    const wall = wallRung(out.items);
+    const gaps = out.items.filter(it => it.verdict !== 'solid');
+    const solid = out.items.length - gaps.length;
+    return shell(
+      <>
+        <Card style={{ padding: 22, marginBottom: 12 }}>
+          <Chip colour={T.muted} style={{ marginBottom: 10 }}>{out.topic}</Chip>
+          <Title style={{ fontSize: 20, lineHeight: 1.35 }}>
+            {out.headline || (wall
+              ? 'Where it stops is ' + RUNG[wall].label.toLowerCase() + '.'
+              : 'No clear gaps in this one.')}
+          </Title>
+          {out.pattern && <Sub style={{ marginTop: 10 }}>{out.pattern}</Sub>}
+
+          <div style={{ marginTop: 18 }}>
+            {RUNGS.map(rg => {
+              const t = tally[rg];
+              if (!t.total) return null;
+              const isWall = wall === rg;
               return (
-                <button key={i} className="sf-tap" onClick={() => answerMcq(i)} disabled={!!result}
-                  style={{ textAlign: 'left', background: result && (isRight || chosen) ? rgba(c, 0.10) : T.surface,
-                    border: `1.5px solid ${result && (isRight || chosen) ? c : T.border}`, borderRadius: R.well,
-                    padding: '13px 15px', cursor: result ? 'default' : 'pointer',
-                    fontFamily: SANS, fontSize: 15.5, lineHeight: 1.45, color: T.ink }}>{o}</button>
+                <div key={rg} style={{ marginBottom: 12 }}>
+                  <div className="flex items-center justify-between gap-2" style={{ marginBottom: 6 }}>
+                    <div className="flex items-center gap-2" style={{ flexWrap: 'wrap' }}>
+                      <span style={{ fontFamily: SANS, fontSize: 13.5, fontWeight: 700, color: T.ink }}>{RUNG[rg].label}</span>
+                      <Sub style={{ fontSize: 12 }}>{RUNG[rg].grade}</Sub>
+                      {isWall && <Chip colour={T.amber}>where it stops</Chip>}
+                    </div>
+                    <span style={{ fontFamily: SANS, fontSize: 12.5, fontWeight: 700, color: T.muted, fontVariantNumeric: 'tabular-nums' }}>
+                      {t.solid} / {t.total}
+                    </span>
+                  </div>
+                  {/* One bar per rung, split by verdict, so the shape of the
+                      problem is visible before a word of it is read. */}
+                  <div style={{ display: 'flex', gap: 2, height: 10 }}>
+                    {[['solid', T.green], ['shaky', T.amber], ['missing', T.red]].map(([k, c]) => (
+                      t[k] ? <div key={k} title={t[k] + ' ' + k} style={{ flex: t[k], background: c, borderRadius: R.pill }} /> : null
+                    ))}
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        </Card>
+
+        {out.next.length > 0 && (
+          <Card style={{ padding: 18, marginBottom: 12 }}>
+            <div style={{ fontFamily: SANS, fontSize: 13, fontWeight: 700, color: T.muted, marginBottom: 10 }}>Work on these, in this order</div>
+            {out.next.map((s, i) => (
+              <div key={i} className="flex items-start gap-3" style={{ marginBottom: i === out.next.length - 1 ? 0 : 9 }}>
+                <span style={{ flexShrink: 0, width: 20, height: 20, borderRadius: 6, background: rgba(T.accent, 0.14),
+                  color: T.accentInk, fontFamily: SANS, fontSize: 11.5, fontWeight: 700, lineHeight: '20px', textAlign: 'center' }}>{i + 1}</span>
+                <div style={{ fontFamily: SANS, fontSize: 14.5, lineHeight: 1.45, color: T.ink }}>{s}</div>
+              </div>
+            ))}
+          </Card>
+        )}
+
+        {gaps.length > 0 && (
+          <div style={{ marginBottom: 12 }}>
+            <div style={{ fontFamily: SANS, fontSize: 13, fontWeight: 700, color: T.muted, margin: '4px 2px 10px' }}>
+              What was missing, one by one
+            </div>
+            {gaps.map((g, i) => {
+              const c = g.verdict === 'missing' ? T.red : T.amber;
+              return (
+                <Card key={i} style={{ padding: 16, marginBottom: 8 }}>
+                  <div className="flex items-center gap-2" style={{ marginBottom: 8, flexWrap: 'wrap' }}>
+                    <Chip colour={c}>{g.verdict === 'missing' ? 'Not there' : 'Half there'}</Chip>
+                    <Sub style={{ fontSize: 12 }}>{RUNG[g.rung].label}</Sub>
+                  </div>
+                  <div style={{ fontFamily: SANS, fontSize: 15, fontWeight: 650, color: T.ink, lineHeight: 1.4 }}>{g.probe}</div>
+                  {g.gap && <div style={{ ...ANSWER, marginTop: 10, color: T.ink }}>{g.gap}</div>}
+                  {g.got && <Sub style={{ marginTop: 8 }}><b>You did get:</b> {g.got}</Sub>}
+                  {g.answer && g.answer.trim() && (
+                    <div style={{ ...PANEL, marginTop: 10 }}>
+                      <div style={{ fontFamily: SANS, fontSize: 11.5, fontWeight: 700, color: T.faint, marginBottom: 4 }}>YOU WROTE</div>
+                      <div style={{ fontFamily: SANS, fontSize: 13.5, lineHeight: 1.5, color: T.muted, whiteSpace: 'pre-wrap' }}>{g.answer.trim()}</div>
+                    </div>
+                  )}
+                </Card>
               );
             })}
           </div>
         )}
 
-        {format === 'typed' && (
-          <div style={{ marginTop: 18 }}>
-            {!result ? (
-              <>
-                <input ref={inputRef} value={typedValue} onChange={e => setTypedValue(e.target.value)}
-                  onKeyDown={e => { if (e.key === 'Enter'){ e.preventDefault(); answerTyped(); } }}
-                  placeholder="Type your answer" aria-label="Your answer"
-                  autoComplete="off" autoCorrect="off" autoCapitalize="off" spellCheck={false}
-                  style={{ ...INPUT, fontSize: 17, fontWeight: 600 }} />
-                <SymbolBar onInsert={(s) => setTypedValue(v => v + s)} />
-                <div className="flex items-center gap-2" style={{ marginTop: 12 }}>
-                  <Btn kind="primary" onClick={answerTyped} disabled={!typedValue.trim()} style={{ flex: 1 }}>Check</Btn>
-                  <Btn kind="soft" onClick={revealTyped} style={{ whiteSpace: 'nowrap' }}>Show me</Btn>
-                </div>
-              </>
-            ) : (
-              result.verdict !== 'shown' && (
-                <div style={{ ...INPUT, fontSize: 17, fontWeight: 600, background: T.surface,
-                  borderColor: rgba(TONE[result.verdict], 0.5) }}>{typedValue}</div>
-              )
-            )}
-          </div>
-        )}
-
-        {format === 'recall' && (
-          <div style={{ marginTop: 18 }}>
-            {!shown && !result && <Btn full kind="primary" onClick={() => setShown(true)}>Show answer</Btn>}
-            {shown && (
-              <div>
-                <Chip colour={T.green} style={{ marginBottom: 8 }}>Answer</Chip>
-                <div style={ANSWER}>{quizAnswerText(card)}</div>
-                {!result && (
-                  <div className="flex items-center gap-2" style={{ marginTop: 16 }}>
-                    <Btn kind="primary" onClick={() => answerRecall(true)} style={{ flex: 1 }}>I had it</Btn>
-                    <Btn kind="soft" onClick={() => answerRecall(false)} style={{ flex: 1 }}>I did not</Btn>
-                  </div>
-                )}
-              </div>
-            )}
-          </div>
-        )}
-
-        {result && (
-          <div style={{ marginTop: 16 }}>
-            <div className="flex items-center gap-2" style={{ flexWrap: 'wrap' }}>
-              <Chip colour={TONE[result.verdict]} solid={result.verdict === 'right'}>{LABEL[result.verdict]}</Chip>
-              {format === 'typed' && (result.verdict === 'wrong' || result.verdict === 'close') && (
-                <button onClick={claimRight} className="sf-tap"
-                  style={{ background: 'none', border: 'none', cursor: 'pointer', padding: '4px 2px',
-                    fontFamily: SANS, fontSize: 13.5, fontWeight: 600, color: T.accentInk }}>I was right →</button>
-              )}
+        {solid > 0 && (
+          <Card style={{ padding: 16, marginBottom: 12 }}>
+            <div className="flex items-center gap-2">
+              <span style={{ color: T.green, display: 'flex' }}><Ico name="check" size={17} weight={2.2} /></span>
+              <Sub style={{ color: T.ink }}>
+                {solid} of {out.items.length} were solid. Those are not worth your revision time tonight.
+              </Sub>
             </div>
-            {format !== 'mcq' && result.verdict !== 'right' && result.expected && (
-              <div style={{ marginTop: 12 }}>
-                <Chip colour={T.green} style={{ marginBottom: 8 }}>Answer</Chip>
-                <div style={ANSWER}>{result.expected}</div>
-              </div>
-            )}
-          </div>
+          </Card>
         )}
-      </Card>
 
-      {result && (
-        <div style={{ marginTop: 14 }}>
-          <Btn full kind="primary" onClick={next}>Continue →</Btn>
-        </div>
-      )}
-    </>
-  );
+        {gaps.length > 0 && onMakeCards && (
+          <Btn full kind="primary" onClick={() => onMakeCards(gapsToSource(out), out.topic, out.level)}>
+            Make cards from what's missing →
+          </Btn>
+        )}
+        <Btn full kind="soft" onClick={restart} style={{ marginTop: 8 }}>Test me on something else</Btn>
+        <Btn full kind="ghost" onClick={onClose} style={{ marginTop: 4, fontSize: 14 }}>Done</Btn>
+      </>
+    );
+  }
+
+  return shell(<Card style={{ padding: 24 }}><Sub>Nothing to show.</Sub><Btn full kind="soft" onClick={restart} style={{ marginTop: 12 }}>Start again</Btn></Card>);
 }
 function ModalScrim({ onClose, children, maxW = 460 }){
   useEffect(() => {
@@ -6881,6 +7960,8 @@ export default function App(){
   const [progress, setProgress] = useState({});
   const [stats, setStats] = useState(DEFAULT_STATS);
   const [settings, setSettings] = useState(DEFAULT_SETTINGS);
+  const settingsRef = useRef(settings);
+  settingsRef.current = settings;
   const [pendingCount, setPendingCount] = useState(0);   // unsaved drafts waiting on Create
   const [focus, setFocus] = useState('all');             // which deck the feed is showing: 'all' or a deck id
   const [quiz, setQuiz] = useState(null);                // { deckId } while a quiz is open, else null
@@ -6890,6 +7971,8 @@ export default function App(){
   const [askOpen, setAskOpen] = useState(false);         // the ask-anything helper
   const [thread, setThread] = useState([]);              // its conversation, this session only
   const [starterOpen, setStarterOpen] = useState(false); // the ready-made deck picker
+  const [diagOpen, setDiagOpen] = useState(false);       // the gap-finding diagnostic
+  const [createSeed, setCreateSeed] = useState(null);    // material handed to Create from elsewhere
   const reduceMotion = useRef(false);
 
   // a focused deck that then gets deleted shouldn't leave the feed stuck empty
@@ -6900,6 +7983,20 @@ export default function App(){
   const startDeck = (deckId) => { setFocus(deckId); setTab('feed'); };
   const openQuiz = (deckId) => setQuiz({ deckId: deckId || 'all' });
   const openLearn = (deckId) => setLearn({ deckId: deckId || 'all' });
+  /* The diagnosis names what is missing; making the cards is what closes the
+     loop, so it hands the gaps to Create rather than ending on a report. */
+  const cardsFromGaps = (source, topic, level) => {
+    setDiagOpen(false);
+    setCreateSeed({ source: source, topic: topic, level: level });
+    setTab('create');
+    track('diagnostic_to_cards', {});
+  };
+  /* Whatever they last said they were working to. Someone who set their real
+     standard on a deck should not have to type it again to be tested on it. */
+  const usualLevel = () => {
+    const d = library.decks[library.decks.length - 1];
+    return (d && d.standard) ? d.standard : 'NCEA Level 1';
+  };
 
   useEffect(() => {
     (async () => {
@@ -6962,6 +8059,20 @@ export default function App(){
     })();
   }, []);
 
+  /* Deep links from the landing page. Only the two it actually advertises;
+     an open-ended hash router would be a bigger surface than this needs. The
+     hash is cleared once used, so a reload does not reopen the overlay and the
+     back button behaves. */
+  useEffect(() => {
+    if (!ready) return;
+    let h = '';
+    try { h = (window.location.hash || '').replace('#', '').toLowerCase(); } catch (e){ return; }
+    if (h !== 'gaps' && h !== 'ideas') return;
+    if (h === 'gaps') setDiagOpen(true);
+    else setTab('feedback');
+    try { window.history.replaceState(null, '', window.location.pathname + window.location.search); } catch (e){}
+  }, [ready]);
+
   const dismissNews = () => {
     setShowNews(false);
     const s = { ...settings, lastSeenVersion: APP_VERSION };
@@ -7004,6 +8115,25 @@ export default function App(){
   const persistProgress = useCallback((p) => { setProgress(p); save('progress:all', p); }, []);
   const persistStats = useCallback((s) => { setStats(s); save('stats:main', s); }, []);
   const persistSettings = useCallback((s) => { setSettings(s); save('settings:main', s); }, []);
+
+  /* Learn writes its half-finished run through here on the way out. It reads
+     the settings off a ref rather than the closure so the callback can stay
+     stable — Learn hangs on to it and calls it from an unmount handler, which
+     is exactly where a stale closure would quietly save the wrong thing.
+     Kept inside settings rather than a fifth storage key: the four-key limit
+     at the top of this file is a constraint of the Artifact runtime, not a
+     preference. */
+  const saveLearnSession = useCallback((sess) => {
+    const s = { ...settingsRef.current, learnSession: sess || null };
+    setSettings(s); save('settings:main', s);
+  }, []);
+  /* The last diagnosis is kept for the same reason as the Learn session: it is
+     a to-do list, and one you cannot reopen is a worse one. Same storage key
+     too — the four-key limit is the Artifact runtime's, not a preference. */
+  const saveDiagnosis = useCallback((report) => {
+    const s = { ...settingsRef.current, diagnosis: report || null };
+    setSettings(s); save('settings:main', s);
+  }, []);
 
   const saveDeck = (cards, meta) => {
     const deck = {
@@ -7121,7 +8251,8 @@ export default function App(){
       <div style={{ minHeight: 440 }}>
         {tab === 'home' && <Home library={library} progress={progress} stats={stats} settings={settings}
           due={dueCount} onStart={() => { setFocus('all'); setTab('feed'); }} onCreate={() => setTab('create')}
-          onDecks={() => setTab('decks')} onStudyDeck={startDeck} onQuiz={openQuiz} onLearn={openLearn} onSettings={persistSettings}
+          onDecks={() => setTab('decks')} onStudyDeck={startDeck} onQuiz={openQuiz} onLearn={openLearn}
+          onDiagnose={() => setDiagOpen(true)} onSettings={persistSettings}
           onTutorial={replayTutorial} onStarter={() => setStarterOpen(true)} />}
         {/* key includes focus + mix so switching deck or moving the slider rebuilds the queue */}
         {tab === 'feed' && <Feed key={'feed-' + focus + '-' + cardCount + '-' + longMixOf(settings)}
@@ -7134,7 +8265,7 @@ export default function App(){
             switched tabs, and those drafts cost real API usage to produce. */}
         <div style={{ display: tab === 'create' ? 'block' : 'none' }}>
           <Create onSave={saveDeck} settings={settings} onSettings={persistSettings} onPending={setPendingCount}
-            onStarter={() => setStarterOpen(true)} />
+            onStarter={() => setStarterOpen(true)} seed={createSeed} onSeedUsed={() => setCreateSeed(null)} />
         </div>
         {tab === 'decks' && <Decks decks={library.decks} progress={progress} onEditCard={editCard}
           onDeleteCard={deleteCard} onDeleteDeck={deleteDeck} onRenameDeck={renameDeck}
@@ -7147,7 +8278,10 @@ export default function App(){
       </div>
     </Shell>
     {quiz && <Quiz decks={library.decks} deckId={quiz.deckId} onClose={() => setQuiz(null)} onDone={recordQuiz} />}
-    {learn && <LearnMode decks={library.decks} deckId={learn.deckId} onClose={() => setLearn(null)} onDone={recordQuiz} />}
+    {learn && <LearnMode decks={library.decks} deckId={learn.deckId} session={settings.learnSession}
+      onSaveSession={saveLearnSession} onClose={() => setLearn(null)} onDone={recordQuiz} />}
+    {diagOpen && <Diagnose decks={library.decks} defaultLevel={usualLevel()} report={settings.diagnosis}
+      onSaveReport={saveDiagnosis} onClose={() => setDiagOpen(false)} onMakeCards={cardsFromGaps} />}
     {starterOpen && <StarterPicker onAdd={addStarter} onClose={() => setStarterOpen(false)} />}
     {showNews && !showTutorial && <WhatsNew onClose={dismissNews} />}
     {/* the tour drives the tabs itself — it points at the real screens */}
@@ -7155,7 +8289,7 @@ export default function App(){
     {/* the helper is available on every screen — except where something else
         already owns the whole screen (a quiz, the update note, the tutorial) */}
     {askOpen && <AskPanel thread={thread} setThread={setThread} onClose={() => setAskOpen(false)} />}
-    {!askOpen && !quiz && !learn && !showNews && !showTutorial && !starterOpen && <AskFab onClick={() => setAskOpen(true)} />}
+    {!askOpen && !quiz && !learn && !diagOpen && !showNews && !showTutorial && !starterOpen && <AskFab onClick={() => setAskOpen(true)} />}
     </>
   );
 }
@@ -7222,6 +8356,11 @@ function Shell({ children, tab, setTab, due, pending }){
         .sf-btn { transition: transform 110ms cubic-bezier(.3,.8,.4,1), filter 180ms, box-shadow 180ms; -webkit-user-select: none; user-select: none; }
         .sf-btn:active:not(:disabled) { transform: scale(0.96); filter: brightness(0.97); }
         .sf-tap { transition: transform 110ms cubic-bezier(.3,.8,.4,1), border-color 180ms, background 180ms; }
+        /* Three actions across a 375px phone leaves ~106px each, and a
+           one-line description wraps to four lines in that. The label and the
+           icon carry it there; the description comes back when there is room. */
+        .sf-act-sub { display: none; }
+        @media (min-width: 460px) { .sf-act-sub { display: block; } }
         .sf-tap:active { transform: scale(0.985); }
         @media (hover: hover) {
           .sf-btn:hover:not(:disabled) { filter: brightness(0.98); }
