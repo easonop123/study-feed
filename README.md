@@ -52,11 +52,25 @@ tint rather than `T.accent`.
 | `/app/` | The app itself | `docs/app/index.html` + `docs/app.js` |
 
 The landing page is deliberately not part of the React bundle: a marketing page
-lives or dies on how fast it paints, and this one is one ~20KB file with inline
-CSS and three small scripts. It shares the app's palette and typeface so
-arriving in the app doesn't feel like a different product. The PWA manifest
-points at `/app/`, so installing to the home screen opens the app, not the
-pitch.
+lives or dies on how fast it paints, and this one is one ~60KB file with inline
+CSS and three small scripts. It shares the app's palette and typeface so arriving
+in the app doesn't feel like a different product. The PWA manifest points at
+`/app/`, so installing to the home screen opens the app, not the pitch.
+
+**Its pitch leads with the diagnostic**, changed 19 Aug 2026: *"Stop revising what
+you already know. Find the bit you don't."* The previous headline — *"Flashcards
+get you Achieved. Excellence is a writing problem."* — was true and is still the
+argument, but it names a problem without naming an action, so it now leads the
+"three ways to not know something" section instead of the page. The rung
+vocabulary (name it / link it / apply it) is shared verbatim with the marking and
+with Find my gaps, so the page teaches the thing the app then uses. Two CTAs deep
+link: `/app/#gaps` opens the diagnostic and `/app/#ideas` opens the feature
+form, both read once on load and then cleared from the URL. TikTok and Instagram
+(@studyfeednz) are linked from the footer and from the app's You tab.
+
+**Known gap:** `og-image.png` is a drawn asset and still carries the old headline,
+so link previews are off-message until it is redrawn. It is a brand asset rather
+than generated code — see `brand/social/`.
 
 Everything on it that starts hidden (`.rise`, `.reveal`) has a failsafe: if the
 IntersectionObserver hasn't reported within two seconds the page reveals

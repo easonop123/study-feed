@@ -73,15 +73,37 @@ no font installed. Do not re-typeset the wordmark — use `wordmark-*.svg` or th
 
 The landing headline is:
 
-> **Flashcards get you Achieved. Excellence is a writing problem.**
+> **Stop revising what you already know. Find the bit you don't.**
+
+Changed 19 Aug 2026, replacing *"Flashcards get you Achieved. Excellence is a writing
+problem."* That line was true and is still the argument — it now leads the **"three ways
+to not know something"** section rather than the page. It was moved because it names a
+problem without naming an action: knowing flashcards are not enough does not tell a
+student what to do tonight, and finding their own gap does. Do not revert one without the
+other; the page's whole order follows from which claim leads.
 
 Three claims that should appear near any primary call to action:
 
-1. It marks what you actually write — graded Achieved / Merit / Excellence.
-2. Free, no account, no sign-up.
-3. It builds cards from your own notes, slides and photos.
+1. It finds the specific gap — the thing you can't name, the link you can't make.
+2. It marks what you actually write — graded Achieved / Merit / Excellence.
+3. Free, no account, no sign-up.
 
 "Free · No sign-up · NCEA 1–3" is the standard chip row.
+
+**The ladder is the vocabulary.** Achieved / Merit / Excellence — name it, link it, apply
+it — is used identically by the marking, by Find my gaps, and by the landing page's rung
+cards. It is the one piece of NCEA that has survived every rebuild of the standards, so it
+is the only NCEA structure this product is allowed to hard-code. See `NCEA_RULES`.
+
+## Accounts
+
+- TikTok — [@studyfeednz](https://www.tiktok.com/@studyfeednz)
+- Instagram — [@studyfeednz](https://www.instagram.com/studyfeednz/)
+
+Linked from the landing page footer and from the app's **You** tab. The handles live in one
+place in each file — `SOCIAL` in `StudyFeed.jsx`, and the `.social` block in
+`docs/index.html` — so a change is two edits, not eight. Profile art is in
+`brand/social-profiles/`.
 
 ---
 
@@ -96,8 +118,8 @@ Output Directory is `docs`, so files there are what get served from `/`. Then ad
 <link rel="apple-touch-icon" href="/apple-touch-icon.png">
 <meta name="theme-color" content="#141024">
 
-<meta property="og:title" content="Study Feed — flashcards get you Achieved">
-<meta property="og:description" content="Excellence is a writing problem. Study Feed marks what you actually write, against the real NCEA criteria, and shows you the sentence that gets you the next grade.">
+<meta property="og:title" content="Study Feed — stop revising what you already know">
+<meta property="og:description" content="Five minutes of writing, and it tells you where your understanding actually stops: the thing you cannot name, the link you cannot make, the idea you cannot apply. Then it closes that gap.">
 <meta property="og:image" content="https://studyfeed.app/og-image.png">
 <meta property="og:image:width" content="1200">
 <meta property="og:image:height" content="630">

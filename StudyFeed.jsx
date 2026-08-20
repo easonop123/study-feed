@@ -153,6 +153,13 @@ function subjectColour(name){
 const TYPE_LABEL = { flip: 'Flip', cloze: 'Fill the blank', short: 'Short answer', mcq: 'Multiple choice', extended: 'Long answer', typed: 'Type the answer' };
 const LEVEL_PRESETS = ['NCEA Level 1', 'NCEA Level 2', 'NCEA Level 3'];
 
+/* The accounts, in one place. docs/index.html carries the same two in its
+   footer; if these ever change, both move together. */
+const SOCIAL = [
+  { k: 'tiktok', label: 'TikTok', url: 'https://www.tiktok.com/@studyfeednz' },
+  { k: 'instagram', label: 'Instagram', url: 'https://www.instagram.com/studyfeednz/' },
+];
+
 /* Symbols that are a pain to type when answering chemistry/physics/maths.
    Subscripts build formulae (H + ₂ + O = H₂O); superscripts build charges
    and powers (SO₄ + ² + ⁻ = SO₄²⁻; ×10 + ⁻ + ⁷). */
@@ -362,6 +369,7 @@ const PATCH_NOTES = [
     'It keeps your last diagnosis so you can come back to the list while you study.',
     'As everywhere else, it will use the standard YOU name and is barred from recalling one of its own.',
     'Find my gaps, Learn and Quiz now sit in a row near the top of Home under "Test yourself", instead of in small print at the very bottom. Learn in particular was only reachable by scrolling past the whole dashboard.',
+    'Study Feed is on TikTok and Instagram — @studyfeednz on both. Links are at the bottom of You.',
   ] },
   { v: '1.3.0', date: '2026-08-19', title: 'Options that make you think', items: [
     'The wrong answers in Learn and Quiz used to be pulled at random from your other cards, so a one-word answer could sit next to a whole paragraph — and you could pick the odd one out without reading the question. Wrong answers are now matched to the right one: same sort of length, same sort of thing, a number against numbers and a name against names.',
@@ -2239,6 +2247,8 @@ const ICON_PATHS = {
   speaker:  'M11 5.5 6.8 9H4a1 1 0 0 0-1 1v4a1 1 0 0 0 1 1h2.8L11 18.5zM15.2 9.4a3.6 3.6 0 0 1 0 5.2M18 6.8a7.4 7.4 0 0 1 0 10.4',
   muted:    'M11 5.5 6.8 9H4a1 1 0 0 0-1 1v4a1 1 0 0 0 1 1h2.8L11 18.5zM16 10l5 4M21 10l-5 4',
   pencil:   'M4.5 19.5h3.6L19.4 8.2a2.3 2.3 0 0 0-3.2-3.2L4.5 15.9zM14.7 6.5l2.8 2.8',
+  instagram:'M7.5 3.5h9a4 4 0 0 1 4 4v9a4 4 0 0 1-4 4h-9a4 4 0 0 1-4-4v-9a4 4 0 0 1 4-4zM12 8.2a3.8 3.8 0 1 0 0 7.6 3.8 3.8 0 0 0 0-7.6zM17.4 6.6v.01',
+  tiktok:   'M16.6 5.82A4.28 4.28 0 0 1 15.54 3h-3.09v12.4a2.59 2.59 0 0 1-2.59 2.5 2.59 2.59 0 0 1 0-5.18c.27 0 .52.04.76.12v-3.2a5.86 5.86 0 0 0-.76-.05 5.78 5.78 0 1 0 5.78 5.78V9.01a7.35 7.35 0 0 0 4.3 1.38V7.3a4.29 4.29 0 0 1-3.34-1.48z',
 };
 
 /* `fill` is only for the couple of glyphs that read better solid (the flame on
@@ -5101,6 +5111,17 @@ function Settings({ settings, onChange, library, progress, onImport, onTutorial 
       <Card style={{ padding: 15, marginTop: 10, boxShadow: SH.raised }}>
         <div style={{ fontFamily: SANS, fontSize: 15, fontWeight: 700, color: T.ink }}>About</div>
         <Sub style={{ fontSize: 12.5, marginTop: 2 }}>Study Feed · version {APP_VERSION}. See <b>Updates</b> for what's new.</Sub>
+        <div className="flex items-center gap-2" style={{ marginTop: 12, flexWrap: 'wrap' }}>
+          {SOCIAL.map(sc => (
+            <a key={sc.k} href={sc.url} target="_blank" rel="me noopener noreferrer" className="sf-tap"
+              style={{ display: 'inline-flex', alignItems: 'center', gap: 7, textDecoration: 'none',
+                background: T.well, border: `1px solid ${T.border}`, borderRadius: R.pill, padding: '8px 13px',
+                fontFamily: SANS, fontSize: 13, fontWeight: 650, color: T.muted }}>
+              {/* the TikTok mark is a fill, the Instagram one a stroke */}
+              <Ico name={sc.k} size={15} weight={sc.k === 'tiktok' ? 0 : 1.9} fill={sc.k === 'tiktok'} />{sc.label}
+            </a>
+          ))}
+        </div>
       </Card>
     </div>
   );
@@ -8037,6 +8058,20 @@ export default function App(){
       setReady(true);
     })();
   }, []);
+
+  /* Deep links from the landing page. Only the two it actually advertises;
+     an open-ended hash router would be a bigger surface than this needs. The
+     hash is cleared once used, so a reload does not reopen the overlay and the
+     back button behaves. */
+  useEffect(() => {
+    if (!ready) return;
+    let h = '';
+    try { h = (window.location.hash || '').replace('#', '').toLowerCase(); } catch (e){ return; }
+    if (h !== 'gaps' && h !== 'ideas') return;
+    if (h === 'gaps') setDiagOpen(true);
+    else setTab('feedback');
+    try { window.history.replaceState(null, '', window.location.pathname + window.location.search); } catch (e){}
+  }, [ready]);
 
   const dismissNews = () => {
     setShowNews(false);

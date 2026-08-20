@@ -3,8 +3,8 @@
 <head>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
-<title>Study Feed — flashcards get you Achieved</title>
-<meta name="description" content="NCEA revision that marks the long answers you actually have to write. Real Achieved / Merit / Excellence criteria, the command verb the question is really asking for, and the exact sentence that would have moved you up a grade. Levels 1–3. Free, no account." />
+<title>Study Feed — stop revising what you already know</title>
+<meta name="description" content="A five-minute written test that finds the exact gap in what you know — the process you cannot name, the link you cannot make — then builds the cards that close it and marks what you write against the real NCEA Achieved / Merit / Excellence criteria. Levels 1–3. Free, no account." />
 <meta name="theme-color" content="#F0EBFF" />
 
 <!-- Brand assets: see /brand and CLAUDE.md. Paths are absolute because this
@@ -15,14 +15,18 @@
 
 <meta property="og:type" content="website" />
 <meta property="og:url" content="https://studyfeed.app/" />
-<meta property="og:title" content="Study Feed — flashcards get you Achieved" />
-<meta property="og:description" content="Excellence is a writing problem. Study Feed marks what you actually write, against the real NCEA criteria, and shows you the sentence that gets you the next grade." />
+<meta property="og:title" content="Study Feed — stop revising what you already know" />
+<meta property="og:description" content="Five minutes of writing, and it tells you where your understanding actually stops: the thing you cannot name, the link you cannot make, the idea you cannot apply. Then it closes that gap." />
 <!-- Absolute, and it has to stay that way: a relative og:image silently fails
      in iMessage, WhatsApp and Instagram DMs, where a link with no preview reads
      as a phishing link. Sharing into group chats is the whole distribution plan. -->
 <meta property="og:image" content="https://studyfeed.app/og-image.png" />
 <meta property="og:image:width" content="1200" />
 <meta property="og:image:height" content="630" />
+<!-- The alt describes og-image.png, which is a drawn brand asset and still
+     carries the previous headline. Keeping the alt honest about what the
+     picture actually says; the image itself needs redrawing to match the new
+     pitch — see brand/social/og-image.png. -->
 <meta property="og:image:alt" content="Study Feed — flashcards get you Achieved. Excellence is a writing problem." />
 <meta name="twitter:card" content="summary_large_image" />
 <meta name="twitter:image" content="https://studyfeed.app/og-image.png" />
@@ -318,6 +322,26 @@ h2{ margin:0; font-size:clamp(28px,4.2vw,42px); line-height:1.11; letter-spacing
 .close h2{ color:#fff; }
 .close p{ margin:16px auto 28px; font-size:17px; line-height:1.6; color:rgba(255,255,255,.9); max-width:46ch; }
 
+/* the three practice modes */
+.modegrid{ display:grid; grid-template-columns:repeat(3,1fr); gap:14px; }
+.modecard{ background:var(--surface); border:1px solid var(--line); border-radius:16px; padding:22px 20px; box-shadow:var(--sh-card); }
+.modecard h3{ font-size:17px; font-weight:750; letter-spacing:-.015em; margin:0 0 9px; }
+.modecard p{ font-size:14px; line-height:1.6; color:var(--muted); margin:0; }
+@media (max-width:820px){ .modegrid{ grid-template-columns:1fr; } }
+
+/* the three rungs */
+.rungrid{ display:grid; grid-template-columns:repeat(3,1fr); gap:14px; }
+.rungcard{ background:var(--well); border:1px solid var(--line); border-radius:14px; padding:18px 16px; }
+.rungcard.hot{ border-color:rgba(124,92,255,.4); background:var(--accent-soft); }
+.rungcard h3{ font-size:15.5px; font-weight:750; letter-spacing:-.01em; margin:10px 0 7px; }
+.rungcard p{ font-size:13.5px; line-height:1.55; color:var(--muted); margin:0; }
+.rungcard small{ display:block; margin-top:10px; font-size:12px; line-height:1.5; color:var(--faint); }
+.rungtag{ display:inline-block; font-size:11px; font-weight:800; letter-spacing:.05em; text-transform:uppercase; padding:4px 9px; border-radius:var(--pill); }
+.rungtag.a{ background:rgba(92,84,112,.12); color:var(--muted); }
+.rungtag.m{ background:rgba(124,92,255,.15); color:var(--accent-ink); }
+.rungtag.e{ background:rgba(55,185,140,.15); color:var(--green-ink); }
+@media (max-width:720px){ .rungrid{ grid-template-columns:1fr; } }
+
 footer{ padding:0 0 56px; }
 .foot{ display:flex; flex-wrap:wrap; gap:16px 28px; align-items:center; padding-top:28px; border-top:1px solid var(--line); }
 .foot .brand{ font-size:15.5px; }
@@ -325,6 +349,17 @@ footer{ padding:0 0 56px; }
 .foot a{ font-size:14px; color:var(--muted); font-weight:600; }
 .foot a:hover{ color:var(--ink); }
 .foot small{ width:100%; font-size:12.5px; color:var(--faint); line-height:1.6; }
+.social{ display:flex; gap:10px; }
+/* min-height, not padding: 44px is the tap target these need to clear and
+   padding alone would push the label off centre. */
+.social a{ display:inline-flex; align-items:center; justify-content:center; gap:7px; min-height:44px; padding:8px 15px; border-radius:var(--pill);
+  border:1px solid var(--line); background:var(--surface); color:var(--muted); font-size:13.5px; font-weight:650;
+  transition:border-color .18s, color .18s, transform .12s; }
+.social a:hover{ color:var(--ink); border-color:rgba(124,92,255,.45); }
+.social a:active{ transform:scale(.97); }
+/* The footer row is a wrapping flex line; on a phone the links row already
+   takes the full width, so the socials sit under it rather than squeezing. */
+@media (max-width:560px){ .foot nav{ margin-left:0; } .social{ width:100%; } }
 
 @media (prefers-reduced-motion: reduce){
   *{ animation:none !important; transition:none !important; }
@@ -335,7 +370,7 @@ footer{ padding:0 0 56px; }
 <noscript><style>
   .rise,.reveal{ opacity:1 !important; transform:none !important; animation:none !important; }
   .scene{ opacity:1 !important; position:relative !important; transform:none !important; }
-  .scene[data-scene="1"],.scene[data-scene="2"],.scene[data-scene="3"]{ display:none; }
+  .scene[data-scene="1"],.scene[data-scene="2"],.scene[data-scene="3"],.scene[data-scene="4"]{ display:none; }
   .filerow,.typed span,.markbtn,.result,.upgrade,.lift{ opacity:1 !important; transform:none !important; }
   .bars i{ transform:scaleY(1) !important; }
 </style></noscript>
@@ -353,8 +388,8 @@ footer{ padding:0 0 56px; }
       Study Feed
     </a>
     <div class="nav-links">
+      <a href="#rungs" class="hide-sm">Find your gap</a>
       <a href="#gap" class="hide-sm">The Merit gap</a>
-      <a href="#verbs" class="hide-sm">Command verbs</a>
       <a href="#how" class="hide-sm">How it works</a>
       <a class="btn btn-primary btn-sm" href="/app/" data-cta="nav">Open the app →</a>
     </div>
@@ -369,10 +404,10 @@ footer{ padding:0 0 56px; }
           <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M4.8 12.5 9.7 17.4 19.2 6.9"/></svg>
           Built for <b>NCEA Levels 1, 2 &amp; 3</b>
         </div>
-        <h1 class="rise d2">Flashcards get you <span class="dim">Achieved.</span><br><span class="accent">Excellence</span> is a writing problem.</h1>
-        <p class="lede rise d3">Externals aren't multi-choice. They're six-mark questions you have to <em>write</em>. Study Feed marks what you actually wrote against the real Achieved / Merit / Excellence criteria — then shows you the sentence that would have moved you up a grade.</p>
+        <h1 class="rise d2">Stop revising what you <span class="dim">already know.</span><br>Find the bit you <span class="accent">don't</span>.</h1>
+        <p class="lede rise d3">Five minutes of short written answers, and Study Feed tells you exactly where your understanding stops — the process you can't name, the link you can't make, the idea you can't apply to a question you haven't seen. Then it builds the cards that close that gap, and marks what you write against the real Achieved / Merit / Excellence criteria.</p>
         <div class="cta-row rise d4">
-          <a class="btn btn-primary btn-lg" href="/app/" data-cta="hero">Start writing — free →</a>
+          <a class="btn btn-primary btn-lg" href="/app/#gaps" data-cta="hero">Find my gaps — free →</a>
           <span class="cta-note">No account. No card. Opens in your browser.</span>
         </div>
       </div>
@@ -388,8 +423,32 @@ footer{ padding:0 0 56px; }
           <div class="demo-head"><i class="dot"></i><i class="dot"></i><i class="dot"></i></div>
           <div class="demo-stage">
 
-            <!-- 1. your material -->
+            <!-- 1. the gap report — what the headline promises -->
             <div class="scene" data-scene="0">
+              <div class="qcard">
+                <div class="qtop">
+                  <span class="chip chip-accent">Find my gaps</span>
+                  <span class="chip chip-grey" style="margin-left:auto">Rates of reaction</span>
+                </div>
+                <div class="qtext" style="font-size:16.5px">You can name the factors. You stop as soon as you have to say <em>why</em> any of them work.</div>
+                <div class="ladder" style="margin:14px 0 13px">
+                  <div class="rung a"><b>Naming it</b><small>2 of 2</small></div>
+                  <div class="rung m now"><b>Linking it</b><small>where it stops</small></div>
+                  <div class="rung e"><b>Applying it</b><small>0 of 2</small></div>
+                </div>
+                <div class="upgrade">
+                  <div style="font-size:11.5px;font-weight:800;letter-spacing:.06em;text-transform:uppercase;color:var(--green-ink);margin-bottom:9px">What was actually missing</div>
+                  <div class="step">
+                    <b>Explain why heating speeds a reaction up</b>
+                    <q>“Because it is hotter so it goes faster.”</q>
+                    <em>You didn't name kinetic energy, collision frequency, or the activation energy threshold.</em>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            <!-- 2. your material -->
+            <div class="scene" data-scene="1">
               <div style="font-size:12.5px;font-weight:700;color:var(--faint);letter-spacing:.08em;text-transform:uppercase;margin-bottom:12px">Your own notes</div>
               <div class="filerow">
                 <div class="ft" style="background:#D93025">PDF</div>
@@ -413,8 +472,8 @@ footer{ padding:0 0 56px; }
               </div>
             </div>
 
-            <!-- 2. writing the questions -->
-            <div class="scene" data-scene="1">
+            <!-- 3. writing the questions -->
+            <div class="scene" data-scene="2">
               <div class="gen">
                 <div class="rings">
                   <div class="ring" style="background:conic-gradient(from 0deg,transparent 0deg,#7C5CFF 90deg,transparent 180deg);-webkit-mask:radial-gradient(circle at 50% 50%,transparent 35%,#000 37%,#000 42%,transparent 44%);mask:radial-gradient(circle at 50% 50%,transparent 35%,#000 37%,#000 42%,transparent 44%);animation:spin 3s linear infinite"></div>
@@ -429,8 +488,8 @@ footer{ padding:0 0 56px; }
               </div>
             </div>
 
-            <!-- 3. you write a real answer -->
-            <div class="scene" data-scene="2">
+            <!-- 4. you write a real answer -->
+            <div class="scene" data-scene="3">
               <div class="qcard">
                 <div class="qtop">
                   <span class="chip chip-accent">Explain</span>
@@ -447,8 +506,8 @@ footer{ padding:0 0 56px; }
               </div>
             </div>
 
-            <!-- 4. the mark, and how to move up -->
-            <div class="scene" data-scene="3">
+            <!-- 5. the mark, and how to move up -->
+            <div class="scene" data-scene="4">
               <div class="qcard">
                 <div class="result">
                   <div class="ladder" style="margin-bottom:13px">
@@ -478,7 +537,7 @@ footer{ padding:0 0 56px; }
             </div>
 
           </div>
-          <div class="scene-dots"><b></b><b></b><b></b><b></b></div>
+          <div class="scene-dots"><b></b><b></b><b></b><b></b><b></b></div>
         </div>
       </div>
     </div>
@@ -494,6 +553,47 @@ footer{ padding:0 0 56px; }
       <li>No sign-up</li>
     </ul>
   </div>
+
+  <!-- ---- the three rungs — the new spine of the pitch --------------------
+       This is where the old headline's idea now lives. "Flashcards get you
+       Achieved" was true and is still the argument; it is just no longer the
+       first thing said, because knowing that flashcards are not enough does
+       not tell you what to do on a Tuesday night. Finding your own gap does. -->
+  <section id="rungs">
+    <div class="wrap">
+      <div class="center reveal" style="margin-bottom:42px">
+        <p class="eyebrow">Why revision feels like guessing</p>
+        <h2>There are three ways to not know something.</h2>
+        <p class="sub">And they need three different fixes. Re-reading your notes only ever helps with the first one, which is why an hour of it can change nothing — you were already fine at the naming.</p>
+      </div>
+
+      <div class="fig reveal s1" style="max-width:820px;margin:0 auto;padding:26px">
+        <div class="rungrid">
+          <div class="rungcard">
+            <span class="rungtag a">Achieved</span>
+            <h3>You can't name it</h3>
+            <p>The term, the process, the factor. You read the question and nothing arrives.</p>
+            <small>Flashcards fix this one. It is the only one they fix.</small>
+          </div>
+          <div class="rungcard hot">
+            <span class="rungtag m">Merit</span>
+            <h3>You can name it, but not say why</h3>
+            <p>You know heating speeds a reaction up. You can't say that more collisions clear the activation energy.</p>
+            <small>This is where most Achieved answers actually stop.</small>
+          </div>
+          <div class="rungcard">
+            <span class="rungtag e">Excellence</span>
+            <h3>You can explain it, but not use it</h3>
+            <p>You can recite the mechanism, then meet a situation you haven't seen and freeze.</p>
+            <small>Nothing you can re-read will teach you this.</small>
+          </div>
+        </div>
+        <div style="margin-top:20px;padding-top:18px;border-top:1px solid var(--line);font-size:14px;line-height:1.6;color:var(--muted)">
+          <b style="color:var(--ink)">Find my gaps</b> asks you all three, in that order, and tells you which one you fall off at — then hands you the specific thing that was missing, not a score. <b style="color:var(--ink)">Naming the rung is the useful part:</b> “you can name it, you can't link it” is something you can act on tonight. “7 out of 10” isn't.
+        </div>
+      </div>
+    </div>
+  </section>
 
   <!-- ---- the Merit gap — the whole argument ------------------------------ -->
   <section id="gap">
@@ -611,6 +711,34 @@ footer{ padding:0 0 56px; }
     </div>
   </section>
 
+  <!-- ---- the three practice modes ---------------------------------------
+       The page had nothing about Learn or Quiz at all, which made the app
+       sound like one feature. They are how a gap actually gets closed, so
+       they belong right after the feed. -->
+  <section id="modes">
+    <div class="wrap">
+      <div class="center reveal" style="margin-bottom:38px">
+        <p class="eyebrow">Three ways to practise</p>
+        <h2>Recognising an answer isn't knowing it.</h2>
+        <p class="sub">Picking the right option out of four feels like knowing. In the exam there are no options. So the practice climbs: pick it, then produce it, then write it properly.</p>
+      </div>
+      <div class="modegrid">
+        <div class="modecard reveal s1">
+          <h3>Find my gaps</h3>
+          <p>The five-minute written test that tells you which rung you fall off, and what specifically was missing. One tap turns everything you missed into cards.</p>
+        </div>
+        <div class="modecard reveal s2">
+          <h3>Learn</h3>
+          <p>Takes a deck and drills it until you can <em>produce</em> every answer, not just recognise one. Pick it out of four the first time; write it from memory the second. Miss one and it comes straight back.</p>
+        </div>
+        <div class="modecard reveal s3">
+          <h3>Quiz</h3>
+          <p>A quick graded check before a test. The wrong options are matched to the right one, so you can't spot the answer by its shape — which is the only thing most quiz apps are actually testing.</p>
+        </div>
+      </div>
+    </div>
+  </section>
+
   <!-- ---- ask ------------------------------------------------------------- -->
   <section>
     <div class="wrap feat flip">
@@ -633,21 +761,21 @@ footer{ padding:0 0 56px; }
     <div class="wrap">
       <div class="center reveal">
         <p class="eyebrow">Three steps</p>
-        <h2>From your notes to a marked answer in about a minute.</h2>
+        <h2>Find the gap, close it, prove it's closed.</h2>
       </div>
       <div class="steps">
         <div class="stepcard reveal s1"><div class="stepno">1</div><h3>Feed it your notes</h3><p>A PDF, your teacher's slides, a document, a photo — or just the topic name if that's all you've got.</p></div>
-        <div class="stepcard reveal s2"><div class="stepno">2</div><h3>Write a real answer</h3><p>Not a flashcard guess. Type what you'd put in the exam, and get it marked against A, M and E.</p></div>
-        <div class="stepcard reveal s3"><div class="stepno">3</div><h3>Fix one sentence</h3><p>See exactly which part held you at Achieved, and what the Merit version of your own words looks like.</p></div>
+        <div class="stepcard reveal s2"><div class="stepno">2</div><h3>Close it</h3><p>Turn the gaps into cards in one tap, then drill them until you can produce every answer from memory — not just recognise one.</p></div>
+        <div class="stepcard reveal s3"><div class="stepno">3</div><h3>Prove it</h3><p>Write a real six-mark answer. Get it marked against A, M and E, and see the Merit version of your own sentence.</p></div>
       </div>
     </div>
   </section>
 
   <div class="wrap">
     <div class="close reveal">
-      <h2>Your notes are already written.</h2>
-      <p>Put them somewhere that will actually make you write. Free, no account, nothing to install.</p>
-      <a class="btn btn-white btn-lg" href="/app/" data-cta="closing">Start writing →</a>
+      <h2>You already know most of it.</h2>
+      <p>Five minutes to find the part you don't. Free, no account, nothing to install.</p>
+      <a class="btn btn-white btn-lg" href="/app/#gaps" data-cta="closing">Find my gaps →</a>
     </div>
   </div>
 </main>
@@ -660,9 +788,21 @@ footer{ padding:0 0 56px; }
     </span>
     <nav>
       <a href="/app/" data-cta="footer">Open the app</a>
-      <a href="/app/" data-cta="footer-feature">Request a feature</a>
+      <a href="/app/#ideas" data-cta="footer-feature">Request a feature</a>
       <a href="#top">Back to top</a>
     </nav>
+    <!-- rel="me" states these accounts are the same identity as this site;
+         noopener is not optional on a target=_blank link. -->
+    <div class="social">
+      <a href="https://www.tiktok.com/@studyfeednz" target="_blank" rel="me noopener noreferrer" data-cta="tiktok" aria-label="Study Feed on TikTok">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M16.6 5.82A4.28 4.28 0 0 1 15.54 3h-3.09v12.4a2.59 2.59 0 0 1-2.59 2.5 2.59 2.59 0 0 1 0-5.18c.27 0 .52.04.76.12v-3.2a5.86 5.86 0 0 0-.76-.05 5.78 5.78 0 1 0 5.78 5.78V9.01a7.35 7.35 0 0 0 4.3 1.38V7.3a4.29 4.29 0 0 1-3.34-1.48z"/></svg>
+        <span>TikTok</span>
+      </a>
+      <a href="https://www.instagram.com/studyfeednz/" target="_blank" rel="me noopener noreferrer" data-cta="instagram" aria-label="Study Feed on Instagram">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="3" width="18" height="18" rx="5"/><circle cx="12" cy="12" r="3.8"/><path d="M17.4 6.6v.01"/></svg>
+        <span>Instagram</span>
+      </a>
+    </div>
     <small>
       Made in Auckland. Your decks are saved on your own device, not on our servers — there's no
       account and nothing to sign up for. To write your cards and mark your answers, the notes you
@@ -681,7 +821,7 @@ footer{ padding:0 0 56px; }
 (function(){
   var scenes = [].slice.call(document.querySelectorAll('.scene'));
   var dots = [].slice.call(document.querySelectorAll('.scene-dots b'));
-  var hold = [3200, 3200, 4200, 6000];
+  var hold = [5000, 3200, 3200, 4200, 6000];
   var i = 0, timer;
 
   function show(n){
