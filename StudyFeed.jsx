@@ -150,7 +150,7 @@ function subjectColour(name){
   return HUES[h % HUES.length];
 }
 
-const TYPE_LABEL = { flip: 'Flip', cloze: 'Fill the blank', short: 'Short answer', mcq: 'Multiple choice', extended: 'Long answer', typed: 'Type the answer' };
+const TYPE_LABEL = { flip: 'Flip', cloze: 'Fill the blank', short: 'Short answer', mcq: 'Multiple choice', extended: 'Long answer', typed: 'Type the answer', worked: 'Working' };
 const LEVEL_PRESETS = ['NCEA Level 1', 'NCEA Level 2', 'NCEA Level 3'];
 
 /* The accounts, in one place. docs/index.html carries the same two in its
@@ -358,8 +358,19 @@ function failureKind(e){
    1.x numbers sitting above the new 1.0.0 cannot cause a mis-fire. They are not
    shown next to the pre-launch entries either — those were dev builds and the
    numbers mean nothing to a student. */
-const APP_VERSION = '1.4.0';
+const APP_VERSION = '1.5.0';
 const PATCH_NOTES = [
+  { v: '1.5.0', date: '2026-08-25', title: 'Photograph it, and show your working', items: [
+    'New: photograph a written answer instead of typing it. Tap "Photo of your writing" above the answer box, and what you wrote on paper comes back as text. Practice answers get written on paper, and so does every real one — typing three hundred words of physics into a phone was the reason marking was worth doing once and never again.',
+    'It lands in the answer box, not straight into the marker, and that is on purpose. Reading handwriting is very good but not perfect — it will quietly tidy up a spelling now and then — so you get to see the words and fix them before anything is graded. What you send is what gets marked.',
+    'Two pages of answer: photograph the second one and it is added underneath the first instead of replacing it.',
+    'New card type: worked problems. A question you solve by showing a method, for the half of NCEA that is not an essay — the rearrangement, the unit conversion, the substitution.',
+    'They are marked on the METHOD, step by step, against what a marker would actually award. You get a tick, a half or a cross on every step, and your own working highlighted line by line.',
+    'It names where it FIRST went wrong. Everything after a slip in a calculation is carried along by it, so one wrong line can turn a whole page red for no reason. The steps after your mistake are marked on whether the method was right, not on the number you carried into them — which is how the standard is actually marked, and the difference between a fixable mistake and a lost afternoon.',
+    'Stuck on one? "Show me the first step" hands over the method one line at a time. It is instant and works with no connection, because those steps are already on the card — they are the mark scheme.',
+    'You can photograph working too. Every number came through in testing, though a fraction written with a bar across it comes back on one line with a slash.',
+    'To make them: pick "Working" in Create, or leave it on Mixed and they turn up wherever your notes have something to calculate. If the material has nothing to solve, it says so instead of inventing a calculation — a made-up problem teaches a made-up method, and you cannot tell the difference until the exam.',
+  ] },
   { v: '1.4.0', date: '2026-08-19', title: 'Find my gaps', items: [
     'New: type in a topic and it builds a short written test whose point is not the score. It tells you WHERE your understanding stops and exactly what was missing — "you did not connect the larger surface area to the number of particles exposed" rather than "6 out of 10".',
     'It asks you three kinds of question in order: name it, then explain how it links, then use it on a situation you have not seen. Those are the three rungs your written answers are graded on, so the report tells you which rung you fall off — the naming, the linking, or the applying.',
@@ -469,7 +480,11 @@ const PRELAUNCH_NOTES = [
 const dismissedTip = (settings, id) => !!(settings && settings.dismissedTips && settings.dismissedTips[id]);
 const fontOf = (s) => (s && s.font) ? s.font : 'inter';
 const longMixOf = (s) => (s && s.longMix != null) ? s.longMix : 30;
-const isLongCard = (c) => c.type === 'extended';
+/* "Long" is about how much of a sitting the card costs, not about which
+   type it is — the feed's quick/long blend is a pacing decision. A worked
+   problem is several minutes with a pen, so it belongs on the same side of
+   that line as an extended response. */
+const isLongCard = (c) => c.type === 'extended' || c.type === 'worked';
 
 /* Interleave two lists so roughly pctLong% of the output comes from `long`.
    Nothing is dropped — when one side runs out the rest is appended, so a due
@@ -1242,6 +1257,17 @@ function cardsFromJson(arr){
         achieved: String(o.achieved || ''), merit: String(o.merit || ''),
         excellence: String(o.excellence || ''), skeleton: String(o.skeleton || ''),
         pitfall: String(o.pitfall || '') });
+    } else if (t === 'worked'){
+      /* A worked problem with no method is just a question with an answer, and
+         the method is the entire point — so a step-less one is dropped rather
+         than kept as a degraded card, the same rule as a `typed` card whose
+         answer nobody could type. Two steps is the floor at which there is a
+         method to mark at all. */
+      const steps = Array.isArray(o.steps) ? o.steps.map(String).map(s => s.trim()).filter(Boolean).slice(0, 8) : [];
+      if (o.prompt && o.answer && steps.length >= 2) out.push({ id: uid(), type: 'worked',
+        prompt: String(o.prompt), marks: Number(o.marks) || 3,
+        steps: steps, answer: String(o.answer),
+        pitfall: String(o.pitfall || '') });
     }
   }
   return out;
@@ -1250,8 +1276,8 @@ function dedupeCards(cards){
   const seen = new Set();
   const out = [];
   for (const c of cards){
-    const key = c.type === 'extended'
-      ? 'e:' + String(c.prompt || '').toLowerCase().slice(0, 80)
+    const key = (c.type === 'extended' || c.type === 'worked')
+      ? c.type.charAt(0) + ':' + String(c.prompt || '').toLowerCase().slice(0, 80)
       : (c.type + ':' + String(c.front || '').toLowerCase());
     if (seen.has(key)) continue;
     seen.add(key);
@@ -1346,6 +1372,39 @@ MATERIAL:
 ${source}`;
 }
 
+/* Worked problems — the half of NCEA this app could not touch.
+
+   Everything above grades WRITING: the ladder, the command verbs, the marking,
+   the upgrade path. A student doing Level 1 maths, physics or chemistry spends
+   most of their practice time on problems where the marks live in the METHOD,
+   and until now the app had nothing to offer them but flashcards of formulae.
+
+   The ladder still applies — NCEA grades calculation work Achieved / Merit /
+   Excellence like everything else — but it means something different here, and
+   markWorkingPrompt spells out what. */
+function workedPrompt(source, level, strict){
+  return `You are an expert ${level} teacher. From the material below, write WORKED PROBLEMS — questions the student solves by showing a method, not by recalling a fact.
+
+Return ONLY a JSON array. Each element:
+{ "type":"worked",
+  "prompt": the full problem, including EVERY number and unit needed to solve it,
+  "marks": integer (usually 3-5),
+  "steps": [ 3-6 strings: the method IN ORDER, each one step a marker would award for, written as the thing to DO ("convert 250 g to 0.25 kg"), never as a heading ("conversion") ],
+  "answer": the final answer with its unit,
+  "pitfall": the specific mistake students actually make on THIS problem }
+
+Rules:
+- ONLY write a problem where the material genuinely contains something to calculate, derive, balance, or work through in order: a formula, a quantity, a procedure, a set of rules applied in sequence. Maths, physics, chemistry, and the quantitative parts of biology, economics, geography and statistics qualify.
+- If the material contains NOTHING of that kind, return an empty array: []. Do not turn a descriptive topic into a fake calculation. A made-up problem teaches a made-up method, and the student cannot tell the difference until the exam.
+- Every number the student needs must be IN the prompt. A problem that cannot be solved from its own wording is worthless.
+- "steps" IS the mark scheme. Give the rearrangement, the unit conversion and the substitution their own steps wherever they apply — those are where the marks are actually lost, not in the arithmetic.
+- Solve it yourself before writing "answer". Give the unit.
+- Do NOT invent NZQA codes. No JSON outside the array.${strict ? STRICT_CLAUSE : ''}
+
+MATERIAL:
+${source}`;
+}
+
 /* turn the slider percentage into concrete per-reply counts */
 /* Per-reply card targets. Tuned to ~18-20 cards/batch so a generate returns a
    full set (Qwen produces close to exactly what's asked, so ask for more). */
@@ -1377,13 +1436,15 @@ Return ONLY a JSON array. Each card is one of:
 { "type":"short", "front": question, "back": a model answer in 1-3 sentences }
 { "type":"mcq", "front": question, "options": [four options], "answer": index (0-based) of the correct option, "why": one line on why it is right and what the tempting wrong option gets wrong }
 { "type":"extended", "verb": one of ${COMMAND_VERBS.map(v => '"' + v + '"').join(', ')}, "prompt": full exam question, "marks": int, "achieved": the WHAT, "merit": the WHY/HOW with cause and effect, "excellence": links >=2 ideas + applies to the scenario + evaluates/justifies, "skeleton": the mark-earning sentence pattern, "pitfall": the specific error to avoid here }
+{ "type":"worked", "prompt": a problem to SOLVE, containing every number and unit needed, "marks": int, "steps": [3-6 method steps in order, each one a marker would award for], "answer": the final answer with its unit, "pitfall": the specific mistake made on THIS problem }
 
 THE MIX FOR THIS REPLY:
 ${longRule}
+ONLY if the material genuinely contains something to calculate, derive, balance or work through in order, include 1-2 "worked" cards. If it contains nothing of that kind, include NONE — never invent a calculation for a descriptive topic.
 Then about ${t.mcq} "mcq" cards whose wrong options are REAL misconceptions a student actually holds (never filler).
 ${quickRule}
 
-Emit in this order: extended, then mcq, then quick.
+Emit in this order: extended, then worked, then mcq, then quick.
 
 Ground everything in the material. Do NOT invent NZQA codes. No JSON outside the array.${strict ? STRICT_CLAUSE : ''}
 
@@ -1569,9 +1630,73 @@ async function describeImage(img){
   return postMessages(content, 1500, MODEL_VISION);
 }
 
+/* Read a photo of the student's OWN handwritten answer and give back the words.
+
+   This is a different job from describeImage, which reads a slide and is
+   allowed to summarise and describe. Nothing here may be summarised, tidied or
+   described: whatever comes back is about to be marked as the student's own
+   writing, and the marker quotes it back to them phrase by phrase.
+
+   MEASURED against the live vision model (25 Aug 2026) on deliberately hostile
+   pages — skewed as if shot at an angle, a hard shadow across the lower half,
+   uneven baselines, per-word rotation, a struck-out word: word error 6.4%,
+   ~4.3s. Nothing was dropped and nothing was invented. But 4 of 6 deliberate
+   misspellings came back silently CORRECTED ("temperture" → "temperature").
+
+   So this is not a faithful transcript, and marking its output unseen would be
+   marking words the student did not write. The answer box is the confirmation
+   step: the text lands there, they fix whatever it got wrong, and what they
+   send is what gets marked. That is also what keeps the inline notes honest —
+   the marker quotes the same text the student is looking at, so a highlight
+   can never sit over a word only the model believes is there.
+
+   The wording below is the wording that was measured. If it changes, re-run
+   the measurement rather than assuming the numbers carried over. */
+const HANDWRITING_PROMPT = 'This is a photo of one page of a student\'s HANDWRITTEN exam answer. Transcribe it EXACTLY as written, word for word, including any spelling or grammar mistakes exactly as they appear. Do not correct, improve, summarise or comment on it. If a word is genuinely illegible write [?]. If the page contains no handwritten answer at all, output exactly: NO_ANSWER. Output ONLY the transcription, nothing else.';
+
+/* The model returns this when handed a blank page, a photo of the question, or
+   a picture of something that isn't schoolwork. Worth catching by name: the
+   alternative is the student marking the word "NO_ANSWER" as their essay. */
+const NO_ANSWER = 'NO_ANSWER';
+
+async function transcribeAnswer(img){
+  const content = [
+    { type: 'text', text: HANDWRITING_PROMPT },
+    { type: 'image_url', image_url: { url: 'data:' + img.media_type + ';base64,' + img.data } },
+  ];
+  const out = await postMessages(content, 1500, MODEL_VISION);
+  const clean = String(out == null ? '' : out).trim();
+  if (!clean || clean.toUpperCase().indexOf(NO_ANSWER) === 0) return '';
+  return clean;
+}
+
+/* Working, not prose. Measured on handwritten mechanics working (25 Aug 2026):
+   every load-bearing number survived — 250, 0.25, 12.5, 4.0, 3.125, 0.78 — and
+   every line came back in order, in ~14.8s (slower than prose, still inside the
+   first attempt's 40s budget).
+
+   Two things it does that the instruction below exists to handle: a fraction
+   written with a HORIZONTAL BAR comes back as two stacked lines with the bar
+   gone, which is genuinely ambiguous, and superscripts arrive as ASCII (m/s^2).
+   The second is fine and the student can see it. The first is why the prompt
+   asks for fractions inline. */
+const WORKING_PROMPT = 'This is a photo of a student\'s HANDWRITTEN working for a maths or science problem. Transcribe it EXACTLY, line by line, keeping every equation, number, unit and symbol as written, including any mistakes. Keep each line of working on its own line. Where a fraction is written with a horizontal bar, write it inline on ONE line using a slash, e.g. (v - u) / t. Do not solve it, correct it, tidy the notation, or comment on it. If something is genuinely illegible write [?]. Output ONLY the transcription.';
+
+async function transcribeWorking(img){
+  const content = [
+    { type: 'text', text: WORKING_PROMPT },
+    { type: 'image_url', image_url: { url: 'data:' + img.media_type + ';base64,' + img.data } },
+  ];
+  const out = await postMessages(content, 1200, MODEL_VISION);
+  const clean = String(out == null ? '' : out).trim();
+  if (!clean || clean.toUpperCase().indexOf(NO_ANSWER) === 0) return '';
+  return clean;
+}
+
 function promptFor(mode, source, level, pctLong, strict){
   if (mode === 'flip') return flipPrompt(source, level, strict);
   if (mode === 'extended') return extendedPrompt(source, level, strict);
+  if (mode === 'worked') return workedPrompt(source, level, strict);
   return mixedPrompt(source, level, pctLong, strict);
 }
 function parseReply(mode, reply){
@@ -1705,6 +1830,77 @@ async function markAnswer(card, answer, level){
   const reply = await callModel(markPrompt(card, answer, level), 3000, MODEL_SMART);
   const objs = rescueObjects(reply);
   return objs[0] || null;
+}
+
+/* The notes rules are deliberately NOT shared with markPrompt, and this is not
+   an oversight. A quote out of an essay is a clause of prose, 3-15 words; a
+   quote out of working is a LINE — "a = (12.5 - 0) / 4.0" — and the two want
+   opposite instructions. markPrompt is also the one prompt with a measured eval
+   behind it (tools/mark-eval.mjs), so it is left byte-for-byte alone. If you
+   tune the anchoring rules in one of these, read the other before assuming it
+   needs the same change. */
+function markWorkingPrompt(card, working, level){
+  const steps = (card.steps || []).map((s, i) => (i + 1) + '. ' + s).join('\n');
+  return `You are a ${level} examiner marking one student's WORKING on a problem.
+
+PROBLEM (${card.marks} marks): ${card.prompt}
+CORRECT FINAL ANSWER: ${card.answer}
+
+THE METHOD, step by step — this is the mark scheme:
+${steps}
+
+STUDENT'S WORKING:
+${working}
+
+Return ONLY JSON:
+{ "grade": "Not yet" | "Achieved" | "Merit" | "Excellence",
+  "final": "correct" | "wrong" | "missing",
+  "steps": [ one object per numbered step above, IN ORDER and one for EVERY step: { "n": the step number, "got": "yes" | "partly" | "no", "why": one short sentence — for "yes" name what they did that earned it, otherwise say exactly what is wrong or missing } ],
+  "lift": one sentence naming the single change that would most raise the grade,
+  "notes": [ 2-5 objects, each { "quote": a line or expression copied CHARACTER FOR CHARACTER out of the student's working above, "kind": "good" | "weak", "note": one short sentence on what that line gets right, or what is wrong with it } ] }
+
+GRADING WORKING is not grading an essay:
+- Achieved — a correct method carried through, with the answer following from it.
+- Merit — correct method AND the reasoning is visible: the rearrangement is shown, units are carried through, each line follows from the one above.
+- Excellence — correct method, visible reasoning, AND the answer is justified: units and magnitude checked for sense, or the method explained rather than merely executed.
+- "Not yet" — the method does not work, or there is too little working to tell what they did.
+
+ERROR CARRIED FORWARD. This is not optional and it is the thing you are most likely to get wrong. If the student makes ONE mistake and then correctly carries the wrong value through the steps that follow, those later steps are STILL CORRECT METHOD and must be marked "yes". Mark a step "no" only when that step is itself wrong. Failing every step after a single slip is the most unfair thing you could do to this student, and it is not how the standard is marked.
+- A right answer reached by a wrong method is not Achieved. Say so plainly.
+- A right answer with NO working shown cannot go above Achieved, however correct it is. The marks are in the method.
+- "final" judges the number and its unit against the correct final answer above, and nothing else. Ignore a difference in the last rounding digit.
+
+RULES FOR "notes" — these are shown highlighted on top of the student's own working, so they must line up with it exactly:
+- "quote" must be an EXACT substring of the student's working. Copy it character for character, including their spacing and their notation. Do not tidy it, do not convert it to proper mathematical formatting, and do not join text from two different lines.
+- Prefer ONE LINE of working per quote — that is the unit a student reads. Never quote more than two lines.
+- Give the BARE characters, with no quotation marks wrapped around them and no full stop added at the end.
+- Quotes must not overlap each other.
+- BALANCE IS NOT OPTIONAL. Unless you graded this Excellence, at least one note MUST be "weak" — you have just said it is not yet at the top grade, so something in it is holding it there. Find that line and point at it.
+- Anchor the "weak" note on the line where the method FIRST goes wrong, not on a later line that only carries the earlier mistake forward.
+- If there is too little working to quote meaningfully, return "notes": [].${nceaRules(level)}`;
+}
+
+/* Same ceiling and the same reason as markAnswer: the step list plus the notes
+   make this the longest reply the app asks for, and a truncated one is a total
+   loss of the mark rather than a degraded one. */
+async function markWorking(card, working, level){
+  const reply = await callModel(markWorkingPrompt(card, working, level), 3000, MODEL_SMART);
+  const objs = rescueObjects(reply);
+  return objs[0] || null;
+}
+
+/* The first step that is actually wrong — not the first that looks wrong.
+   Everything after a slip in a calculation is contaminated by it, so the one
+   fact a student needs out of a page of red pen is WHERE IT STARTED. Derived
+   here rather than asked for, because a model asked the same question twice
+   can answer it two different ways, and then the checklist and the callout
+   would disagree in front of the student. */
+function firstBadStep(r){
+  const steps = (r && Array.isArray(r.steps)) ? r.steps : [];
+  for (const s of steps){
+    if (s && s.got === 'no') return s;
+  }
+  return null;
 }
 
 /* ---- locating the marker's notes in the student's own text ---------------
@@ -1906,6 +2102,13 @@ function cardQA(card){
   if (card.type === 'mcq'){
     const opts = (card.options || []).map((o, i) => (i === card.answer ? '(correct) ' : '(wrong) ') + o).join('\n');
     return { q: String(card.front || ''), a: 'Options:\n' + opts + (card.why ? '\nCard\'s reason: ' + card.why : '') };
+  }
+  if (card.type === 'worked'){
+    return {
+      q: String(card.prompt || ''),
+      a: 'Method:\n' + (card.steps || []).map((s, i) => (i + 1) + '. ' + s).join('\n') +
+         '\nAnswer: ' + (card.answer || '—') + (card.pitfall ? '\nCommon trap: ' + card.pitfall : ''),
+    };
   }
   if (card.type === 'extended'){
     return {
@@ -2236,6 +2439,7 @@ const ICON_PATHS = {
   plus:     'M12 5.5v13M5.5 12h13',
   stack:    'M12 3 3 7.5l9 4.5 9-4.5zM3 12.5 12 17l9-4.5M3 17.2 12 21.7l9-4.5',
   puzzle:   'M9.5 4h5v2.2a1.8 1.8 0 1 0 3.6 0V4h1.9v5h-2.2a1.8 1.8 0 1 0 0 3.6H20v7.4h-5v-2.2a1.8 1.8 0 1 0-3.6 0V20H4v-5h2.2a1.8 1.8 0 1 0 0-3.6H4V4h5.5z',
+  camera:   'M4 8.6h3.3l1.4-2.3h6.6l1.4 2.3H20a1 1 0 0 1 1 1V19a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1V9.6a1 1 0 0 1 1-1zM12 11.3a3.4 3.4 0 1 0 0 6.8 3.4 3.4 0 0 0 0-6.8z',
   image:    'M4 6a2 2 0 0 1 2-2h12a2 2 0 0 1 2 2v12a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2zM4 16l4.5-4.2 4 3.4 3.3-2.8L20 16M9 9.2v.1',
   clip:     'M21 11.5l-8.6 8.6a5 5 0 0 1-7.1-7.1l8.6-8.6a3.4 3.4 0 0 1 4.8 4.8l-8.6 8.6a1.7 1.7 0 0 1-2.4-2.4l7.9-7.9',
   check:    'M4.8 12.5 9.7 17.4 19.2 6.9',
@@ -2568,6 +2772,7 @@ function StudyCard({ card, deck, onGrade, reduceMotion, prog, practice, onFeedba
   const colour = subjectColour(deck.subject);
   const isMcq = card.type === 'mcq';
   const isLong = card.type === 'extended';
+  const isWorked = card.type === 'worked';
   /* A cloze IS a fill-in-the-blank, so it should be filled in rather than
      read and self-rated — but only when the blank is a term and not a whole
      clause, which typedCheckable decides. Anything longer falls through to
@@ -2622,7 +2827,9 @@ function StudyCard({ card, deck, onGrade, reduceMotion, prog, practice, onFeedba
         </div>
       )}
 
-      {isLong ? <ExtendedFace card={card} phase={phase} deck={deck}
+      {isWorked ? <WorkedFace card={card} phase={phase} deck={deck}
+            onReveal={() => setPhase('reveal')} onBack={() => setPhase('attempt')} />
+        : isLong ? <ExtendedFace card={card} phase={phase} deck={deck}
             onReveal={() => setPhase('reveal')} onBack={() => setPhase('attempt')} />
         : isMcq ? <McqFace card={card} phase={phase} deck={deck} pick={pick}
             onPick={(i) => {
@@ -2648,7 +2855,7 @@ function StudyCard({ card, deck, onGrade, reduceMotion, prog, practice, onFeedba
           <GradeRow grade={grade} previews={previews} />
         ) : isMcq ? (
           <Sub style={{ textAlign: 'center' }}>Tap the answer you think is right</Sub>
-        ) : (isLong || isTyped) ? (
+        ) : (isLong || isWorked || isTyped) ? (
           /* both run their own controls — you write, not guess */
           null
         ) : (
@@ -2884,7 +3091,7 @@ function checkTyped(typed, card){
 const TYPED_MAX_CHARS = 42;
 const TYPED_MAX_WORDS = 6;
 function typedCheckable(card){
-  if (!card || card.type === 'extended' || card.type === 'mcq') return false;
+  if (!card || card.type === 'extended' || card.type === 'worked' || card.type === 'mcq') return false;
   const a = String(card.back == null ? '' : card.back).trim();
   if (!a) return false;
   return a.length <= TYPED_MAX_CHARS && a.split(/\s+/).length <= TYPED_MAX_WORDS;
@@ -3239,6 +3446,13 @@ function ExtendedFace({ card, phase, deck, onReveal, onBack, demo }){
   const [big, setBig] = useState(null);          // tier-2: sentence starters, same shape
   const [bigBusy, setBigBusy] = useState(false);
   const [bigErr, setBigErr] = useState('');
+  /* Photographing the answer rather than typing it. `photo` is null when idle,
+     otherwise { name, busy } while the page is being read. The transcription
+     itself is deliberately NOT held in state — it goes straight into the answer
+     box, because the box is the step where the student checks it. */
+  const [photo, setPhoto] = useState(null);
+  const [photoNote, setPhotoNote] = useState('');   // '' | 'read' | 'added'
+  const photoRef = useRef(null);
 
   const taRef = useRef(null);
   const selRef = useRef({ start: 0, end: 0 });    // last caret/selection in the answer box
@@ -3266,7 +3480,7 @@ function ExtendedFace({ card, phase, deck, onReveal, onBack, demo }){
     setAnswer(val.slice(0, start) + sym + val.slice(end));
   };
 
-  useEffect(() => { setAnswer(''); setResult(null); setErr(''); setHints(null); setHintErr(''); setBig(null); setBigErr(''); selRef.current = { start: 0, end: 0 }; }, [card.id]);
+  useEffect(() => { setAnswer(''); setResult(null); setErr(''); setHints(null); setHintErr(''); setBig(null); setBigErr(''); setPhoto(null); setPhotoNote(''); selRef.current = { start: 0, end: 0 }; }, [card.id]);
 
   /* Returning to the box to rewrite has to land the caret in it. The textarea
      is unmounted while the mark is showing, so this waits for the phase to flip
@@ -3281,6 +3495,42 @@ function ExtendedFace({ card, phase, deck, onReveal, onBack, demo }){
     if (!ta) return;
     try { ta.focus(); ta.setSelectionRange(ta.value.length, ta.value.length); } catch {}
   }, [phase]);
+
+  /* Photo → words → the answer box. Deliberately not photo → mark: the vision
+     model quietly tidies spelling (see transcribeAnswer), so grading its output
+     unseen would grade words the student did not write. Dropping the text into
+     the box they were going to type in anyway makes checking it the same action
+     as writing — no extra screen, no extra decision.
+
+     It APPENDS to whatever is already there rather than replacing it. Any
+     answer long enough to be worth marking runs past one page, so the second
+     photo has to continue the first; replacing would silently eat page one.
+
+     No auto-focus afterwards. On a phone that pops the keyboard over the very
+     text they have just been asked to read. */
+  const usePhoto = async (file) => {
+    setPhoto({ name: file.name, busy: true });
+    setErr(''); setPhotoNote('');
+    try {
+      const shrunk = await resizeImage(file);
+      const read = await transcribeAnswer(shrunk);
+      if (!read){
+        setPhoto(null);
+        track('photo_answer', { result: 'empty' });
+        setErr('No handwriting found in that photo. Check the whole answer is in frame and the page is the right way up.');
+        return;
+      }
+      const had = answer.trim();
+      setAnswer(had ? had + '\n\n' + read : read);
+      setPhoto(null);
+      setPhotoNote(had ? 'added' : 'read');
+      track('photo_answer', { result: 'ok', words: read.split(/\s+/).length });
+    } catch (e){
+      setPhoto(null);
+      track('photo_answer', { result: 'failed', reason: failureKind(e) });
+      setErr(friendlyApiError(e));
+    }
+  };
 
   const doHints = async () => {
     setHintBusy(true); setHintErr('');
@@ -3358,7 +3608,28 @@ function ExtendedFace({ card, phase, deck, onReveal, onBack, demo }){
 
       {phase === 'attempt' && (
         <div style={{ marginTop: 16 }}>
-          <Sub style={{ marginBottom: 8, fontWeight: 600, color: T.ink }}>Write your answer</Sub>
+          <div className="flex items-center justify-between gap-3" style={{ marginBottom: 8 }}>
+            <Sub style={{ fontWeight: 600, color: T.ink }}>Write your answer</Sub>
+            {/* Typing three hundred words of physics on a phone is the reason
+                this feature gets used once and never again. Practice answers
+                get written on paper, and so does every real one — so the paper
+                needs a way in. No `capture` attribute: plenty of students have
+                already photographed the page, and forcing the camera would
+                hide their own library from them. */}
+            {!demo && (
+              <>
+                <input ref={photoRef} type="file" accept="image/*" style={{ display: 'none' }}
+                  onChange={(e) => { const f = (e.target.files || [])[0]; if (e.target) e.target.value = ''; if (f) usePhoto(f); }} />
+                <button className="sf-tap" onClick={() => photoRef.current && photoRef.current.click()}
+                  disabled={!!(photo && photo.busy)} aria-label="Photograph your written answer"
+                  style={{ background: 'none', border: 'none', padding: 0, whiteSpace: 'nowrap',
+                    cursor: (photo && photo.busy) ? 'default' : 'pointer', fontFamily: SANS,
+                    fontSize: 13, fontWeight: 600, color: (photo && photo.busy) ? T.faint : T.accentInk }}>
+                  <span className="flex items-center gap-2"><Ico name="camera" size={15} />Photo of your writing</span>
+                </button>
+              </>
+            )}
+          </div>
           <textarea ref={taRef} value={answer}
             onChange={e => { setAnswer(e.target.value); selRef.current = { start: e.target.selectionStart, end: e.target.selectionEnd }; }}
             onSelect={rememberSel} onClick={rememberSel} onKeyUp={rememberSel}
@@ -3367,6 +3638,26 @@ function ExtendedFace({ card, phase, deck, onReveal, onBack, demo }){
             style={{ width: '100%', background: T.well, color: T.ink, border: `1px solid ${T.border}`,
               borderRadius: R.well, padding: 14, fontFamily: SANS, fontSize: 15, lineHeight: 1.55,
               resize: 'vertical', outline: 'none' }} />
+          {photo && photo.busy && (
+            <div style={{ ...PANEL, padding: '8px 12px', marginTop: 8 }}>
+              <Loading size={58} title="Reading your handwriting…"
+                subtitle="It lands in the box above, so you can check it before it is marked." />
+            </div>
+          )}
+          {/* Not a nicety. The model reads the words accurately but normalises
+              spelling, so this says plainly that the text is a reading of the
+              page and not a copy of it, and puts the last word with them. */}
+          {photoNote && !(photo && photo.busy) && (
+            <div style={{ background: rgba(T.amber, 0.10), borderRadius: R.well, padding: '10px 13px', marginTop: 8 }}>
+              <Sub style={{ color: T.ink, fontSize: 13, display: 'flex', gap: 8, alignItems: 'flex-start' }}>
+                <InlineIco name="warn" size={15} style={{ marginTop: 2 }} />
+                <span>
+                  {photoNote === 'added' ? 'Added below what was already there. ' : 'Read from your photo. '}
+                  Check it says what you actually wrote — it can tidy up spelling — then mark it.
+                </span>
+              </Sub>
+            </div>
+          )}
           <SymbolBar onInsert={insertSymbol} />
           <div className="flex items-center justify-between" style={{ marginTop: 7, marginBottom: 11 }}>
             <Sub style={{ fontSize: 12 }}>{words > 0 ? `${words} words` : 'Even a rough attempt beats reading the answer'}</Sub>
@@ -3732,6 +4023,345 @@ function MarkResult({ r, card, answer, level, deck, demo, onEdit }){
                off it. */
             answer: answer,
             credit: (Array.isArray(r.hit) && r.hit.length) ? r.hit[0] : '' }} />
+      )}
+    </div>
+  );
+}
+
+/* The step checklist, the first slip, and the student's own working marked up.
+
+   The order here is deliberate and it is not the order a written answer's mark
+   comes in. On a calculation the first question is "did I get it right", the
+   second is "where did it go wrong", and only then does the detail matter. */
+function WorkedResult({ r, card, working, onEdit }){
+  const gc = r.grade === 'Excellence' ? T.green : r.grade === 'Merit' ? T.accent : r.grade === 'Achieved' ? T.muted : T.red;
+  const bad = firstBadStep(r);
+  const steps = Array.isArray(r.steps) ? r.steps : [];
+  const finalC = r.final === 'correct' ? T.green : r.final === 'wrong' ? T.red : T.amber;
+  const finalWord = r.final === 'correct' ? 'Final answer correct'
+    : r.final === 'wrong' ? 'Final answer wrong' : 'No final answer given';
+  const tick = (got) => got === 'yes' ? T.green : got === 'partly' ? T.amber : T.red;
+
+  return (
+    <div style={{ ...PANEL, marginTop: 12, animation: 'sf-reveal 260ms cubic-bezier(.2,.8,.3,1)' }}>
+      <div className="flex items-center gap-2" style={{ flexWrap: 'wrap' }}>
+        <Chip colour={gc} solid>{r.grade}</Chip>
+        <Chip colour={finalC}>{finalWord}</Chip>
+      </div>
+
+      {/* The one fact worth pulling out of a page of marking. Everything after
+          a slip in a calculation is contaminated by it, so where it STARTED is
+          the difference between a fixable mistake and a lost afternoon. */}
+      {bad && (
+        <div style={{ background: rgba(T.red, 0.10), borderRadius: R.well, padding: '11px 13px', marginTop: 11 }}>
+          <div style={{ fontFamily: SANS, fontSize: 12, fontWeight: 800, color: T.red, letterSpacing: '0.03em', marginBottom: 4 }}>
+            WHERE IT FIRST WENT WRONG
+          </div>
+          <div style={{ fontFamily: SANS, fontSize: 14.5, lineHeight: 1.5, color: T.ink }}>
+            <b>Step {bad.n}.</b> {bad.why}
+          </div>
+          {/* Said out loud, because a student looking at a page of crosses
+              assumes the whole thing was worthless. Usually it was one line. */}
+          <Sub style={{ fontSize: 12.5, marginTop: 6 }}>
+            The steps after this one are marked on your method, not on the number you carried into them.
+          </Sub>
+        </div>
+      )}
+
+      {steps.length > 0 && (
+        <div style={{ marginTop: 12 }}>
+          <Sub style={{ fontWeight: 700, color: T.ink, marginBottom: 7 }}>Your method, step by step</Sub>
+          <div className="flex flex-col gap-2">
+            {steps.map((s, i) => {
+              const label = (card.steps || [])[Number(s.n) - 1] || '';
+              return (
+                <div key={i} className="flex gap-2" style={{ alignItems: 'flex-start' }}>
+                  <span style={{ width: 18, height: 18, borderRadius: 9, flexShrink: 0, marginTop: 2,
+                    background: rgba(tick(s.got), 0.16), color: tick(s.got), display: 'inline-flex',
+                    alignItems: 'center', justifyContent: 'center' }}>
+                    <Ico name={s.got === 'no' ? 'cross' : 'check'} size={11} weight={2.6} />
+                  </span>
+                  <div style={{ flex: 1 }}>
+                    {label && <div style={{ fontFamily: SANS, fontSize: 13.5, fontWeight: 600, color: T.ink, lineHeight: 1.45 }}>{label}</div>}
+                    <div style={{ fontFamily: SANS, fontSize: 13.5, color: T.muted, lineHeight: 1.5 }}>{s.why}</div>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      )}
+
+      {r.lift && <div style={{ marginTop: 11, fontFamily: SANS, fontSize: 15, fontWeight: 600, color: T.ink, lineHeight: 1.5 }}>{r.lift}</div>}
+
+      {r.final !== 'correct' && card.answer && (
+        <div style={{ marginTop: 11 }}>
+          <Sub style={{ fontWeight: 700, color: T.ink }}>The answer</Sub>
+          <div style={{ fontFamily: SANS, fontSize: 15.5, fontWeight: 700, color: T.accentInk, marginTop: 2 }}>{card.answer}</div>
+        </div>
+      )}
+
+      {working && <AnnotatedAnswer answer={working} notes={r.notes} />}
+
+      {card.pitfall && (
+        <div style={{ marginTop: 11 }}>
+          <Sub style={{ fontSize: 13, display: 'flex', gap: 8, alignItems: 'flex-start' }}>
+            <InlineIco name="warn" size={15} style={{ marginTop: 2, color: T.amber }} />
+            <span><b style={{ color: T.ink }}>Watch for: </b>{card.pitfall}</span>
+          </Sub>
+        </div>
+      )}
+
+      {/* Same loop as the written answers: the second attempt, with the marking
+          still on screen, is where the grade actually moves. */}
+      {onEdit && (
+        <div style={{ marginTop: 12 }}>
+          <Btn full kind="soft" onClick={onEdit} style={{ fontSize: 14 }}>
+            <span className="flex items-center justify-center gap-2"><Ico name="pencil" size={15} />Fix it and mark again</span>
+          </Btn>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function WorkedFace({ card, phase, deck, onReveal, onBack }){
+  const [working, setWorking] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [result, setResult] = useState(null);
+  const [err, setErr] = useState('');
+  /* How much of the mark scheme has been handed over. Revealed one step at a
+     time and entirely offline — the steps are already on the card, so a nudge
+     costs no call, cannot fail and cannot make the student wait. It is also a
+     better hint than the model could write, because it IS what gets marked. */
+  const [shown, setShown] = useState(0);
+  const [photo, setPhoto] = useState(null);
+  const [photoNote, setPhotoNote] = useState('');
+  const photoRef = useRef(null);
+
+  const taRef = useRef(null);
+  const selRef = useRef({ start: 0, end: 0 });
+  const caretRef = useRef(null);
+  const rememberSel = () => {
+    const ta = taRef.current;
+    if (ta) selRef.current = { start: ta.selectionStart, end: ta.selectionEnd };
+  };
+  useEffect(() => {
+    if (caretRef.current != null && taRef.current){
+      const p = caretRef.current; caretRef.current = null;
+      try { taRef.current.setSelectionRange(p, p); } catch {}
+    }
+  });
+  const insertSymbol = (sym) => {
+    const ta = taRef.current;
+    const val = ta ? ta.value : working;
+    let { start, end } = selRef.current;
+    start = Math.min(start, val.length); end = Math.min(end, val.length);
+    const pos = start + sym.length;
+    selRef.current = { start: pos, end: pos };
+    caretRef.current = pos;
+    if (ta) ta.focus();
+    setWorking(val.slice(0, start) + sym + val.slice(end));
+  };
+
+  useEffect(() => {
+    setWorking(''); setResult(null); setErr(''); setShown(0);
+    setPhoto(null); setPhotoNote(''); selRef.current = { start: 0, end: 0 };
+  }, [card.id]);
+
+  /* Working is even likelier to be on paper than an essay is — nobody types
+     three lines of rearranged algebra on a phone. Same confirm-then-mark rule
+     as the written answers: it lands in the box, not in the marker. */
+  const usePhoto = async (file) => {
+    setPhoto({ name: file.name, busy: true });
+    setErr(''); setPhotoNote('');
+    try {
+      const shrunk = await resizeImage(file);
+      const read = await transcribeWorking(shrunk);
+      if (!read){
+        setPhoto(null);
+        track('photo_answer', { result: 'empty', kind: 'working' });
+        setErr('No working found in that photo. Check the whole page is in frame and the right way up.');
+        return;
+      }
+      const had = working.trim();
+      setWorking(had ? had + '\n' + read : read);
+      setPhoto(null);
+      setPhotoNote(had ? 'added' : 'read');
+      track('photo_answer', { result: 'ok', kind: 'working', lines: read.split('\n').length });
+    } catch (e){
+      setPhoto(null);
+      track('photo_answer', { result: 'failed', kind: 'working', reason: failureKind(e) });
+      setErr(friendlyApiError(e));
+    }
+  };
+
+  const doMark = async () => {
+    if (!working.trim()) return;
+    setBusy(true); setErr(''); setResult(null);
+    try {
+      const r = await markWorking(card, working, deck.standard || 'NCEA Level 1');
+      if (r){
+        setResult(r); onReveal && onReveal();
+        track('working_marked', {
+          grade: GRADES.indexOf(r.grade) >= 0 ? r.grade : 'other',
+          final: ['correct', 'wrong', 'missing'].indexOf(r.final) >= 0 ? r.final : 'other' });
+        if (r.grade === 'Excellence'){ play('excellence'); buzz([14, 40, 14]); }
+        else if (r.grade === 'Merit'){ play('milestone'); buzz(16); }
+        else if (r.grade === 'Achieved'){ play('right', 1); buzz(10); }
+        else play('ok');
+      } else {
+        track('mark_failed', { reason: 'unparseable', kind: 'working' });
+        setErr('Could not read the marking. Try again.');
+      }
+    } catch (e){
+      track('mark_failed', { reason: failureKind(e), kind: 'working' });
+      setErr(friendlyApiError(e) + ' Your working is safe.');
+    }
+    finally { setBusy(false); }
+  };
+
+  const allSteps = card.steps || [];
+  const lines = working.trim() ? working.trim().split('\n').filter(l => l.trim()).length : 0;
+
+  return (
+    <div>
+      <div className="flex items-center gap-2" style={{ marginBottom: 12, flexWrap: 'wrap' }}>
+        <Chip colour={T.accent} solid>Show your working</Chip>
+        <Chip colour={T.muted}>{card.marks} marks</Chip>
+      </div>
+
+      <div style={{ ...QUESTION, whiteSpace: 'pre-wrap' }}>{card.prompt}</div>
+
+      {phase === 'attempt' && (
+        <div style={{ marginTop: 16 }}>
+          <div className="flex items-center justify-between gap-3" style={{ marginBottom: 8 }}>
+            <Sub style={{ fontWeight: 600, color: T.ink }}>Your working, line by line</Sub>
+            <>
+              <input ref={photoRef} type="file" accept="image/*" style={{ display: 'none' }}
+                onChange={(e) => { const f = (e.target.files || [])[0]; if (e.target) e.target.value = ''; if (f) usePhoto(f); }} />
+              <button className="sf-tap" onClick={() => photoRef.current && photoRef.current.click()}
+                disabled={!!(photo && photo.busy)} aria-label="Photograph your working"
+                style={{ background: 'none', border: 'none', padding: 0, whiteSpace: 'nowrap',
+                  cursor: (photo && photo.busy) ? 'default' : 'pointer', fontFamily: SANS,
+                  fontSize: 13, fontWeight: 600, color: (photo && photo.busy) ? T.faint : T.accentInk }}>
+                <span className="flex items-center gap-2"><Ico name="camera" size={15} />Photo of your working</span>
+              </button>
+            </>
+          </div>
+          <textarea ref={taRef} value={working}
+            onChange={e => { setWorking(e.target.value); selRef.current = { start: e.target.selectionStart, end: e.target.selectionEnd }; }}
+            onSelect={rememberSel} onClick={rememberSel} onKeyUp={rememberSel}
+            placeholder={'One step per line — the marks are in the method, not in the number.'}
+            rows={7}
+            style={{ width: '100%', background: T.well, color: T.ink, border: `1px solid ${T.border}`,
+              borderRadius: R.well, padding: 14, fontFamily: SANS, fontSize: 15, lineHeight: 1.7,
+              resize: 'vertical', outline: 'none' }} />
+
+          {photo && photo.busy && (
+            <div style={{ ...PANEL, padding: '8px 12px', marginTop: 8 }}>
+              <Loading size={58} title="Reading your working…"
+                subtitle="It lands in the box above, so you can check it before it is marked." />
+            </div>
+          )}
+          {photoNote && !(photo && photo.busy) && (
+            <div style={{ background: rgba(T.amber, 0.10), borderRadius: R.well, padding: '10px 13px', marginTop: 8 }}>
+              <Sub style={{ color: T.ink, fontSize: 13, display: 'flex', gap: 8, alignItems: 'flex-start' }}>
+                <InlineIco name="warn" size={15} style={{ marginTop: 2 }} />
+                <span>
+                  {photoNote === 'added' ? 'Added below what was already there. ' : 'Read from your photo. '}
+                  Check every number came through — then mark it.
+                </span>
+              </Sub>
+            </div>
+          )}
+
+          <SymbolBar onInsert={insertSymbol} />
+          <div className="flex items-center justify-between" style={{ marginTop: 7, marginBottom: 11 }}>
+            <Sub style={{ fontSize: 12 }}>{lines > 0 ? `${lines} line${lines === 1 ? '' : 's'} of working` : 'Write the method out — a bare answer caps at Achieved'}</Sub>
+          </div>
+
+          {busy ? (
+            <div style={{ ...PANEL, padding: '8px 12px' }}>
+              <Loading size={70} title="Marking your working…"
+                subtitle="Checking every step of the method, and finding where it first goes wrong." />
+            </div>
+          ) : (
+            <div className="flex gap-2">
+              <Btn full kind="primary" onClick={doMark} disabled={!working.trim()}>Mark my working</Btn>
+              <Btn kind="soft" onClick={() => onReveal && onReveal()} style={{ whiteSpace: 'nowrap' }}>Skip</Btn>
+            </div>
+          )}
+          {err && <Sub style={{ marginTop: 10, color: T.red }}>{err}</Sub>}
+
+          {/* Offline, and one step at a time. Handing over the whole method at
+              once is handing over the answer; handing over the first line is
+              usually all that was needed, because where students stop is the
+              setup, not the arithmetic. */}
+          {allSteps.length > 0 && (
+            <div style={{ marginTop: 4 }}>
+              {shown > 0 && (
+                <div style={{ ...PANEL, marginTop: 10, background: rgba(T.amber, 0.09) }}>
+                  <div className="flex items-center justify-between" style={{ marginBottom: 8 }}>
+                    <Chip colour={T.amber}>First step{shown > 1 ? 's' : ''}</Chip>
+                    <Sub style={{ fontSize: 11.5 }}>{shown} of {allSteps.length}</Sub>
+                  </div>
+                  <div className="flex flex-col gap-2">
+                    {allSteps.slice(0, shown).map((s, i) => (
+                      <div key={i} className="flex gap-2" style={{ alignItems: 'flex-start' }}>
+                        <span style={{ fontFamily: SANS, fontSize: 12, fontWeight: 800, color: T.amber, lineHeight: '22px', flexShrink: 0 }}>{i + 1}</span>
+                        <span style={{ fontFamily: SANS, fontSize: 14.5, lineHeight: 1.5, color: T.ink }}>{s}</span>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+              {shown < allSteps.length && (
+                <button className="sf-tap" onClick={() => setShown(n => n + 1)}
+                  style={{ background: 'none', border: 'none', cursor: 'pointer', padding: '12px 2px 0',
+                    fontFamily: SANS, fontSize: 13.5, fontWeight: 600, color: T.accentInk }}>
+                  <span className="flex items-center gap-2">
+                    <Ico name="bulb" size={15} />
+                    {shown === 0 ? 'Stuck? Show me the first step' : 'Show me the next step'}
+                  </span>
+                </button>
+              )}
+            </div>
+          )}
+        </div>
+      )}
+
+      {phase === 'reveal' && (
+        <div style={REVEAL}>
+          {result ? (
+            <WorkedResult r={result} card={card} working={working}
+              onEdit={() => { setResult(null); onBack && onBack(); }} />
+          ) : (
+            <div>
+              <Sub style={{ fontWeight: 700, color: T.ink, marginBottom: 7 }}>The method</Sub>
+              <div className="flex flex-col gap-2">
+                {allSteps.map((s, i) => (
+                  <div key={i} className="flex gap-2" style={{ alignItems: 'flex-start' }}>
+                    <span style={{ fontFamily: SANS, fontSize: 12, fontWeight: 800, color: T.accent, lineHeight: '22px', flexShrink: 0 }}>{i + 1}</span>
+                    <span style={{ fontFamily: SANS, fontSize: 14.5, lineHeight: 1.5, color: T.ink }}>{s}</span>
+                  </div>
+                ))}
+              </div>
+              {card.answer && (
+                <div style={{ marginTop: 11 }}>
+                  <Sub style={{ fontWeight: 700, color: T.ink }}>The answer</Sub>
+                  <div style={{ fontFamily: SANS, fontSize: 15.5, fontWeight: 700, color: T.accentInk, marginTop: 2 }}>{card.answer}</div>
+                </div>
+              )}
+              {card.pitfall && (
+                <Sub style={{ fontSize: 13, marginTop: 11, display: 'flex', gap: 8, alignItems: 'flex-start' }}>
+                  <InlineIco name="warn" size={15} style={{ marginTop: 2, color: T.amber }} />
+                  <span><b style={{ color: T.ink }}>Watch for: </b>{card.pitfall}</span>
+                </Sub>
+              )}
+            </div>
+          )}
+        </div>
       )}
     </div>
   );
@@ -4288,8 +4918,14 @@ function Create({ onSave, settings, onSettings, onPending, onStarter, seed, onSe
            only the catch would have hidden exactly the thing worth watching on
            launch day. */
         track('generate_failed', { reason: lastApiError ? failureKind({ message: lastApiError }) : 'empty' });
+        /* Working mode is told to return nothing rather than invent a
+           calculation, so an empty stack there is usually the model obeying
+           that instruction on descriptive notes — not a failure. Saying so
+           beats sending them off to find "clearer notes" that do not exist. */
         setErr(lastApiError ? friendlyApiError({ message: lastApiError })
-                            : 'Nothing came back. Try clearer notes, a narrower topic, or a sharper photo.');
+          : cardType === 'worked'
+            ? 'No problems to solve in this material. Working needs something to calculate — a formula, a quantity, a procedure. Try Mixed instead.'
+            : 'Nothing came back. Try clearer notes, a narrower topic, or a sharper photo.');
         setBusy(false); return;
       }
       // Some material made cards and some didn't — say so, rather than handing
@@ -4332,7 +4968,7 @@ function Create({ onSave, settings, onSettings, onPending, onStarter, seed, onSe
       {mode === 'generate' && (
         <div style={{ marginTop: 10 }} data-tour="create-type">
           <Segmented value={cardType} onChange={setCardType}
-            options={[{ v: 'mix', label: 'Mixed' }, { v: 'extended', label: 'Long' }, { v: 'flip', label: 'Quick' }]} />
+            options={[{ v: 'mix', label: 'Mixed' }, { v: 'extended', label: 'Long' }, { v: 'worked', label: 'Working' }, { v: 'flip', label: 'Quick' }]} />
         </div>
       )}
 
@@ -4461,6 +5097,7 @@ function guessTopic(text){
 
 function draftPreview(d){
   if (d.type === 'extended') return { tag: `${d.verb} · ${d.marks} marks`, main: d.prompt, sub: d.achieved };
+  if (d.type === 'worked') return { tag: `Working · ${d.marks} marks`, main: d.prompt, sub: 'Answer: ' + d.answer };
   if (d.type === 'mcq') return { tag: 'Multiple choice', main: d.front, sub: d.options[d.answer] || '' };
   if (d.type === 'short') return { tag: 'Short answer', main: d.front, sub: d.back };
   if (d.type === 'cloze') return { tag: 'Fill the blank', main: d.front, sub: d.back };
@@ -4747,6 +5384,8 @@ const fieldVal = (v) => (v === null || v === undefined) ? '' : v;
 function CardEditRow({ card, onSave, onCancel }){
   const [f, setF] = useState(() => card.type === 'mcq'
     ? { ...card, _opts: (card.options || []).join('\n'), answer: String(card.answer == null ? 0 : card.answer) }
+    : card.type === 'worked'
+    ? { ...card, _steps: (card.steps || []).join('\n') }
     : card.type === 'typed'
     ? { ...card, _accept: (card.accept || []).join(', ') }
     : { ...card });
@@ -4765,6 +5404,13 @@ function CardEditRow({ card, onSave, onCancel }){
       if (!(answer >= 0 && answer < options.length)) answer = 0;
       const { _opts, ...rest } = f;
       onSave({ ...rest, options, answer });
+    } else if (f.type === 'worked'){
+      /* Same shape as the multi-choice options: one per line in a textarea,
+         because the steps ARE an ordered list and editing them as prose would
+         lose the order the marker walks. */
+      const steps = (f._steps || '').split('\n').map(s => s.trim()).filter(Boolean).slice(0, 8);
+      const { _steps, ...rest } = f;
+      onSave({ ...rest, steps });
     } else if (f.type === 'typed'){
       const accept = (f._accept || '').split(',').map(s => s.trim()).filter(Boolean).slice(0, 4);
       const { _accept, ...rest } = f;
@@ -4779,6 +5425,14 @@ function CardEditRow({ card, onSave, onCancel }){
           {field('verb', 'Command verb')}{field('prompt', 'Question', true)}
           {field('achieved', 'Achieved', true)}{field('merit', 'Merit', true)}{field('excellence', 'Excellence', true)}
           {field('skeleton', 'Structure')}{field('pitfall', 'What loses marks', true)}
+        </>
+      ) : f.type === 'worked' ? (
+        <>
+          {field('prompt', 'The problem', true)}
+          {field('_steps', 'Method — one step per line', true)}
+          {field('answer', 'Final answer (with unit)')}
+          {field('marks', 'Marks')}
+          {field('pitfall', 'What loses marks', true)}
         </>
       ) : f.type === 'mcq' ? (
         <>
@@ -5642,7 +6296,10 @@ function quizAnswerText(c){
 function quizQuestionText(c){
   return String((c.front != null ? c.front : c.prompt) || '');
 }
-const quizUsable = (c) => c.type !== 'extended' && quizQuestionText(c).trim() && quizAnswerText(c).trim();
+/* Quiz and Learn both draw from this. Worked problems are excluded for the
+   same reason extended ones are: there is no single answer to recognise, and
+   a multi-choice built out of one would be asking the wrong question. */
+const quizUsable = (c) => c.type !== 'extended' && c.type !== 'worked' && quizQuestionText(c).trim() && quizAnswerText(c).trim();
 const QUIZ_MIN = 4;
 
 function buildQuiz(cards, count){
