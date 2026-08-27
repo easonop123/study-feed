@@ -213,7 +213,7 @@ async function save(key, value){
 
 /* longMix = what % of your cards should be long (extended-response) answers.
    Drives both what gets generated and how the feed is blended. */
-const DEFAULT_SETTINGS = { interleave: true, newPerDay: 12, capNew: false, longMix: 30, theme: 'system', name: '', examDate: '', lastSeenVersion: '', onboarded: false, dismissedTips: {}, sound: true, font: 'inter', learnSession: null, diagnosis: null };
+const DEFAULT_SETTINGS = { interleave: true, newPerDay: 12, capNew: false, longMix: 30, theme: 'system', name: '', examDate: '', lastSeenVersion: '', onboarded: false, dismissedTips: {}, sound: true, font: 'inter', learnSession: null, diagnosis: null, paper: null };
 
 /* ---- sound ---------------------------------------------------------------
    Synthesised, not sampled. Three reasons: a card grade fires 30+ times in a
@@ -358,8 +358,21 @@ function failureKind(e){
    1.x numbers sitting above the new 1.0.0 cannot cause a mis-fire. They are not
    shown next to the pre-launch entries either — those were dev builds and the
    numbers mean nothing to a student. */
-const APP_VERSION = '1.5.0';
+const APP_VERSION = '1.6.0';
 const PATCH_NOTES = [
+  { v: '1.6.0', date: '2026-08-27', title: 'Sit a whole paper', items: [
+    'New: a full-length practice paper. Name the standard you are sitting and it writes you an exam — a proper context to work from, parts that climb from naming it to justifying it, marks on every part, and a clock.',
+    'It writes from the whole subject, not just from your cards. Any idea a course on that topic would teach can turn up, including the parts you never got round to making cards for — which is usually where a paper catches you out. Point it at one of your decks as well if you want it leaning on what you have been studying.',
+    'You do not need a deck at all. Name the standard and go.',
+    'It is a practice paper, not a copy of a particular past paper — it will not tell you a question came from some year, because it does not know that and neither would you want it guessing. The real past papers are free on the NZQA site and worth doing as well. The app will not reach for a standard number on its own either: its memory of NCEA is out of date, so it uses the standard in the words YOU type.',
+    'The clock counts down but never locks you out. Running out of time tells you something; losing an hour of your own writing does not.',
+    'Hand it in and every part is marked separately against its own Achieved, Merit and Excellence — the same marking as a long-answer card, so you get your own words highlighted and "how do I get to Merit" on every part.',
+    'One grade at the top, worked out from marks rather than parts: the best rung that more than half the paper actually reached. The rule is printed next to it, because a grade you cannot explain is one you cannot learn from.',
+    'Then "where the paper cost you" — the parts that came in under that grade, biggest marks first. That is the order to revise in.',
+    'Leave a part blank and it is marked Not yet, which is what it would be worth in the exam.',
+    'You can photograph your answers here too, part by part, the same as anywhere else.',
+    'Close it mid-paper and it keeps everything — the questions, the clock and every word you have written — and picks up where you left off.',
+  ] },
   { v: '1.5.0', date: '2026-08-25', title: 'Photograph it, and show your working', items: [
     'New: photograph a written answer instead of typing it. Tap "Photo of your writing" above the answer box, and what you wrote on paper comes back as text. Practice answers get written on paper, and so does every real one — typing three hundred words of physics into a phone was the reason marking was worth doing once and never again.',
     'It lands in the answer box, not straight into the marker, and that is on purpose. Reading handwriting is very good but not perfect — it will quietly tidy up a spelling now and then — so you get to see the words and fix them before anything is graded. What you send is what gets marked.',
@@ -1452,6 +1465,170 @@ MATERIAL:
 ${source}`;
 }
 
+/* ==========================================================================
+   FULL PAPER — sit a whole exam, not a card
+
+   Everything else in this app is one question at a time. That is the right
+   shape for revision and the wrong shape for the week before an exam, where
+   what a student has actually not practised is the paper: three questions in
+   an hour, parts that build on one scenario, and the judgement about where to
+   spend the last ten minutes.
+
+   WHERE THE CONTENT COMES FROM. Originally the paper could only be built out
+   of the student's own cards, which kept it safe and made it thin: a deck of
+   nine flashcards produced a paper about nine flashcards, which is not what
+   sitting a standard feels like. It now writes from what the model knows about
+   the SUBJECT and how that standard is examined — the ideas it assesses, the
+   apparatus and contexts that recur, the way its questions are built. A deck,
+   if one is picked, steers the emphasis rather than fencing it in, and a paper
+   can be generated with no deck at all.
+
+   TWO LINES THAT DO NOT MOVE, and they are not the same line.
+   1. It never reproduces or cites a particular past paper. Those are Crown
+      copyright, and a model's recall of a specific paper is confabulation with
+      a year attached — a student revising against an invented "2021 question"
+      is worse off than one who never opened the app. Writing in the style of a
+      standard is a different act from claiming to be a paper from it.
+   2. NCEA_RULES still holds: no standard numbers, no credit counts, no
+      speaking for NZQA. The Level 1 standards were rebuilt for 2024 and
+      whatever the model recalls of the codes is out of date. The student names
+      their standard and it is used in their words.
+   tools/paper-eval.mjs measures both on every generated question.
+
+   Generated one question at a time rather than as a whole paper in one reply.
+   A paper is the longest thing this app asks a model for, and a single reply
+   long enough to hold three questions with parts is a reply long enough to be
+   cut off — which would hand back half an exam. Per question, each reply is
+   the size of an ordinary generate, a failure costs one question instead of
+   the paper, and the student gets a progress count instead of a blank wait. */
+
+/* Questions and minutes per length. Modelled on the real thing: an NCEA
+   external is a small number of big questions, not a quiz. Minutes are
+   deliberately generous-but-real — roughly a mark a minute, which is the rate
+   students are told to work at. */
+const PAPER_SHAPES = {
+  short: { questions: 2, minutes: 35, label: 'Short paper', blurb: '2 questions · about 35 min' },
+  full:  { questions: 3, minutes: 60, label: 'Full paper',  blurb: '3 questions · about 60 min' },
+};
+
+/* Material for the paper comes from the student's own cards. A paper built out
+   of nothing is a paper about nothing, and this app already has the one thing
+   that makes it specific to them. Capped so the prompt stays inside budget —
+   the model needs enough to find a context, not the whole deck. */
+function paperSource(deck, cap = 3500){
+  const bits = [];
+  for (const c of deck.cards){
+    const qa = cardQA(c);
+    const line = (qa.q || '').trim() + (qa.a ? ' — ' + qa.a.replace(/\s+/g, ' ').trim() : '');
+    if (line.length > 4) bits.push(line);
+  }
+  let out = '';
+  for (const b of bits){
+    if (out.length + b.length > cap) break;
+    out += b + '\n';
+  }
+  return out.trim();
+}
+
+function paperPrompt(source, level, standard, n, total, already){
+  const avoid = already && already.length
+    ? `\n\nALREADY ON THIS PAPER — pick a DIFFERENT idea and a different context:\n${already.map(a => '- ' + a).join('\n')}`
+    : '';
+  const steer = source
+    ? `\n\nTHE STUDENT'S OWN NOTES — a steer, not a fence. Lean towards the emphases here, but you are NOT limited to them and you should NOT avoid a topic just because it is missing:\n${source}`
+    : '';
+  return `You are writing QUESTION ${n} of ${total} of a ${level} practice examination paper${standard ? ` for: "${standard}"` : ''}.
+
+Draw on the whole subject, not on any one set of notes: any idea a course on this topic would teach is fair game, and the best question is often about the part a student has not written down. Write it as a real senior-secondary examination question — a concrete situation with named apparatus and actual figures, then parts that climb off it.
+
+Never say or imply that a question is taken from a particular past paper: no years, no sessions, no "this came up in".
+
+Return ONLY JSON, one object:
+{ "context": a short resource or scenario the parts all refer to — 1-3 sentences of situation, data or description, the way an exam gives you something to work from. Concrete and specific, never a restatement of the topic.,
+  "parts": [ 2-3 objects, in order, each:
+    { "label": "a" then "b" then "c",
+      "verb": one of ${COMMAND_VERBS.map(v => '"' + v + '"').join(', ')},
+      "prompt": the question for this part, referring to the context above,
+      "marks": integer 2-6,
+      "achieved": what the WHAT looks like for this part,
+      "merit": the WHY/HOW with cause and effect linked,
+      "excellence": links >=2 ideas AND applies them to THIS context, then evaluates or justifies } ] }
+
+RULES THAT MAKE IT AN EXAM QUESTION RATHER THAN THREE CARDS:
+- The parts must CLIMB. Part (a) asks them to name or describe, part (b) to explain with cause and effect, part (c) to apply it to the context and justify. That climb is the whole point — it is the ladder the answers are graded on.
+- Every part hangs off the ONE context. A part that could be answered without reading the context does not belong on this question.
+- The context must be something to think about, not decoration: a set of results, a situation, a claim someone has made, a design that has to be judged.
+- Marks go up across the parts. The last part is worth the most.
+- Pitch it where that standard actually sits. Not harder than the real thing to seem rigorous, and not easier to be kind — a practice paper that misjudges the level teaches the wrong thing about how much to write.
+- Use a real, concrete context: named apparatus, actual figures with units, a specific situation or claim. Vague contexts produce vague answers and cannot be marked properly.
+- Do NOT number the question or write "Question ${n}" — that is added around you.
+- No JSON outside the object.${steer}${avoid}${nceaRules(level)}`;
+}
+
+/* Ceiling per question. One question with three parts and a ladder for each is
+   the same order of output as a marking reply, so it gets the same headroom —
+   a truncated question is a question with no Excellence descriptor, which
+   would then be marked against a criterion that is not there. */
+const PAPER_MAX_TOKENS = 2000;
+
+function partsFromJson(o){
+  const raw = Array.isArray(o && o.parts) ? o.parts : [];
+  const out = [];
+  const labels = ['a', 'b', 'c', 'd'];
+  for (const p of raw){
+    if (!p || !p.prompt) continue;
+    out.push({
+      label: labels[out.length] || String(out.length + 1),
+      verb: COMMAND_VERBS.includes(p.verb) ? p.verb : (p.verb || 'Explain'),
+      prompt: String(p.prompt),
+      marks: Math.max(1, Math.min(9, Number(p.marks) || 3)),
+      achieved: String(p.achieved || ''),
+      merit: String(p.merit || ''),
+      excellence: String(p.excellence || ''),
+    });
+    if (out.length >= 4) break;
+  }
+  return out;
+}
+
+/* Build the paper, question by question, reporting progress as it goes.
+   A question that comes back unusable is skipped rather than retried forever;
+   if NONE survive the caller shows the failure, and if some do the student is
+   told the paper is short rather than being handed one silently. */
+async function buildPaper(deck, level, standard, shapeKey, onProgress){
+  const shape = PAPER_SHAPES[shapeKey] || PAPER_SHAPES.full;
+  /* No deck is a perfectly good way to sit a paper — name the standard and go.
+     The deck, when there is one, only steers the emphasis. */
+  const source = deck ? paperSource(deck) : '';
+
+  const questions = [];
+  const already = [];
+  for (let i = 1; i <= shape.questions; i++){
+    if (onProgress) onProgress(i, shape.questions);
+    let obj = null;
+    try {
+      const reply = await callModel(
+        paperPrompt(source, level, standard, i, shape.questions, already),
+        PAPER_MAX_TOKENS, MODEL_SMART, true);
+      obj = rescueObjects(reply)[0];
+    } catch (e){ noteApiError(e); }
+    if (!obj) continue;
+    const parts = partsFromJson(obj);
+    if (!parts.length) continue;
+    const context = String(obj.context || '').trim();
+    questions.push({ n: questions.length + 1, context: context, parts: parts });
+    already.push(context.slice(0, 120) || parts[0].prompt.slice(0, 120));
+  }
+
+  const totalMarks = questions.reduce((s, q) => s + q.parts.reduce((t, p) => t + p.marks, 0), 0);
+  return {
+    questions: questions,
+    minutes: shape.minutes,
+    totalMarks: totalMarks,
+    asked: shape.questions,
+  };
+}
+
 /* Models served free (rate-limited) by NVIDIA Build (build.nvidia.com), called
    through their OpenAI-compatible endpoint. Everything text runs on gpt-oss-20b:
    fast (a full ~15-card batch in ~11s), returns clean JSON, handles long-answer
@@ -1908,6 +2085,95 @@ function firstBadStep(r){
   }
   return null;
 }
+
+/* Marking a paper is marking its parts, and every part is already an
+   extended-response question — a verb, a prompt, marks, and the three rungs.
+   So each one goes through markAnswer, the marker that has an eval behind it
+   (tools/mark-eval.mjs, 97% in band), rather than through a second marker
+   written for this screen that nobody has measured. The part is handed over as
+   the card it already is.
+
+   Sequentially, not in parallel. Eight parts fired at once at a free tier that
+   rate-limits at ~40 requests a minute is eight failures, and the student has
+   just spent an hour on this. Slower and finished beats fast and rejected. */
+function partAsCard(q, p){
+  return {
+    type: 'extended',
+    verb: p.verb,
+    marks: p.marks,
+    prompt: (q.context ? q.context + '\n\n' : '') + p.prompt,
+    achieved: p.achieved,
+    merit: p.merit,
+    excellence: p.excellence,
+  };
+}
+
+async function markPaper(paper, answers, level, onProgress){
+  const jobs = [];
+  for (const q of paper.questions){
+    for (const p of q.parts) jobs.push({ q: q.n, label: p.label, part: p, question: q });
+  }
+  const out = [];
+  for (let i = 0; i < jobs.length; i++){
+    const j = jobs[i];
+    if (onProgress) onProgress(i + 1, jobs.length);
+    const key = j.q + j.label;
+    const written = String((answers && answers[key]) || '').trim();
+    if (!written){
+      /* Left blank. Not sent to the model — there is nothing to mark, it would
+         cost a call and it would come back with feedback about an empty box. */
+      out.push({ key: key, q: j.q, label: j.label, marks: j.part.marks, blank: true, grade: 'Not yet' });
+      continue;
+    }
+    let r = null;
+    try { r = await markAnswer(partAsCard(j.question, j.part), written, level); }
+    catch (e){ noteApiError(e); }
+    out.push({
+      key: key, q: j.q, label: j.label, marks: j.part.marks,
+      blank: false,
+      answer: written,
+      grade: (r && GRADES.indexOf(r.grade) >= 0) ? r.grade : null,
+      r: r || null,
+    });
+  }
+  return out;
+}
+
+/* The headline grade, worked out HERE and not asked for.
+
+   Asking a model to grade a whole paper after it has already graded every part
+   invites it to disagree with itself, and the student would be looking at both
+   answers at once. This is also the one number on the screen that has to be
+   explainable, because it is the number they will read as "what I would get" —
+   so it is a rule that can be printed next to it: the best rung that more than
+   half the marks on the paper actually reached.
+
+   Marks, not parts. A six-mark part carrying Excellence and a two-mark part
+   scraping Achieved are not one-all. */
+function paperGrade(results){
+  const total = results.reduce((s, r) => s + r.marks, 0);
+  if (!total) return { grade: 'Not yet', total: 0, at: {} };
+  const rank = (g) => GRADES.indexOf(g);
+  const at = {};
+  for (const g of GRADES) at[g] = results.filter(r => rank(r.grade) >= rank(g)).reduce((s, r) => s + r.marks, 0);
+  let grade = 'Not yet';
+  for (const g of ['Excellence', 'Merit', 'Achieved']){
+    if (at[g] * 2 > total){ grade = g; break; }
+  }
+  return { grade: grade, total: total, at: at };
+}
+
+/* Where the paper actually cost them: the parts that came in under the
+   headline, biggest marks first, because that is the order to spend revision
+   time in. A part graded at the headline is not a problem to fix. */
+function paperLosses(results, headline){
+  const rank = (g) => GRADES.indexOf(g);
+  return results
+    .filter(r => rank(r.grade) < rank(headline))
+    .sort((a, b) => b.marks - a.marks || rank(a.grade) - rank(b.grade));
+}
+
+const paperKey = (q, p) => q.n + p.label;
 
 /* ---- locating the marker's notes in the student's own text ---------------
    The model is asked to quote the answer word for word, and mostly does. It
@@ -4373,6 +4639,583 @@ function WorkedFace({ card, phase, deck, onReveal, onBack }){
   );
 }
 
+/* One part of one question: the box you write in, and the way in from paper.
+
+   Split out of the paper screen because a paper is many of these and the
+   answer box has to keep its own caret, its own photo state and its own error
+   without re-rendering the eight boxes around it every keystroke. */
+function PaperPart({ q, part, value, onChange, onCommit }){
+  const [photo, setPhoto] = useState(null);
+  const [photoNote, setPhotoNote] = useState('');
+  const [err, setErr] = useState('');
+  const photoRef = useRef(null);
+
+  /* The same confirm-then-mark rule as everywhere else: the words land in the
+     box, the student checks them, and what they hand in is what gets marked.
+     A paper is the likeliest thing of all to have been written on paper. */
+  const usePhoto = async (file) => {
+    setPhoto({ busy: true }); setErr(''); setPhotoNote('');
+    try {
+      const shrunk = await resizeImage(file);
+      const read = await transcribeAnswer(shrunk);
+      if (!read){
+        setPhoto(null);
+        track('photo_answer', { result: 'empty', kind: 'paper' });
+        setErr('No handwriting found in that photo.');
+        return;
+      }
+      const had = String(value || '').trim();
+      const next = had ? had + '\n\n' + read : read;
+      onChange(next); onCommit(next);
+      setPhoto(null); setPhotoNote(had ? 'added' : 'read');
+      track('photo_answer', { result: 'ok', kind: 'paper', words: read.split(/\s+/).length });
+    } catch (e){
+      setPhoto(null);
+      track('photo_answer', { result: 'failed', kind: 'paper', reason: failureKind(e) });
+      setErr(friendlyApiError(e));
+    }
+  };
+
+  const words = String(value || '').trim() ? String(value).trim().split(/\s+/).length : 0;
+
+  return (
+    <div style={{ marginTop: 18, paddingTop: 16, borderTop: `1px solid ${T.border}` }}>
+      <div className="flex items-start gap-2" style={{ marginBottom: 8 }}>
+        <span style={{ fontFamily: SANS, fontSize: 15, fontWeight: 800, color: T.accentInk, lineHeight: '22px', flexShrink: 0 }}>
+          ({part.label})
+        </span>
+        <div style={{ flex: 1, minWidth: 0 }}>
+          <div style={{ fontFamily: SANS, fontSize: 16, fontWeight: 600, color: T.ink, lineHeight: 1.45 }}>{part.prompt}</div>
+          <div className="flex items-center gap-2" style={{ marginTop: 6, flexWrap: 'wrap' }}>
+            <Chip colour={T.accent} solid>{part.verb}</Chip>
+            <Chip colour={T.muted}>{part.marks} marks</Chip>
+          </div>
+        </div>
+      </div>
+
+      <div className="flex items-center justify-between gap-3" style={{ marginBottom: 6 }}>
+        <Sub style={{ fontSize: 12 }}>{words > 0 ? `${words} words` : ' '}</Sub>
+        <>
+          <input ref={photoRef} type="file" accept="image/*" style={{ display: 'none' }}
+            onChange={(e) => { const f = (e.target.files || [])[0]; if (e.target) e.target.value = ''; if (f) usePhoto(f); }} />
+          <button className="sf-tap" onClick={() => photoRef.current && photoRef.current.click()}
+            disabled={!!(photo && photo.busy)} aria-label={'Photograph your answer to part ' + part.label}
+            style={{ background: 'none', border: 'none', padding: 0, whiteSpace: 'nowrap',
+              cursor: (photo && photo.busy) ? 'default' : 'pointer', fontFamily: SANS,
+              fontSize: 12.5, fontWeight: 600, color: (photo && photo.busy) ? T.faint : T.accentInk }}>
+            <span className="flex items-center gap-2"><Ico name="camera" size={14} />Photo</span>
+          </button>
+        </>
+      </div>
+
+      <textarea value={value || ''}
+        onChange={e => onChange(e.target.value)}
+        onBlur={e => onCommit(e.target.value)}
+        placeholder={`Answer part (${part.label}) — ${part.marks} marks`}
+        rows={5}
+        style={{ width: '100%', background: T.well, color: T.ink, border: `1px solid ${T.border}`,
+          borderRadius: R.well, padding: 13, fontFamily: SANS, fontSize: 15, lineHeight: 1.55,
+          resize: 'vertical', outline: 'none' }} />
+
+      {photo && photo.busy && (
+        <div style={{ ...PANEL, padding: '6px 10px', marginTop: 7 }}>
+          <Loading size={46} title="Reading your handwriting…" subtitle="Check it before you hand in." />
+        </div>
+      )}
+      {photoNote && !(photo && photo.busy) && (
+        <Sub style={{ fontSize: 12.5, marginTop: 7, color: T.ink, display: 'flex', gap: 7, alignItems: 'flex-start' }}>
+          <InlineIco name="warn" size={14} style={{ marginTop: 2 }} />
+          <span>{photoNote === 'added' ? 'Added below what was there. ' : 'Read from your photo. '}Check it before you hand in — it can tidy spelling.</span>
+        </Sub>
+      )}
+      {err && <Sub style={{ marginTop: 7, color: T.red, fontSize: 12.5 }}>{err}</Sub>}
+    </div>
+  );
+}
+
+/* One marked part in the report: the grade, and the whole of the existing
+   marking underneath it. MarkResult is reused rather than reimplemented, so a
+   part of a paper gets the same annotated answer and the same upgrade path as
+   a single long-answer card — including "how do I get to Merit", which is the
+   thing worth having after a paper. */
+function PaperPartResult({ res, part, level, open, onToggle }){
+  const gc = res.grade === 'Excellence' ? T.green : res.grade === 'Merit' ? T.accent
+    : res.grade === 'Achieved' ? T.muted : T.red;
+  return (
+    <div style={{ borderTop: `1px solid ${T.border}`, padding: '11px 0' }}>
+      <button className="sf-tap" onClick={onToggle}
+        style={{ width: '100%', background: 'none', border: 'none', padding: 0, cursor: 'pointer',
+          display: 'flex', alignItems: 'center', gap: 10, textAlign: 'left' }}>
+        <span style={{ fontFamily: SANS, fontSize: 13.5, fontWeight: 800, color: T.muted, flexShrink: 0 }}>
+          {res.q}({res.label})
+        </span>
+        <span style={{ flex: 1, minWidth: 0, fontFamily: SANS, fontSize: 13.5, color: T.muted,
+          overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+          {part ? part.prompt : ''}
+        </span>
+        <Chip colour={gc} solid>{res.blank ? 'Blank' : (res.grade || 'Not marked')}</Chip>
+        <span style={{ color: T.faint, transform: open ? 'rotate(90deg)' : 'none', transition: 'transform 160ms', display: 'flex' }}>
+          <Ico name="chevron" size={14} />
+        </span>
+      </button>
+      {open && (
+        <div style={{ marginTop: 8 }}>
+          {res.blank ? (
+            <Sub>You left this one blank. {part ? part.marks : 0} marks, and the only certain way to score none.</Sub>
+          ) : res.r ? (
+            <MarkResult r={res.r} card={part ? partAsCard({ n: res.q, context: '' }, part) : null}
+              answer={res.answer} level={level} />
+          ) : (
+            <Sub style={{ color: T.red }}>This part could not be marked — the connection dropped. Your answer is still here.</Sub>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function ExamPaper({ decks, defaultLevel, saved, onSave, onClose }){
+  /* setup | building | sitting | marking | report */
+  const [phase, setPhase] = useState(saved && saved.phase ? saved.phase : 'setup');
+  const [deckId, setDeckId] = useState(saved ? saved.deckId : (decks[0] ? decks[0].id : ''));
+  const [standard, setStandard] = useState(saved ? saved.standard : '');
+  const [shapeKey, setShapeKey] = useState(saved ? saved.shapeKey : 'full');
+  const [paper, setPaper] = useState(saved ? saved.paper : null);
+  const [answers, setAnswers] = useState(saved && saved.answers ? saved.answers : {});
+  const [startedAt, setStartedAt] = useState(saved ? saved.startedAt : 0);
+  const [results, setResults] = useState(saved ? saved.results : null);
+  const [qi, setQi] = useState(0);
+  const [prog, setProg] = useState(null);
+  const [err, setErr] = useState('');
+  const [openPart, setOpenPart] = useState('');
+  const [confirmHand, setConfirmHand] = useState(false);
+  const [now, setNow] = useState(Date.now());
+
+  /* Home keeps its own copy of this; it is a local there, not an export. */
+  const LBL = { fontFamily: SANS, fontSize: 11, fontWeight: 700, letterSpacing: '0.06em', textTransform: 'uppercase', color: T.faint };
+
+  const deck = decks.find(d => d.id === deckId) || decks[0] || null;
+  const level = (deck && deck.standard) || defaultLevel || 'NCEA Level 1';
+
+  useEffect(() => {
+    if (!deck) return;
+    if (!standard && deck.standard) setStandard(deck.standard);
+  }, [deckId]);
+
+  /* The clock only has to tick while the paper is being sat. Every second, so
+     the last minute reads like a last minute. */
+  useEffect(() => {
+    if (phase !== 'sitting') return;
+    /* Re-read the clock on the way IN, not just on the first tick. `now` was
+       last set when this screen mounted, which is when the student opened the
+       setup page — spend five minutes choosing a deck and the paper would open
+       reading 65:00 and stay wrong until the first interval fired a second
+       later. Cheap to get right, and a clock that starts wrong undermines the
+       one screen whose whole point is that it is timed. */
+    setNow(Date.now());
+    const t = setInterval(() => setNow(Date.now()), 1000);
+    return () => clearInterval(t);
+  }, [phase]);
+
+  /* Written down on every commit, not on every keystroke. An hour of writing
+     that a closed tab could destroy is not a feature, but a localStorage write
+     per character on a phone is its own problem — so it lands on blur, on
+     moving between questions, and on the way out. */
+  const persist = (over) => {
+    if (!onSave) return;
+    onSave({
+      deckId: deckId, standard: standard, shapeKey: shapeKey,
+      paper: paper, answers: answers, startedAt: startedAt,
+      phase: phase, results: results,
+      ...(over || {}),
+    });
+  };
+
+  const setAnswer = (key, v) => setAnswers(a => ({ ...a, [key]: v }));
+  const commit = (key, v) => {
+    const next = { ...answers, [key]: v };
+    setAnswers(next);
+    persist({ answers: next });
+  };
+
+  const start = async () => {
+    if (!standard.trim()) return;
+    setPhase('building'); setErr(''); setProg(null);
+    lastApiError = '';
+    try {
+      const built = await buildPaper(deck, level, standard.trim(), shapeKey,
+        (i, n) => setProg({ i, n }));
+      if (!built.questions.length){
+        setPhase('setup');
+        setErr(lastApiError
+          ? friendlyApiError({ message: lastApiError })
+          : 'Could not write a paper for that. Try naming the standard the way it appears on your course outline — subject, level and topic.');
+        track('paper_failed', { reason: lastApiError ? failureKind({ message: lastApiError }) : 'empty' });
+        return;
+      }
+      const t = Date.now();
+      setPaper(built); setStartedAt(t); setAnswers({}); setResults(null); setQi(0);
+      setPhase('sitting');
+      persist({ paper: built, startedAt: t, answers: {}, results: null, phase: 'sitting' });
+      track('paper_started', { questions: built.questions.length, asked: built.asked,
+        marks: built.totalMarks, shape: shapeKey });
+    } catch (e){
+      setPhase('setup');
+      setErr(friendlyApiError(e));
+      track('paper_failed', { reason: failureKind(e) });
+    }
+  };
+
+  const handIn = async () => {
+    setConfirmHand(false);
+    setPhase('marking'); setErr(''); setProg(null);
+    try {
+      const res = await markPaper(paper, answers, level, (i, n) => setProg({ i, n }));
+      setResults(res); setPhase('report');
+      persist({ results: res, phase: 'report' });
+      const g = paperGrade(res);
+      track('paper_marked', {
+        grade: g.grade, marks: g.total, parts: res.length,
+        blank: res.filter(r => r.blank).length,
+        minutes: startedAt ? Math.round((Date.now() - startedAt) / 60000) : 0 });
+      if (g.grade === 'Excellence'){ play('excellence'); buzz([14, 40, 14]); }
+      else if (g.grade === 'Merit'){ play('milestone'); buzz(16); }
+      else if (g.grade === 'Achieved'){ play('right', 1); buzz(10); }
+      else play('ok');
+    } catch (e){
+      setPhase('sitting');
+      setErr(friendlyApiError(e) + ' Your answers are safe.');
+    }
+  };
+
+  const closeBtn = (
+    <button onClick={() => { persist(); onClose(); }} className="sf-tap" aria-label="Close paper"
+      style={{ width: 38, height: 38, borderRadius: R.pill, background: T.surface, border: `1px solid ${T.border}`,
+        cursor: 'pointer', color: T.muted, boxShadow: SH.raised, flexShrink: 0, display: 'flex',
+        alignItems: 'center', justifyContent: 'center' }}><Ico name="cross" size={15} weight={2.2} /></button>
+  );
+
+  const answeredCount = paper
+    ? paper.questions.reduce((s, q) => s + q.parts.filter(p => String(answers[paperKey(q, p)] || '').trim()).length, 0)
+    : 0;
+  const partCount = paper ? paper.questions.reduce((s, q) => s + q.parts.length, 0) : 0;
+
+  /* Time is shown, never enforced. Locking someone out of an hour of their own
+     writing because a timer expired would be the app destroying work to make a
+     point — and a student who runs over has learned the thing the clock was
+     there to teach anyway. */
+  const left = (paper && startedAt) ? (startedAt + paper.minutes * 60000 - now) : 0;
+  const over = left < 0;
+  const mm = Math.floor(Math.abs(left) / 60000);
+  const ss = Math.floor((Math.abs(left) % 60000) / 1000);
+  const clock = (over ? '+' : '') + mm + ':' + String(ss).padStart(2, '0');
+
+  return (
+    <div style={{ position: 'fixed', inset: 0, zIndex: 50, background: T.bg, overflowY: 'auto' }}>
+      <div style={{ width: '100%', maxWidth: 620, margin: '0 auto', padding: '16px 16px 64px' }}>
+        <div className="flex items-center justify-between gap-3" style={{ marginBottom: 20 }}>
+          <div style={{ fontFamily: SANS, fontSize: 20, fontWeight: 800, color: T.ink, letterSpacing: '-0.02em' }}>Full paper</div>
+          <div className="flex items-center gap-2">
+            {phase === 'sitting' && (
+              <span style={{ fontFamily: SANS, fontSize: 15, fontWeight: 800, letterSpacing: '-0.01em',
+                color: over ? T.red : (left < 5 * 60000 ? T.amber : T.muted),
+                background: T.surface, border: `1px solid ${T.border}`, borderRadius: R.pill,
+                padding: '8px 13px', boxShadow: SH.raised }}>{clock}</span>
+            )}
+            {closeBtn}
+          </div>
+        </div>
+
+        {phase === 'setup' && (
+          <div style={{ animation: 'sf-in 260ms cubic-bezier(.2,.8,.3,1)' }}>
+            <Title style={{ fontSize: 23, marginBottom: 6 }}>Sit a whole paper</Title>
+            <Sub style={{ marginBottom: 16 }}>
+              A full-length paper for the standard you are sitting, written the way that standard is
+              really examined: a proper context to work from, parts that climb from naming it to
+              justifying it, marks on every part, and a clock.
+            </Sub>
+
+            {/* Kept, but no longer the loudest thing on the screen. The paper
+                really is written to match how the standard is examined, so the
+                warning is now about the one claim it must not make: that any
+                of this is a particular past paper. */}
+            <Sub style={{ fontSize: 12.5, marginBottom: 16, display: 'flex', gap: 8, alignItems: 'flex-start' }}>
+              <InlineIco name="warn" size={14} style={{ marginTop: 2, color: T.amber }} />
+              <span>Written fresh to match how this standard is examined — it is a practice paper, not a copy of a particular past paper. The real ones are free on the NZQA site and worth doing as well.</span>
+            </Sub>
+
+            {(
+              <>
+                <div style={{ ...LBL, marginBottom: 8 }}>The standard you are sitting</div>
+                <input value={standard} onChange={e => setStandard(e.target.value)}
+                  placeholder="e.g. Chemistry 1.1 — carbon chemistry"
+                  style={{ ...INPUT, fontSize: 14.5, marginBottom: 6 }} />
+                <Sub style={{ fontSize: 12.5, marginBottom: 16 }}>
+                  Name it however you say it. The paper is written for this — used in your words, because
+                  the app will not let the model reach for a standard number of its own.
+                </Sub>
+
+                <div style={{ ...LBL, marginBottom: 8 }}>Lean on a deck? <span style={{ textTransform: 'none', letterSpacing: 0, fontWeight: 600 }}>(optional)</span></div>
+                <div className="flex flex-col gap-2" style={{ marginBottom: 16 }}>
+                  {/* Explicitly first, so "I have not made a deck for this yet"
+                      is an ordinary way to use the screen rather than a dead
+                      end — which is what it used to be. */}
+                  <button className="sf-tap" onClick={() => setDeckId('')}
+                    style={{ display: 'flex', alignItems: 'center', gap: 11, textAlign: 'left', cursor: 'pointer',
+                      background: !deckId ? rgba(T.accent, 0.10) : T.surface,
+                      border: `1.5px solid ${!deckId ? T.accent : T.border}`, borderRadius: R.well, padding: '11px 13px' }}>
+                    <span style={{ width: 32, height: 32, borderRadius: 10, background: rgba(T.accent, 0.12),
+                      color: T.accentInk, display: 'grid', placeItems: 'center', flexShrink: 0 }}><Ico name="target" size={16} /></span>
+                    <span style={{ minWidth: 0, flex: 1 }}>
+                      <span style={{ display: 'block', fontFamily: SANS, fontSize: 14.5, fontWeight: 700, color: T.ink }}>Just the standard</span>
+                      <span style={{ display: 'block', fontFamily: SANS, fontSize: 12.5, color: T.faint }}>Full coverage of what it assesses</span>
+                    </span>
+                  </button>
+                  {decks.map(d => {
+                    const on = d.id === deckId;
+                    return (
+                      <button key={d.id} className="sf-tap" onClick={() => setDeckId(d.id)}
+                        style={{ display: 'flex', alignItems: 'center', gap: 11, textAlign: 'left', cursor: 'pointer',
+                          background: on ? rgba(T.accent, 0.10) : T.surface,
+                          border: `1.5px solid ${on ? T.accent : T.border}`, borderRadius: R.well, padding: '11px 13px' }}>
+                        <Tile colour={subjectColour(d.subject)} glyph={(d.subject || '?').trim().charAt(0).toUpperCase()} size={32} />
+                        <span style={{ minWidth: 0, flex: 1 }}>
+                          <span style={{ display: 'block', fontFamily: SANS, fontSize: 14.5, fontWeight: 700, color: T.ink }}>{d.subject || 'Untitled'}</span>
+                          <span style={{ display: 'block', fontFamily: SANS, fontSize: 12.5, color: T.faint }}>
+                            {d.topic || ''}{d.topic ? ' · ' : ''}{d.cards.length} cards
+                          </span>
+                        </span>
+                      </button>
+                    );
+                  })}
+                </div>
+
+                <div style={{ ...LBL, marginBottom: 8 }}>How long</div>
+                <div className="flex gap-2" style={{ marginBottom: 18 }}>
+                  {Object.keys(PAPER_SHAPES).map(k => {
+                    const s = PAPER_SHAPES[k], on = k === shapeKey;
+                    return (
+                      <button key={k} className="sf-tap" onClick={() => setShapeKey(k)}
+                        style={{ flex: 1, cursor: 'pointer', textAlign: 'left', padding: '12px 13px',
+                          background: on ? rgba(T.accent, 0.10) : T.surface,
+                          border: `1.5px solid ${on ? T.accent : T.border}`, borderRadius: R.well }}>
+                        <span style={{ display: 'block', fontFamily: SANS, fontSize: 14.5, fontWeight: 700, color: T.ink }}>{s.label}</span>
+                        <span style={{ display: 'block', fontFamily: SANS, fontSize: 12.5, color: T.faint }}>{s.blurb}</span>
+                      </button>
+                    );
+                  })}
+                </div>
+
+                {err && <Sub style={{ color: T.red, marginBottom: 12 }}>{err}</Sub>}
+                <Btn full kind="primary" onClick={start} disabled={!standard.trim()}>Write my paper</Btn>
+                <Sub style={{ fontSize: 12.5, marginTop: 10, textAlign: 'center' }}>
+                  Takes a minute — each question is written on its own.
+                </Sub>
+              </>
+            )}
+          </div>
+        )}
+
+        {phase === 'building' && (
+          <Card style={{ padding: '10px 14px' }}>
+            <Loading size={92}
+              title={prog ? `Writing question ${prog.i} of ${prog.n}…` : 'Writing your paper…'}
+              subtitle="A scenario, then parts that climb from naming it to justifying it." />
+          </Card>
+        )}
+
+        {phase === 'sitting' && paper && (
+          <div>
+            <div className="flex items-center justify-between gap-2" style={{ marginBottom: 12, flexWrap: 'wrap' }}>
+              <div className="flex items-center gap-2">
+                <Chip colour={T.muted}>{paper.totalMarks} marks</Chip>
+                <Chip colour={T.muted}>{answeredCount} of {partCount} answered</Chip>
+              </div>
+              {over && <Sub style={{ fontSize: 12.5, color: T.red, fontWeight: 600 }}>Time is up — finish the sentence you are on.</Sub>}
+            </div>
+
+            {/* A question can fail to come back — measured at roughly 1 in 8
+                against the free tier, where the model returns an empty reply.
+                buildPaper skips it rather than losing the paper, but a short
+                paper handed over silently misrepresents both the mark total
+                and how long it should take, so it says so. */}
+            {paper.questions.length < paper.asked && (
+              <div style={{ background: rgba(T.amber, 0.10), borderRadius: R.well, padding: '10px 13px', marginBottom: 12 }}>
+                <Sub style={{ color: T.ink, fontSize: 13, display: 'flex', gap: 8, alignItems: 'flex-start' }}>
+                  <InlineIco name="warn" size={15} style={{ marginTop: 2 }} />
+                  <span>The connection dropped on {paper.asked - paper.questions.length} of the {paper.asked} questions, so this paper is shorter than a real one — {paper.totalMarks} marks rather than a full sitting.</span>
+                </Sub>
+              </div>
+            )}
+
+            {paper.questions.length > 1 && (
+              <div className="flex gap-2" style={{ marginBottom: 14 }}>
+                {paper.questions.map((q, i) => (
+                  <button key={q.n} className="sf-tap"
+                    onClick={() => { persist(); setQi(i); try { window.scrollTo(0, 0); } catch (e){} }}
+                    style={{ flex: 1, cursor: 'pointer', padding: '9px 6px', borderRadius: R.pill,
+                      fontFamily: SANS, fontSize: 13.5, fontWeight: i === qi ? 800 : 600,
+                      background: i === qi ? T.surface : T.well, color: i === qi ? T.ink : T.muted,
+                      border: `1px solid ${i === qi ? T.border : 'transparent'}`,
+                      boxShadow: i === qi ? SH.pop : 'none' }}>
+                    Question {q.n}
+                  </button>
+                ))}
+              </div>
+            )}
+
+            <Card style={{ padding: 17 }}>
+              <div style={{ ...LBL, marginBottom: 8 }}>Question {paper.questions[qi].n}</div>
+              {paper.questions[qi].context && (
+                <div style={{ ...PANEL, marginBottom: 4 }}>
+                  <div style={{ fontFamily: SANS, fontSize: 15.5, lineHeight: 1.55, color: T.ink, whiteSpace: 'pre-wrap' }}>
+                    {paper.questions[qi].context}
+                  </div>
+                </div>
+              )}
+              {paper.questions[qi].parts.map(p => {
+                const key = paperKey(paper.questions[qi], p);
+                return (
+                  <PaperPart key={key} q={paper.questions[qi]} part={p}
+                    value={answers[key]}
+                    onChange={(v) => setAnswer(key, v)}
+                    onCommit={(v) => commit(key, v)} />
+                );
+              })}
+            </Card>
+
+            {err && <Sub style={{ marginTop: 12, color: T.red }}>{err}</Sub>}
+
+            <div className="flex gap-2" style={{ marginTop: 16 }}>
+              {qi > 0 && <Btn kind="soft" onClick={() => { persist(); setQi(qi - 1); try { window.scrollTo(0, 0); } catch (e){} }}>← Back</Btn>}
+              {qi < paper.questions.length - 1 ? (
+                <Btn full kind="primary" onClick={() => { persist(); setQi(qi + 1); try { window.scrollTo(0, 0); } catch (e){} }}>Next question →</Btn>
+              ) : !confirmHand ? (
+                <Btn full kind="primary" onClick={() => setConfirmHand(true)}>Hand it in</Btn>
+              ) : (
+                <div style={{ flex: 1 }}>
+                  <Card style={{ padding: 14, borderColor: T.accent, borderWidth: 1.5 }}>
+                    <div style={{ fontFamily: SANS, fontSize: 15, fontWeight: 700, color: T.ink, marginBottom: 4 }}>
+                      Hand in {answeredCount} of {partCount} parts?
+                    </div>
+                    <Sub style={{ fontSize: 13, marginBottom: 11 }}>
+                      {answeredCount < partCount
+                        ? 'The blank ones are marked Not yet — which is what they would be worth in the exam.'
+                        : 'Every part answered. Marking takes about a minute.'}
+                    </Sub>
+                    <div className="flex gap-2">
+                      <Btn full kind="primary" onClick={handIn} style={{ fontSize: 14 }}>Mark it</Btn>
+                      <Btn kind="ghost" onClick={() => setConfirmHand(false)} style={{ fontSize: 14 }}>Keep writing</Btn>
+                    </div>
+                  </Card>
+                </div>
+              )}
+            </div>
+          </div>
+        )}
+
+        {phase === 'marking' && (
+          <Card style={{ padding: '10px 14px' }}>
+            <Loading size={92}
+              title={prog ? `Marking part ${prog.i} of ${prog.n}…` : 'Marking your paper…'}
+              subtitle="Every part against its own Achieved, Merit and Excellence — one at a time, so none of them get dropped." />
+          </Card>
+        )}
+
+        {phase === 'report' && results && paper && (() => {
+          const g = paperGrade(results);
+          const losses = paperLosses(results, g.grade);
+          const gc = g.grade === 'Excellence' ? T.green : g.grade === 'Merit' ? T.accent
+            : g.grade === 'Achieved' ? T.muted : T.red;
+          const partOf = (r) => {
+            const q = paper.questions.find(x => x.n === r.q);
+            return q ? q.parts.find(p => p.label === r.label) : null;
+          };
+          const mins = startedAt ? Math.max(1, Math.round((Date.now() - startedAt) / 60000)) : 0;
+          return (
+            <div style={{ animation: 'sf-in 260ms cubic-bezier(.2,.8,.3,1)' }}>
+              <Card style={{ padding: 18, marginBottom: 14 }}>
+                <Chip colour={gc} solid>{g.grade}</Chip>
+                <Title style={{ fontSize: 21, marginTop: 10 }}>
+                  {g.grade === 'Not yet'
+                    ? 'Not there yet on this paper'
+                    : `More than half this paper came in at ${g.grade}`}
+                </Title>
+                {/* The rule is printed next to the number on purpose. This is
+                    the figure a student will read as "what I would get", and a
+                    headline grade you cannot explain is one they cannot argue
+                    with or learn from. */}
+                <Sub style={{ marginTop: 7 }}>
+                  Worked out by marks, not by parts: the best rung that more than half of
+                  this paper's {g.total} marks actually reached. It is an indication from one
+                  practice paper, not a mark from NZQA.
+                </Sub>
+                <div className="flex gap-2" style={{ marginTop: 13, flexWrap: 'wrap' }}>
+                  {GRADES.slice().reverse().map(name => {
+                    const marks = results.filter(r => r.grade === name).reduce((s, r) => s + r.marks, 0);
+                    if (!marks) return null;
+                    const c = name === 'Excellence' ? T.green : name === 'Merit' ? T.accent : name === 'Achieved' ? T.muted : T.red;
+                    return <Chip key={name} colour={c}>{name}: {marks} marks</Chip>;
+                  })}
+                </div>
+                <Sub style={{ fontSize: 12.5, marginTop: 11 }}>
+                  {mins} min · {results.filter(r => r.blank).length} left blank
+                </Sub>
+              </Card>
+
+              {losses.length > 0 && (
+                <Card style={{ padding: 17, marginBottom: 14 }}>
+                  <div style={{ fontFamily: SANS, fontSize: 12, fontWeight: 800, color: T.red, letterSpacing: '0.03em', marginBottom: 8 }}>
+                    WHERE THE PAPER COST YOU
+                  </div>
+                  <Sub style={{ fontSize: 13, marginBottom: 10 }}>
+                    Biggest marks first — this is the order to spend revision time in.
+                  </Sub>
+                  <div className="flex flex-col gap-2">
+                    {losses.slice(0, 5).map(r => {
+                      const p = partOf(r);
+                      return (
+                        <div key={r.key} className="flex gap-2" style={{ alignItems: 'flex-start' }}>
+                          <span style={{ fontFamily: SANS, fontSize: 12.5, fontWeight: 800, color: T.red, lineHeight: '20px', flexShrink: 0 }}>
+                            {r.q}({r.label})
+                          </span>
+                          <span style={{ flex: 1, fontFamily: SANS, fontSize: 14, lineHeight: 1.5, color: T.ink }}>
+                            {r.blank
+                              ? `Left blank — ${r.marks} marks.`
+                              : (r.r && r.r.lift) ? r.r.lift : `${r.marks} marks at ${r.grade || 'not marked'}.`}
+                          </span>
+                        </div>
+                      );
+                    })}
+                  </div>
+                </Card>
+              )}
+
+              <Card style={{ padding: '4px 17px 12px' }}>
+                <div style={{ ...LBL, margin: '13px 0 2px' }}>Every part</div>
+                {results.map(r => (
+                  <PaperPartResult key={r.key} res={r} part={partOf(r)} level={level}
+                    open={openPart === r.key}
+                    onToggle={() => setOpenPart(openPart === r.key ? '' : r.key)} />
+                ))}
+              </Card>
+
+              <div className="flex gap-2" style={{ marginTop: 16 }}>
+                <Btn full kind="soft" onClick={() => {
+                  setPhase('setup'); setPaper(null); setAnswers({}); setResults(null);
+                  setQi(0); setOpenPart(''); setStartedAt(0);
+                  persist({ paper: null, answers: {}, results: null, startedAt: 0, phase: 'setup' });
+                }}>Another paper</Btn>
+                <Btn full kind="primary" onClick={() => { persist(); onClose(); }}>Done</Btn>
+              </div>
+            </div>
+          );
+        })()}
+      </div>
+    </div>
+  );
+}
+
 /* ==========================================================================
    FEED
    ========================================================================== */
@@ -5804,7 +6647,7 @@ function longDate(){
   catch { return TODAY(); }
 }
 
-function Home({ library, progress, stats, settings, due, onStart, onCreate, onDecks, onStudyDeck, onQuiz, onLearn, onDiagnose, onSettings, onTutorial, onStarter }){
+function Home({ library, progress, stats, settings, due, onStart, onCreate, onDecks, onStudyDeck, onQuiz, onLearn, onDiagnose, onPaper, onSettings, onTutorial, onStarter }){
   const [shareWeek, setShareWeek] = useState(false);
   const today = TODAY();
   const decks = library.decks;
@@ -5894,6 +6737,11 @@ function Home({ library, progress, stats, settings, due, onStart, onCreate, onDe
               someone reading this on the bus has none. */}
           <Btn full kind="soft" onClick={onStarter} style={{ marginTop: 8 }}>Or try a ready-made deck</Btn>
           {/* The way back for anyone who skipped the walkthrough on arrival */}
+          {/* A paper needs a STANDARD, not a deck, so it is reachable before
+              the first card exists. Kept below the two deck CTAs on purpose —
+              this screen exists to get a deck made, and a full paper is an
+              hour, not a first minute. */}
+          <Btn full kind="ghost" onClick={onPaper} style={{ marginTop: 6, fontSize: 14 }}>Or sit a practice paper</Btn>
           <Btn full kind="ghost" onClick={onTutorial} style={{ marginTop: 6, fontSize: 14 }}>Show me how it works</Btn>
         </Card>
       ) : (
@@ -5935,6 +6783,26 @@ function Home({ library, progress, stats, settings, due, onStart, onCreate, onDe
               screen is for, so they go above the fold. */}
           <div style={{ marginBottom: 16 }}>
             <div style={{ ...LBL, marginBottom: 9 }}>Test yourself</div>
+            {/* Above the three-up because it is the one that takes an hour and
+                the one worth doing in the week before an exam — and because a
+                fourth tile in that row would be 78px wide on a phone. */}
+            {/* No deck gate. A paper is written for a STANDARD now, not out of a
+                deck, so someone who has made no cards yet is exactly the person
+                who should be able to sit one. */}
+            {(
+              <button className="sf-tap" onClick={onPaper}
+                style={{ width: '100%', display: 'flex', alignItems: 'center', gap: 12, textAlign: 'left',
+                  cursor: 'pointer', background: T.surface, border: `1px solid ${T.border}`,
+                  borderRadius: R.well, boxShadow: SH.raised, padding: '14px 15px', marginBottom: 10 }}>
+                <span style={{ width: 40, height: 40, borderRadius: 12, background: rgba(T.accent, 0.12),
+                  color: T.accentInk, display: 'grid', placeItems: 'center', flexShrink: 0 }}><Ico name="clock" size={20} /></span>
+                <span style={{ minWidth: 0, flex: 1 }}>
+                  <span style={{ display: 'block', fontFamily: SANS, fontSize: 15.5, fontWeight: 700, color: T.ink }}>Sit a full paper</span>
+                  <span style={{ display: 'block', fontFamily: SANS, fontSize: 12.5, color: T.faint }}>A whole exam, on the clock, marked part by part</span>
+                </span>
+                <span style={{ color: T.faint, display: 'flex', flexShrink: 0 }}><Ico name="chevron" size={16} /></span>
+              </button>
+            )}
             <div style={{ display: 'flex', gap: 10 }}>
               {[
                 /* First on purpose: quiz and learn both assume you already know
@@ -8635,6 +9503,7 @@ export default function App(){
   const [thread, setThread] = useState([]);              // its conversation, this session only
   const [starterOpen, setStarterOpen] = useState(false); // the ready-made deck picker
   const [diagOpen, setDiagOpen] = useState(false);       // the gap-finding diagnostic
+  const [paperOpen, setPaperOpen] = useState(false);     // the full practice paper
   const [createSeed, setCreateSeed] = useState(null);    // material handed to Create from elsewhere
   const reduceMotion = useRef(false);
 
@@ -8793,6 +9662,13 @@ export default function App(){
   /* The last diagnosis is kept for the same reason as the Learn session: it is
      a to-do list, and one you cannot reopen is a worse one. Same storage key
      too — the four-key limit is the Artifact runtime's, not a preference. */
+  /* An hour of writing. Saved the same way the diagnosis is — into settings,
+     so closing the tab mid-paper does not throw it away. */
+  const savePaper = useCallback((state) => {
+    const s = { ...settingsRef.current, paper: state || null };
+    setSettings(s); save('settings:main', s);
+  }, []);
+
   const saveDiagnosis = useCallback((report) => {
     const s = { ...settingsRef.current, diagnosis: report || null };
     setSettings(s); save('settings:main', s);
@@ -8915,7 +9791,7 @@ export default function App(){
         {tab === 'home' && <Home library={library} progress={progress} stats={stats} settings={settings}
           due={dueCount} onStart={() => { setFocus('all'); setTab('feed'); }} onCreate={() => setTab('create')}
           onDecks={() => setTab('decks')} onStudyDeck={startDeck} onQuiz={openQuiz} onLearn={openLearn}
-          onDiagnose={() => setDiagOpen(true)} onSettings={persistSettings}
+          onDiagnose={() => setDiagOpen(true)} onPaper={() => setPaperOpen(true)} onSettings={persistSettings}
           onTutorial={replayTutorial} onStarter={() => setStarterOpen(true)} />}
         {/* key includes focus + mix so switching deck or moving the slider rebuilds the queue */}
         {tab === 'feed' && <Feed key={'feed-' + focus + '-' + cardCount + '-' + longMixOf(settings)}
@@ -8943,6 +9819,8 @@ export default function App(){
     {quiz && <Quiz decks={library.decks} deckId={quiz.deckId} onClose={() => setQuiz(null)} onDone={recordQuiz} />}
     {learn && <LearnMode decks={library.decks} deckId={learn.deckId} session={settings.learnSession}
       onSaveSession={saveLearnSession} onClose={() => setLearn(null)} onDone={recordQuiz} />}
+    {paperOpen && <ExamPaper decks={library.decks} defaultLevel={usualLevel()} saved={settings.paper}
+      onSave={savePaper} onClose={() => setPaperOpen(false)} />}
     {diagOpen && <Diagnose decks={library.decks} defaultLevel={usualLevel()} report={settings.diagnosis}
       onSaveReport={saveDiagnosis} onClose={() => setDiagOpen(false)} onMakeCards={cardsFromGaps} />}
     {starterOpen && <StarterPicker onAdd={addStarter} onClose={() => setStarterOpen(false)} />}
@@ -8952,7 +9830,7 @@ export default function App(){
     {/* the helper is available on every screen — except where something else
         already owns the whole screen (a quiz, the update note, the tutorial) */}
     {askOpen && <AskPanel thread={thread} setThread={setThread} onClose={() => setAskOpen(false)} />}
-    {!askOpen && !quiz && !learn && !diagOpen && !showNews && !showTutorial && !starterOpen && <AskFab onClick={() => setAskOpen(true)} />}
+    {!askOpen && !quiz && !learn && !diagOpen && !paperOpen && !showNews && !showTutorial && !starterOpen && <AskFab onClick={() => setAskOpen(true)} />}
     </>
   );
 }
