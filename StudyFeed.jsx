@@ -1539,7 +1539,13 @@ function paperPrompt(source, level, standard, n, total, already){
     : '';
   return `You are writing QUESTION ${n} of ${total} of a ${level} practice examination paper${standard ? ` for: "${standard}"` : ''}.
 
-Draw on the whole subject, not on any one set of notes: any idea a course on this topic would teach is fair game, and the best question is often about the part a student has not written down. Write it as a real senior-secondary examination question — a concrete situation with named apparatus and actual figures, then parts that climb off it.
+Draw on the whole subject, not on any one set of notes: any idea a course on this topic would teach is fair game, and the best question is often about the part a student has not written down. Write it as a real senior-secondary examination question — a concrete situation carrying real numbers or real material to work from, then parts that climb off it.
+
+STAY INSIDE THE SUBJECT NAMED ABOVE. A question that belongs to a different subject is a failure however good it is. Give the context whatever a question in THAT subject would actually have: an experiment and its measurements for a science, an expression or a set of values for a maths topic, a source or an account for a history one. Do not reach for laboratory apparatus unless the subject is a laboratory science.
+
+WRITE MATHEMATICS IN PLAIN TEXT: x^2, sqrt(3), 3/4, (v - u) / t, 12.5 m/s. Never use LaTeX, backslashes, or dollar-sign maths — a backslash is not valid in this format and it destroys the entire reply.
+
+The subject and topic are ONLY what the student wrote above. If their wording contains a standard code, treat it as a label and nothing more — you do not reliably know what any code covers, and a paper on the wrong subject is worse than no paper. Never infer a subject from a number.
 
 Never say or imply that a question is taken from a particular past paper: no years, no sessions, no "this came up in".
 
@@ -1611,6 +1617,11 @@ async function buildPaper(deck, level, standard, shapeKey, onProgress){
         paperPrompt(source, level, standard, i, shape.questions, already),
         PAPER_MAX_TOKENS, MODEL_SMART, true);
       obj = rescueObjects(reply)[0];
+      /* One backslash the model should not have written is otherwise a
+         question lost: "\\(x + 2\\)" is not valid JSON and the whole reply
+         fails to parse. Strip the escapes JSON does not define and try once
+         more, rather than throwing away a good question over its notation. */
+      if (!obj) obj = rescueObjects(reply.replace(/\\(?!["\\/bfnrtu])/g, ''))[0];
     } catch (e){ noteApiError(e); }
     if (!obj) continue;
     const parts = partsFromJson(obj);
@@ -4777,7 +4788,11 @@ function PaperPartResult({ res, part, level, open, onToggle }){
 function ExamPaper({ decks, defaultLevel, saved, onSave, onClose }){
   /* setup | building | sitting | marking | report */
   const [phase, setPhase] = useState(saved && saved.phase ? saved.phase : 'setup');
-  const [deckId, setDeckId] = useState(saved ? saved.deckId : (decks[0] ? decks[0].id : ''));
+  /* No deck unless one is actually chosen. This defaulted to decks[0], which
+     meant a student who named a maths standard and pressed go got a paper
+     steered by whatever deck sorted first — science, in the report that found
+     this. A screen that calls the deck optional must not pick one for you. */
+  const [deckId, setDeckId] = useState(saved ? saved.deckId : '');
   const [standard, setStandard] = useState(saved ? saved.standard : '');
   const [shapeKey, setShapeKey] = useState(saved ? saved.shapeKey : 'full');
   const [paper, setPaper] = useState(saved ? saved.paper : null);
@@ -4794,12 +4809,21 @@ function ExamPaper({ decks, defaultLevel, saved, onSave, onClose }){
   /* Home keeps its own copy of this; it is a local there, not an export. */
   const LBL = { fontFamily: SANS, fontSize: 11, fontWeight: 700, letterSpacing: '0.06em', textTransform: 'uppercase', color: T.faint };
 
-  const deck = decks.find(d => d.id === deckId) || decks[0] || null;
+  /* Enough letters to name a subject. A standard code on its own has none,
+     and the app will not guess what a code covers — see the note by the input. */
+  const hasSubject = (String(standard).match(/[A-Za-z]/g) || []).length >= 3;
+  const codeOnly = standard.trim().length > 0 && !hasSubject;
+
+  const deck = decks.find(d => d.id === deckId) || null;
   const level = (deck && deck.standard) || defaultLevel || 'NCEA Level 1';
 
+  /* Prefill from the deck's SUBJECT and TOPIC, not its level. `deck.standard`
+     is usually "NCEA Level 1" — a level names no subject, and a paper written
+     from a level alone is a paper about nothing in particular. */
   useEffect(() => {
-    if (!deck) return;
-    if (!standard && deck.standard) setStandard(deck.standard);
+    if (!deck || standard.trim()) return;
+    const guess = [deck.subject, deck.topic].filter(Boolean).join(' — ');
+    if (guess) setStandard(guess);
   }, [deckId]);
 
   /* The clock only has to tick while the paper is being sat. Every second, so
@@ -4839,7 +4863,7 @@ function ExamPaper({ decks, defaultLevel, saved, onSave, onClose }){
   };
 
   const start = async () => {
-    if (!standard.trim()) return;
+    if (!hasSubject) return;
     setPhase('building'); setErr(''); setProg(null);
     lastApiError = '';
     try {
@@ -4948,12 +4972,24 @@ function ExamPaper({ decks, defaultLevel, saved, onSave, onClose }){
               <>
                 <div style={{ ...LBL, marginBottom: 8 }}>The standard you are sitting</div>
                 <input value={standard} onChange={e => setStandard(e.target.value)}
-                  placeholder="e.g. Chemistry 1.1 — carbon chemistry"
+                  placeholder="e.g. Maths 1.4 — algebra"
                   style={{ ...INPUT, fontSize: 14.5, marginBottom: 6 }} />
-                <Sub style={{ fontSize: 12.5, marginBottom: 16 }}>
-                  Name it however you say it. The paper is written for this — used in your words, because
-                  the app will not let the model reach for a standard number of its own.
-                </Sub>
+                {codeOnly ? (
+                  /* Said at the moment it matters, with the reason, because
+                     "invalid input" here would read as pedantry — the number
+                     IS what their course outline calls it. */
+                  <div style={{ background: rgba(T.amber, 0.10), borderRadius: R.well, padding: '10px 13px', marginBottom: 16 }}>
+                    <Sub style={{ color: T.ink, fontSize: 13, display: 'flex', gap: 8, alignItems: 'flex-start' }}>
+                      <InlineIco name="warn" size={15} style={{ marginTop: 2 }} />
+                      <span>Add the subject as well — <b>"Maths 1.4 — algebra"</b> rather than just the number. The app will not guess what a standard code covers: the Level 1 standards were rebuilt for 2024, so a code it thinks it recognises is as likely to be a retired one, and you would get a paper on the wrong subject.</span>
+                    </Sub>
+                  </div>
+                ) : (
+                  <Sub style={{ fontSize: 12.5, marginBottom: 16 }}>
+                    Name it however you say it, but include the subject and roughly what it covers —
+                    that is what the paper is written from. Your wording is used as you typed it.
+                  </Sub>
+                )}
 
                 <div style={{ ...LBL, marginBottom: 8 }}>Lean on a deck? <span style={{ textTransform: 'none', letterSpacing: 0, fontWeight: 600 }}>(optional)</span></div>
                 <div className="flex flex-col gap-2" style={{ marginBottom: 16 }}>
@@ -5007,7 +5043,7 @@ function ExamPaper({ decks, defaultLevel, saved, onSave, onClose }){
                 </div>
 
                 {err && <Sub style={{ color: T.red, marginBottom: 12 }}>{err}</Sub>}
-                <Btn full kind="primary" onClick={start} disabled={!standard.trim()}>Write my paper</Btn>
+                <Btn full kind="primary" onClick={start} disabled={!hasSubject}>Write my paper</Btn>
                 <Sub style={{ fontSize: 12.5, marginTop: 10, textAlign: 'center' }}>
                   Takes a minute — each question is written on its own.
                 </Sub>

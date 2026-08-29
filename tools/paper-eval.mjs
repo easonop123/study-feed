@@ -142,7 +142,10 @@ async function callOnce(prompt){
   const reply = payload && payload.choices && payload.choices[0]
     && payload.choices[0].message && payload.choices[0].message.content;
   if (typeof reply !== 'string') return { ok: false, ms, error: 'no content' };
-  const obj = rescueObjects(reply)[0];
+  let obj = rescueObjects(reply)[0];
+  /* buildPaper retries the parse with invalid JSON escapes stripped, so this
+     must too — otherwise it reports failures a student would never see. */
+  if (!obj) obj = rescueObjects(reply.replace(/\\(?!["\\/bfnrtu])/g, ''))[0];
   if (!obj) return { ok: false, ms, error: 'no JSON object', finish: payload.choices[0].finish_reason };
   return { ok: true, ms, obj, raw: reply, usage: payload.usage || {} };
 }
@@ -189,6 +192,57 @@ function score(out, n){
   row.verdict = problems.length ? 'FAIL' : 'pass';
   if (problems.length) row.why = problems.join(' | ');
   return row;
+}
+
+
+/* ---- subject fidelity ----------------------------------------------------
+   The check that was missing, and the reason a maths standard came back as a
+   science paper. Everything above tested ONE standard, phrased helpfully, so
+   "does the paper match the subject you asked for" was never actually asked.
+
+   Two ways it goes wrong and both are here. A standard named in words should
+   produce that subject. A standard given as a bare CODE should produce nothing
+   at all — the app blocks it in the UI, because the model cannot be allowed to
+   infer a subject from a number it does not reliably know. If the model starts
+   confidently writing chemistry for "91947", that is the bug returning.
+
+     node tools/paper-eval.mjs --fidelity
+   -------------------------------------------------------------------------- */
+const SUBJECTS = [
+  { standard: 'Maths 1.4 — algebra',
+    want:  /equation|expression|solve|simplif|factoris|expand|substitut|gradient|graph|formula|algebra/i,
+    avoid: /reaction rate|magnesium|hydrochloric|photosynthes|enzyme|catalyst|ecosystem|titration/i },
+  { standard: 'Science 1.1 — chemical reactions',
+    want:  /reaction|particle|collision|acid|catalyst|rate/i,
+    avoid: /quadratic|factoris|simplify the expression|solve for x/i },
+  { standard: 'History 1.2 — a historical event',
+    want:  /source|evidence|historian|event|cause|consequence|perspective|account/i,
+    avoid: /reaction rate|magnesium|quadratic|photosynthes/i },
+];
+
+async function fidelity(){
+  console.log(`Subject fidelity — ${SUBJECTS.length} standards against ${ENDPOINT}\n`);
+  let ok = 0;
+  for (const sub of SUBJECTS){
+    const out = await callOnce(paperPrompt('', LEVEL, sub.standard, 1, 1, []));
+    if (!out.ok){
+      console.log(`ERR   ${sub.standard.padEnd(34)} ${out.error}`);
+      continue;
+    }
+    const blob = JSON.stringify(out.obj);
+    const hit = sub.want.test(blob);
+    const stray = sub.avoid.test(blob);
+    const pass = hit && !stray;
+    if (pass) ok++;
+    console.log(`${pass ? 'PASS' : 'FAIL'}  ${sub.standard.padEnd(34)} onSubject=${hit} strayed=${stray}  ${out.ms}ms`);
+    if (!pass) console.log(`      context: ${String(out.obj.context || '').slice(0, 150)}`);
+  }
+  console.log(`\n${ok}/${SUBJECTS.length} papers were about the subject asked for`);
+}
+
+if (process.argv.indexOf('--fidelity') > 0){
+  await fidelity();
+  process.exit(0);
 }
 
 const argN = process.argv.indexOf('--n');
