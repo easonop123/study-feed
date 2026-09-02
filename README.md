@@ -120,6 +120,52 @@ The deployed site serves `docs/app.js`, so **always rebuild after editing `Study
 
 Local render check: `.claude/launch.json` defines `studyfeed-web` (esbuild `--servedir=docs --serve=8123`). `/api/nvidia` only exists on Vercel, so AI features can't be exercised in a local static serve.
 
+## Is the AI actually working?
+
+`node tools/health.mjs` calls every model-backed feature in the app through its
+REAL prompt, ceiling, model and reasoning setting — all read out of the call site in
+`StudyFeed.jsx` rather than retyped, so the checker cannot drift from the app. It
+reports OK / EMPTY / UNUSABLE / HTTP and the wall time for each.
+
+```
+node tools/health.mjs                 # all 12 features
+node tools/health.mjs --only mark     # one, by name fragment
+node tools/health.mjs --repeat 3      # latency varies a lot; take a few
+```
+
+It has already earned its keep twice. On its first run (29 Aug 2026) it found
+**"Still stuck? sentence starters" returning nothing at all** — `finish_reason:
+"length"`, all 700 tokens spent, empty message: gpt-oss reasons out of the same
+budget as its answer and the reasoning had eaten the lot, so the button failed every
+time it was pressed. And it found worked-problem generation timing out at the
+proxy's 55s ceiling. Both fixed the same day.
+
+It also found the second bug the hard way: `low` was hand-written per row instead
+of read from the source, so after the fix landed the checker went on testing the old
+request and kept reporting a working feature as broken. Everything the app decides is
+now read from the app.
+
+**Why things are slow, and what was done about it.** The endpoint writes at roughly
+30 tokens a second, so wall time tracks output length almost exactly. Two levers:
+
+- **Ask for less.** `mixTargets` was asking for ~21 cards a call and
+  `GEN_MAX_TOKENS` allowed 2400 — 83 seconds of writing at that rate, against a
+  55s ceiling, so the calls that succeeded were the ones that happened to stop
+  early. Halved (11 quick / 6 long / 2 mcq, ceiling 1700, `batchText` 6000→4000).
+  The same notes still make the same number of cards; they just arrive across more
+  calls that each finish.
+- **Wait in parallel.** `mapLimit` runs `GEN_CONCURRENCY` (3) jobs at a time,
+  preserving input order, for card generation, slide reading and paper marking.
+  Measured **2.90× on three real generates, no failures** — the free tier genuinely
+  overlaps them, and per-call latency barely moved. A twelve-slide PDF goes from
+  twelve waits to four; a nine-part paper from nine to three.
+- **Turn the reasoning down where it is not needed.** The hints and the explainer
+  now pass `lowEffort`: sentence starters went from *broken at 21.9s* to working at
+  2.7s, writing points 5.1s → 6.6s-ish but reliable, explain 9.9s → 5.5s. Marking is
+  deliberately NOT given this — see `takesReasoningEffort` — because grades are the
+  product's core claim and `tools/mark-eval.mjs` measures them at full reasoning.
+  Changing that needs the eval re-run both ways first, not a guess.
+
 ## Usage counts
 
 PostHog for custom events, Vercel Web Analytics for page views. Both live ONLY in

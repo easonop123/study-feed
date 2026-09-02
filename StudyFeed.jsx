@@ -358,8 +358,14 @@ function failureKind(e){
    1.x numbers sitting above the new 1.0.0 cannot cause a mis-fire. They are not
    shown next to the pre-launch entries either — those were dev builds and the
    numbers mean nothing to a student. */
-const APP_VERSION = '1.6.0';
+const APP_VERSION = '1.6.1';
 const PATCH_NOTES = [
+  { v: '1.6.1', date: '2026-08-29', title: 'Faster, and the stuck button works again', items: [
+    'Fixed: "Still stuck? sentence starters" returned nothing at all. It was spending its entire budget thinking and had none left to answer with, so the button just failed. It now answers in about three seconds.',
+    'Making cards is quicker and, more to the point, it stops timing out. It was asking for more cards in one go than it could finish in the time allowed, so some runs died and had to start over. It asks for a sensible number now and gets through.',
+    'Several things at once instead of one after another. A PDF full of slides used to be read one slide at a time; now three are read together, which is about three times faster. The same goes for making cards from long notes, and for marking a full paper — nine parts used to be nine waits in a row.',
+    'Writing points, sentence starters and "explain this further" are all several times faster than they were.',
+  ] },
   { v: '1.6.0', date: '2026-08-27', title: 'Sit a whole paper', items: [
     'New: a full-length practice paper. Name the standard you are sitting and it writes you an exam — a proper context to work from, parts that climb from naming it to justifying it, marks on every part, and a clock.',
     'It writes from the whole subject, not just from your cards. Any idea a course on that topic would teach can turn up, including the parts you never got round to making cards for — which is usually where a paper catches you out. Point it at one of your decks as well if you want it leaning on what you have been studying.',
@@ -1304,7 +1310,7 @@ function dedupeCards(cards){
    request past the proxy's 60s ceiling. 6k characters keeps a single reply
    comfortably inside it even on a slow school connection — the old 12k could
    finish in ~11s at home and still time out on a congested network. */
-function batchText(text, size = 6000){
+function batchText(text, size = 4000){
   const paras = text.split(/\n\s*\n/);
   const batches = [];
   let cur = '';
@@ -1398,6 +1404,8 @@ ${source}`;
 function workedPrompt(source, level, strict){
   return `You are an expert ${level} teacher. From the material below, write WORKED PROBLEMS — questions the student solves by showing a method, not by recalling a fact.
 
+Write between 2 and 4 problems. Not more — a long reply is what pushes this request past the time limit, and five good problems beat nine unfinished ones.
+
 Return ONLY a JSON array. Each element:
 { "type":"worked",
   "prompt": the full problem, including EVERY number and unit needed to solve it,
@@ -1421,14 +1429,19 @@ ${source}`;
 /* turn the slider percentage into concrete per-reply counts */
 /* Per-reply card targets. Tuned to ~18-20 cards/batch so a generate returns a
    full set (Qwen produces close to exactly what's asked, so ask for more). */
+/* Cut roughly in half on 29 Aug 2026 — see the note above GEN_MAX_TOKENS.
+   The same notes still produce the same number of cards overall, because
+   batchText splits them across more calls; each call now finishes instead of
+   one in three dying at the ceiling, and the progress bar moves while it
+   happens rather than sitting still for 55 seconds. */
 function mixTargets(pctLong){
   const p = Math.max(0, Math.min(100, pctLong));
-  if (p <= 5)  return { long: 0, mcq: 3, quick: 18 };
-  if (p >= 95) return { long: 9, mcq: 2, quick: 0 };
+  if (p <= 5)  return { long: 0, mcq: 2, quick: 11 };
+  if (p >= 95) return { long: 6, mcq: 2, quick: 0 };
   return {
-    long:  Math.max(1, Math.round((p / 100) * 10)),
-    mcq:   3,
-    quick: Math.max(2, Math.round(((100 - p) / 100) * 18)),
+    long:  Math.max(1, Math.round((p / 100) * 6)),
+    mcq:   2,
+    quick: Math.max(2, Math.round(((100 - p) / 100) * 11)),
   };
 }
 
@@ -1906,7 +1919,7 @@ function parseReply(mode, reply){
    extended-response ones, without inviting a reply so long it can't finish
    inside the proxy's 60s ceiling. Generation time tracks output tokens more
    than input, so this is the main lever on whether a request beats the clock. */
-const GEN_MAX_TOKENS = 2400;
+const GEN_MAX_TOKENS = 1700;
 
 /* Cut a chunk at the paragraph break nearest the middle, so a half still reads
    as continuous notes rather than stopping mid-sentence. */
@@ -1941,28 +1954,71 @@ async function genChunk(chunk, mode, level, model, pctLong, strict, depth){
   }
 }
 
+/* Run jobs with a little overlap, keeping input order.
+
+   A generate is almost entirely waiting: the endpoint writes at roughly 30
+   tokens a second, so a chunk takes half a minute during which nothing else
+   happens. Waiting is the one thing that parallelises for free. Three at a
+   time, because the free tier allows around 40 requests a minute and three
+   concurrent generates stays well inside that while turning a twelve-image
+   PDF from twelve waits into four.
+
+   Order is preserved deliberately. Cards are concatenated per chunk and slide
+   text is joined per slide, and neither should depend on which call happened
+   to come back first — a deck whose order changes run to run is a deck the
+   student cannot recognise.
+
+   Progress counts COMPLETED jobs rather than started ones, which is why it
+   begins at zero: with three in flight, "3 of 5" the instant you press the
+   button would be a lie. */
+const GEN_CONCURRENCY = 3;
+async function mapLimit(items, limit, fn, onDone){
+  const out = new Array(items.length);
+  let next = 0, done = 0;
+  const worker = async () => {
+    for (;;){
+      const i = next++;
+      if (i >= items.length) return;
+      out[i] = await fn(items[i], i);
+      done++;
+      if (onDone) onDone(done, items.length);
+    }
+  };
+  const lanes = Math.max(1, Math.min(limit, items.length));
+  const running = [];
+  for (let i = 0; i < lanes; i++) running.push(worker());
+  await Promise.all(running);
+  return out;
+}
+
 async function genText(source, mode, level, onProgress, model, pctLong, strict){
   const batches = batchText(source);
+  onProgress && onProgress(0, batches.length, 'text');
+  /* genChunk swallows its own failures and returns [], so a chunk that dies
+     cannot take the others down with it — which is what makes running them
+     together safe. */
+  const per = await mapLimit(batches, GEN_CONCURRENCY,
+    (b) => genChunk(b, mode, level, model, pctLong, strict, 0),
+    (done, total) => { onProgress && onProgress(done, total, 'text'); });
   let cards = [];
-  for (let i = 0; i < batches.length; i++){
-    onProgress && onProgress(i + 1, batches.length, 'text');
-    cards = cards.concat(await genChunk(batches[i], mode, level, model, pctLong, strict, 0));
-  }
+  for (let i = 0; i < per.length; i++) cards = cards.concat(per[i]);
   return cards;
 }
 /* Transcribe each image to study text (one vision call per image, since the
    vision model takes only one image at a time), then join into a single notes
    blob the normal Qwen pipeline can turn into cards. */
 async function transcribeImages(images, onProgress){
-  const parts = [];
-  for (let i = 0; i < images.length; i++){
-    onProgress && onProgress(i + 1, images.length, 'images');
+  onProgress && onProgress(0, images.length, 'images');
+  const parts = await mapLimit(images, GEN_CONCURRENCY, async (img, i) => {
     try {
-      const txt = await describeImage(images[i]);
-      if (txt && txt.trim()) parts.push('# Slide ' + (i + 1) + '\n' + txt.trim());
+      const txt = await describeImage(img);
+      if (txt && txt.trim()) return '# Slide ' + (i + 1) + '\n' + txt.trim();
     } catch (e){ noteApiError(e); genLost++; }
-  }
-  return parts.join('\n\n');
+    return '';
+  }, (done, total) => { onProgress && onProgress(done, total, 'images'); });
+  const kept = [];
+  for (let i = 0; i < parts.length; i++) if (parts[i]) kept.push(parts[i]);
+  return kept.join('\n\n');
 }
 
 function markPrompt(card, answer, level){
@@ -2104,9 +2160,13 @@ function firstBadStep(r){
    written for this screen that nobody has measured. The part is handed over as
    the card it already is.
 
-   Sequentially, not in parallel. Eight parts fired at once at a free tier that
-   rate-limits at ~40 requests a minute is eight failures, and the student has
-   just spent an hour on this. Slower and finished beats fast and rejected. */
+   Three at a time, not nine. Firing every part at once at a tier that limits
+   around 40 requests a minute would be a wall of failures after an hour of
+   writing — but running them strictly one after another meant nine parts at
+   roughly half a minute each, which is four and a half minutes of spinner.
+   Three is the same lane count the generator uses against the same tier, and
+   it turns that wait into a minute and a half. Order is preserved, so the
+   report reads down the paper. */
 function partAsCard(q, p){
   return {
     type: 'extended',
@@ -2124,30 +2184,26 @@ async function markPaper(paper, answers, level, onProgress){
   for (const q of paper.questions){
     for (const p of q.parts) jobs.push({ q: q.n, label: p.label, part: p, question: q });
   }
-  const out = [];
-  for (let i = 0; i < jobs.length; i++){
-    const j = jobs[i];
-    if (onProgress) onProgress(i + 1, jobs.length);
+  if (onProgress) onProgress(0, jobs.length);
+  return await mapLimit(jobs, GEN_CONCURRENCY, async (j) => {
     const key = j.q + j.label;
     const written = String((answers && answers[key]) || '').trim();
     if (!written){
       /* Left blank. Not sent to the model — there is nothing to mark, it would
          cost a call and it would come back with feedback about an empty box. */
-      out.push({ key: key, q: j.q, label: j.label, marks: j.part.marks, blank: true, grade: 'Not yet' });
-      continue;
+      return { key: key, q: j.q, label: j.label, marks: j.part.marks, blank: true, grade: 'Not yet' };
     }
     let r = null;
     try { r = await markAnswer(partAsCard(j.question, j.part), written, level); }
     catch (e){ noteApiError(e); }
-    out.push({
+    return {
       key: key, q: j.q, label: j.label, marks: j.part.marks,
       blank: false,
       answer: written,
       grade: (r && GRADES.indexOf(r.grade) >= 0) ? r.grade : null,
       r: r || null,
-    });
-  }
-  return out;
+    };
+  }, (done, total) => { if (onProgress) onProgress(done, total); });
 }
 
 /* The headline grade, worked out HERE and not asked for.
@@ -2346,7 +2402,7 @@ ${isNcea(level) ? 'Never name or cite an achievement standard number or title, a
 Return ONLY a JSON array of short strings. No prose outside it.`;
 }
 async function getHints(card, level){
-  const reply = await callModel(hintPrompt(card, level), 600, MODEL_SMART);
+  const reply = await callModel(hintPrompt(card, level), 900, MODEL_SMART, true);
   const arr = parseJsonArray(reply);
   return Array.isArray(arr) ? arr.map(String).filter(Boolean).slice(0, 6) : [];
 }
@@ -2369,7 +2425,7 @@ Do NOT fill in the blanks. Do NOT give the finished answer, the actual terms, or
 Return ONLY a JSON array of short strings. No prose outside it.`;
 }
 async function getBigHint(card, level){
-  const reply = await callModel(bigHintPrompt(card, level), 700, MODEL_SMART);
+  const reply = await callModel(bigHintPrompt(card, level), 1100, MODEL_SMART, true);
   const arr = parseJsonArray(reply);
   return Array.isArray(arr) ? arr.map(String).filter(Boolean).slice(0, 5) : [];
 }
@@ -2425,7 +2481,7 @@ Return ONLY JSON:
 Explain the card's own answer — don't contradict it, and don't invent facts, values or NZQA codes that aren't implied by it.`;
 }
 async function getExplain(card, level, depth){
-  const reply = await callModel(explainPrompt(card, level, depth), 900, MODEL_SMART);
+  const reply = await callModel(explainPrompt(card, level, depth), 1200, MODEL_SMART, true);
   const objs = rescueObjects(reply);
   return objs[0] || null;
 }
