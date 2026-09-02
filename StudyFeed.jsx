@@ -1778,7 +1778,21 @@ async function postOnce(body, timeoutMs){
    waiting it out. Later attempts sit just past the proxy's own 60s ceiling
    (api/nvidia.js maxDuration) so the server's real error has time to arrive
    instead of the browser hanging up first and hiding it. */
-const ATTEMPT_MS = [40000, 62000, 62000];
+/* The first attempt used to give up at 40s while the proxy does not give up
+   until 55s (api/nvidia.js aborts upstream at 55000 and returns its own 504).
+   The client was therefore killing requests the server was still happily
+   working on: measured across a full health-check run, calls routinely land
+   between 25 and 55 seconds, so a reply that would have arrived at 45s was
+   aborted at 40, retried from scratch, and turned a 45-second wait into an
+   86-second one — or into a failure if the retry was slow too.
+
+   58s is just past the proxy's own abort, so the first attempt now runs to the
+   end of the server's budget and receives the proxy's structured 504 rather
+   than pre-empting it. The cost is that a genuinely dead connection takes 58s
+   to notice instead of 40; that is the right trade when the common case is a
+   slow answer rather than no answer. If NVIDIA's tier ever gets fast again,
+   this and the proxy's 55000 move together or not at all. */
+const ATTEMPT_MS = [58000, 62000, 62000];
 const RETRY_WAIT_MS = [1200, 4000];
 const sleep = (ms) => new Promise(r => setTimeout(r, ms));
 /* Worth another go: a timeout, a dropped connection, rate limiting, or a 5xx.
