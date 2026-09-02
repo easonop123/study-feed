@@ -110,6 +110,35 @@ promotes an element to its own layer and is the one property here with a real
 paint cost, and the cheapest device is the one most likely to be reading this on
 a bus.
 
+## Working on this from another machine
+
+```bash
+git clone https://github.com/easonop123/study-feed.git
+cd study-feed
+npm install
+npm run build
+```
+
+Verified from a clean clone (29 Aug 2026): 64 tracked files, and `npm run build`
+reproduces `docs/app.js` **byte-for-byte identical** to the committed one — so the
+repo really is the whole project, not the project plus whatever happened to be on
+one laptop.
+
+Deliberately NOT in the repo:
+
+- **`NVIDIA_API_KEY`.** It lives only in the Vercel dashboard (Project → Settings →
+  Environment Variables); `.env*` is gitignored and the key has never been
+  committed. That is why `/api/nvidia` exists only on the deployed site, and why
+  no AI feature can be exercised in a local static serve. To try an AI change,
+  deploy it — or use anything in `tools/`, which all call the live endpoint and
+  therefore work from any machine with no key at all.
+- `node_modules/`, the eval `.log` files, and `StudyFeed.txt` (a paste-friendly
+  copy of the source for dropping into a chat, never a second source of truth).
+
+Beyond the clone you need Node LTS, and the GitHub CLI if you want to open PRs.
+On this machine neither is on the default shell PATH — they live at
+`C:\Program Files\nodejs\` and `C:\Program Files\GitHub CLI\gh.exe`.
+
 ## Build & deploy
 
 ```bash
