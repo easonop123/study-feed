@@ -239,7 +239,9 @@ const DRAFT_MAX_AGE_MS = 24 * 60 * 60 * 1000;   // a reload, not a revision cycl
 const DRAFT_MAX = 40;
 const DRAFT_DEBOUNCE_MS = 700;
 
-let draftCache = null;          // lazily loaded, then authoritative for the session
+let draftCache = null;          // the store, once read; authoritative thereafter
+let draftPending = null;        // typed before the read landed — newer than disk
+let draftLoading = null;        // the single in-flight read, shared by all callers
 let draftTimer = null;
 
 function pruneDrafts(all){
@@ -253,38 +255,74 @@ function pruneDrafts(all){
   return fresh;
 }
 
+/* ONE read of the store, shared by everyone who asks while it is in flight.
+
+   The read is genuinely async — in the Artifact it is a `window.storage.get`
+   round trip — and the student is typing into the box the whole time. The
+   window is small and the two things that can go wrong in it are not:
+   assigning the loaded store over the cache throws away whatever they typed
+   while it was loading, and letting the debounce fire before the load lands
+   persists a store containing ONLY the card in front of them, wiping every
+   other draft they had.
+
+   So the load merges rather than assigns, and anything typed meanwhile wins —
+   it is newer than what was on disk by definition. Everything that writes
+   waits on this same promise before it persists. */
+function ensureDrafts(){
+  if (draftCache) return Promise.resolve(draftCache);
+  if (!draftLoading){
+    draftLoading = load(DRAFT_KEY, {}).then((stored) => {
+      draftCache = pruneDrafts({ ...(stored || {}), ...(draftPending || {}) });
+      draftPending = null;
+      draftLoading = null;
+      return draftCache;
+    });
+  }
+  return draftLoading;
+}
+
 async function readDraft(cardId){
   if (!cardId) return '';
-  if (!draftCache) draftCache = pruneDrafts(await load(DRAFT_KEY, {}));
-  const d = draftCache[cardId];
+  const all = await ensureDrafts();
+  const d = all[cardId];
   return (d && typeof d.text === 'string') ? d.text : '';
 }
 
-/* Debounced so a fast typist does not write the whole store on every keystroke.
-   The cache updates immediately, so a second component reading it in the same
-   tick sees the new value even before it has been persisted. */
+/* Debounced so a fast typist does not write the whole store on every
+   keystroke. The in-memory copy updates synchronously, so a component reading
+   it in the same tick sees the new value before it has been persisted — and
+   before the load has even finished, which is the case that matters. */
 function writeDraft(cardId, text){
   if (!cardId) return;
-  if (!draftCache) draftCache = {};
-  if (String(text || '').trim()) draftCache[cardId] = { text: text, at: Date.now() };
-  else delete draftCache[cardId];
+  if (!draftCache && !draftPending) draftPending = {};
+  const into = draftCache || draftPending;
+  if (String(text || '').trim()) into[cardId] = { text: text, at: Date.now() };
+  else delete into[cardId];
+  ensureDrafts();
   if (draftTimer) clearTimeout(draftTimer);
   draftTimer = setTimeout(() => {
     draftTimer = null;
-    draftCache = pruneDrafts(draftCache);
-    save(DRAFT_KEY, draftCache);
+    /* Work from the value the load resolved with, not from the module
+       variable — by the time this runs the variable may have been replaced,
+       and reading it is how a stale or missing store gets written back. */
+    ensureDrafts().then((all) => {
+      draftCache = pruneDrafts(all);
+      save(DRAFT_KEY, draftCache);
+    });
   }, DRAFT_DEBOUNCE_MS);
 }
 
 /* Called when the card is done with — the answer has been marked and the
    student has moved on, so keeping it would only risk handing it back. */
 function clearDraft(cardId){
-  if (!cardId || !draftCache) return;
-  if (!(cardId in draftCache)) return;
-  delete draftCache[cardId];
-  if (draftTimer) clearTimeout(draftTimer);
-  draftTimer = null;
-  save(DRAFT_KEY, draftCache);
+  if (!cardId) return;
+  if (draftPending) delete draftPending[cardId];
+  if (draftCache && !(cardId in draftCache) && !draftLoading) return;
+  if (draftTimer){ clearTimeout(draftTimer); draftTimer = null; }
+  ensureDrafts().then((all) => {
+    delete all[cardId];
+    save(DRAFT_KEY, all);
+  });
 }
 
 /* longMix = what % of your cards should be long (extended-response) answers.
@@ -3082,7 +3120,14 @@ function Progress({ label, value, valueText, right, colour, height = 12, reduceM
    Thresholds sit either side of the two things that actually happen: past ~22s
    this call is slower than most, and past ~50s it is near the proxy's 55s
    abort, after which the client quietly starts again — which is exactly when a
-   student needs telling that "still trying" is true. */
+   student needs telling that "still trying" is true.
+
+   `steady` is for the screens that are already telling the truth themselves:
+   writing a paper, marking a paper and generating cards all make MANY calls
+   and count them in the title. Those cross both thresholds every time by
+   design, so ageing their subtitle would replace real information with
+   "the free AI is busy" while a counter ticks up in front of the student —
+   alarming, and wrong. Ageing is for a single call with nothing else to say. */
 const SLOW_AFTER_MS = 22000;
 const VERY_SLOW_AFTER_MS = 50000;
 
@@ -4202,7 +4247,7 @@ function ExtendedFace({ card, phase, deck, onReveal, onBack, demo }){
           )}
           <SymbolBar onInsert={insertSymbol} />
           <div className="flex items-center justify-between" style={{ marginTop: 7, marginBottom: 11 }}>
-            <Sub style={{ fontSize: 12 }}>{words > 0 ? `${words} words` : 'Even a rough attempt beats reading the answer'}</Sub>
+            <Sub style={{ fontSize: 12 }}>{words > 0 ? plural(words, 'word') : 'Even a rough attempt beats reading the answer'}</Sub>
           </div>
           {/* Marking is a long wait against the model — tens of seconds, and
               longer when the free tier is busy. Without this the screen just
@@ -4980,7 +5025,7 @@ function PaperPart({ q, part, value, onChange, onCommit }){
       </div>
 
       <div className="flex items-center justify-between gap-3" style={{ marginBottom: 6 }}>
-        <Sub style={{ fontSize: 12 }}>{words > 0 ? `${words} words` : ' '}</Sub>
+        <Sub style={{ fontSize: 12 }}>{words > 0 ? plural(words, 'word') : ' '}</Sub>
         <>
           <input ref={photoRef} type="file" accept="image/*" style={{ display: 'none' }}
             onChange={(e) => { const f = (e.target.files || [])[0]; if (e.target) e.target.value = ''; if (f) usePhoto(f); }} />
@@ -5329,7 +5374,7 @@ function ExamPaper({ decks, defaultLevel, saved, onSave, onClose }){
 
         {phase === 'building' && (
           <Card style={{ padding: '10px 14px' }}>
-            <Loading size={92}
+            <Loading size={92} steady
               title={prog ? `Writing question ${prog.i} of ${prog.n}…` : 'Writing your paper…'}
               subtitle="A scenario, then parts that climb from naming it to justifying it." />
           </Card>
@@ -5427,7 +5472,7 @@ function ExamPaper({ decks, defaultLevel, saved, onSave, onClose }){
 
         {phase === 'marking' && (
           <Card style={{ padding: '10px 14px' }}>
-            <Loading size={92}
+            <Loading size={92} steady
               title={prog ? `Marking part ${prog.i} of ${prog.n}…` : 'Marking your paper…'}
               subtitle="Every part against its own Achieved, Merit and Excellence — one at a time, so none of them get dropped." />
           </Card>
@@ -6206,7 +6251,7 @@ function Create({ onSave, settings, onSettings, onPending, onStarter, seed, onSe
       )}
       {busy && (
         <Card style={{ marginTop: 14, padding: '10px 8px', boxShadow: SH.raised }}>
-          <Loading title={progText} subtitle="Writing questions, answers and the marking for each one." />
+          <Loading steady title={progText} subtitle="Writing questions, answers and the marking for each one." />
         </Card>
       )}
 
@@ -6326,7 +6371,7 @@ function DraftReview({ drafts, setDrafts, meta, setMeta, onSave, onCancel, short
         })}
       </div>
 
-      <Btn full kind="primary" onClick={onSave} disabled={!kept}>Save {kept} cards</Btn>
+      <Btn full kind="primary" onClick={onSave} disabled={!kept}>Save {plural(kept, 'card')}</Btn>
     </div>
   );
 }
@@ -6681,7 +6726,7 @@ function Stats({ decks, progress, stats }){
           );
         })}
       </div>
-      <Sub style={{ marginTop: 18, textAlign: 'center' }}>{totalCards} cards across {decks.length} decks</Sub>
+      <Sub style={{ marginTop: 18, textAlign: 'center' }}>{plural(totalCards, 'card')} across {plural(decks.length, 'deck')}</Sub>
     </div>
   );
 }
@@ -6757,7 +6802,7 @@ function TransferCard({ library, progress, onImport }){
     try {
       const res = mergeImport(JSON.parse(raw), library, progress);
       onImport(res);
-      say(`Added ${res.deckCount} deck${res.deckCount > 1 ? 's' : ''} · ${res.cardCount} cards.`);
+      say(`Added ${plural(res.deckCount, 'deck')} · ${plural(res.cardCount, 'card')}.`);
       setText(''); setPasting(false);
     } catch (e){ say(e.message || 'That did not look like an export.', true); }
   };
@@ -6778,7 +6823,7 @@ function TransferCard({ library, progress, onImport }){
 
       <div className="flex items-center justify-between" style={{ marginBottom: 7 }}>
         <Sub style={{ fontSize: 12.5, fontWeight: 700, color: T.ink }}>
-          Export {chosenCards > 0 ? `(${chosen.length} deck${chosen.length > 1 ? 's' : ''} · ${chosenCards} card${chosenCards > 1 ? 's' : ''})` : ''}
+          Export {chosenCards > 0 ? `(${plural(chosen.length, 'deck')} · ${plural(chosenCards, 'card')})` : ''}
         </Sub>
         {library.decks.length > 1 && (
           <button className="sf-tap" onClick={() => picking ? setPicking(false) : startPicking()}
@@ -7066,7 +7111,7 @@ function Home({ library, progress, stats, settings, due, onStart, onCreate, onDe
           <Card style={{ padding: '22px 24px', marginBottom: 16, display: 'flex', alignItems: 'center', gap: 22, flexWrap: 'wrap' }}>
             <div style={{ flex: '1 1 260px' }}>
               <div style={{ fontFamily: SANS, fontSize: 21, fontWeight: 750, letterSpacing: '-0.01em', color: T.ink }}>
-                {due > 0 ? `You've got ${due} card${due > 1 ? 's' : ''} ready` : 'You\'re all caught up'}
+                {due > 0 ? `You've got ${plural(due, 'card')} ready` : 'You\'re all caught up'}
               </div>
               <Sub style={{ marginTop: 5, marginBottom: 18 }}>
                 {due > 0 ? `A mix of quick recall and long answers — about ${mins} min.` : 'Nothing due right now. Get ahead with some extra practice, or make more cards.'}
@@ -7223,7 +7268,7 @@ function Home({ library, progress, stats, settings, due, onStart, onCreate, onDe
             {[
               { icon: 'plus', t: 'Make new cards', s: 'Paste notes, a file, or a topic', on: onCreate },
               flagged > 0
-                ? { icon: 'warn', t: 'Review your tricky ones', s: `${flagged} card${flagged > 1 ? 's' : ''} keep tripping you up`, on: onStart }
+                ? { icon: 'warn', t: 'Review your tricky ones', s: `${plural(flagged, 'card')} keep tripping you up`, on: onStart }
                 : { icon: 'stack', t: 'Study your feed', s: 'Review what\'s due today', on: onStart },
               { icon: 'folder', t: 'All my decks', s: 'Edit, rename, export or delete', on: onDecks },
             ].map((q, i) => (
@@ -8998,9 +9043,9 @@ function StarterPicker({ onAdd, onClose }){
                   <Sub style={{ fontSize: 13, marginTop: 2 }}>{d.blurb}</Sub>
                   <div className="flex items-center gap-1.5" style={{ marginTop: 8, flexWrap: 'wrap' }}>
                     <Chip colour={T.muted}>{d.subject}</Chip>
-                    <Chip colour={T.muted}>{n.total} cards</Chip>
+                    <Chip colour={T.muted}>{plural(n.total, 'card')}</Chip>
                     {/* the long answers are the reason to pick one of these up */}
-                    <Chip colour={T.accentInk}>{n.long} long answer{n.long === 1 ? '' : 's'}</Chip>
+                    <Chip colour={T.accentInk}>{plural(n.long, 'long answer')}</Chip>
                   </div>
                 </div>
               </button>

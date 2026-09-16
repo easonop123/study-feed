@@ -52,10 +52,15 @@ function extractConst(name){
    round-trip the app actually performs is part of what is under test. */
 const harness = `
 const STORE = {};
-const IN_ARTIFACT = false;
-const window = { localStorage: {
-  getItem: (k) => (k in STORE ? STORE[k] : null),
-  setItem: (k, v) => { STORE[k] = String(v); },
+/* Pretend to be the Artifact, where reading storage is a real async round
+   trip, and make that trip SLOW on demand. The website's localStorage path is
+   still async (load is an async function) but resolves in a microtask, which
+   is too small a window to catch the race this is here to test. */
+let READ_DELAY = 0;
+const IN_ARTIFACT = true;
+const window = { storage: {
+  get: (k) => new Promise(r => setTimeout(() => r(k in STORE ? { value: STORE[k] } : null), READ_DELAY)),
+  set: (k, v) => { STORE[k] = String(v); return Promise.resolve(); },
 } };
 ${extract('load')}
 ${extract('save')}
@@ -64,8 +69,11 @@ ${extractConst('DRAFT_MAX_AGE_MS')}
 ${extractConst('DRAFT_MAX')}
 ${extractConst('DRAFT_DEBOUNCE_MS')}
 let draftCache = null;
+let draftPending = null;
+let draftLoading = null;
 let draftTimer = null;
 ${extract('pruneDrafts')}
+${extract('ensureDrafts')}
 ${extract('readDraft')}
 ${extract('writeDraft')}
 ${extract('clearDraft')}
@@ -73,10 +81,18 @@ return {
   readDraft, writeDraft, clearDraft, pruneDrafts,
   DRAFT_MAX, DRAFT_MAX_AGE_MS, DRAFT_DEBOUNCE_MS,
   raw: () => STORE[DRAFT_KEY],
-  /* "close the tab and come back": drop the in-memory cache so the next read
-     has to go through storage, which is the whole thing being tested. */
-  reload: () => { draftCache = null; if (draftTimer) clearTimeout(draftTimer); draftTimer = null; },
-  wipe: () => { for (const k of Object.keys(STORE)) delete STORE[k]; draftCache = null; },
+  seed: (obj) => { STORE[DRAFT_KEY] = JSON.stringify(obj); },
+  setReadDelay: (ms) => { READ_DELAY = ms; },
+  /* "close the tab and come back": drop every bit of in-memory state so the
+     next read has to go through storage, which is the whole thing tested. */
+  reload: () => {
+    draftCache = null; draftPending = null; draftLoading = null;
+    if (draftTimer) clearTimeout(draftTimer); draftTimer = null;
+  },
+  wipe: () => {
+    for (const k of Object.keys(STORE)) delete STORE[k];
+    draftCache = null; draftPending = null; draftLoading = null;
+  },
 };
 `;
 const D = new Function(harness)();
@@ -121,6 +137,7 @@ D.wipe();
 D.writeDraft('c3', 'my finished answer');
 await settle();
 D.clearDraft('c3');
+await new Promise(r => setTimeout(r, 40));   // clearDraft persists asynchronously
 D.reload();
 check('grading the card clears its draft', await D.readDraft('c3'), '');
 check('clearing a card that has no draft is a no-op', D.clearDraft('nope'), undefined);
@@ -161,6 +178,48 @@ check('the cache is correct before the debounce fires', await D.readDraft('fast'
 check('and nothing has been written yet', D.raw(), undefined);
 await settle();
 check('one write lands after the debounce', JSON.parse(D.raw()).fast.text, 'third');
+
+/* ---- typing while the store is still being read -------------------------
+   The Artifact reads storage over a real round trip and the student is typing
+   into the box the whole time. Both things that can go wrong in that window
+   silently destroy work, so both are pinned here. */
+console.log('\n  — typing during the initial read —');
+
+D.wipe();
+D.seed({ other: { text: 'a draft on another card', at: Date.now() },
+         c1: { text: 'what was on disk', at: Date.now() } });
+D.setReadDelay(80);
+const reading = D.readDraft('c1');            // starts the slow read
+D.writeDraft('c1', 'what they just typed');   // lands mid-flight
+check('the read still resolves', typeof (await reading), 'string');
+check('typing mid-read is not overwritten by the load', await D.readDraft('c1'), 'what they just typed');
+check('and another card\'s draft is not lost', await D.readDraft('other'), 'a draft on another card');
+
+await settle();
+const persisted = JSON.parse(D.raw());
+check('what was persisted keeps both cards', Object.keys(persisted).sort(), ['c1', 'other']);
+check('and keeps the typed version', persisted.c1.text, 'what they just typed');
+
+D.reload();
+check('still there after a reload', await D.readDraft('c1'), 'what they just typed');
+check('and so is the other card', await D.readDraft('other'), 'a draft on another card');
+
+/* Grading a card before its store has finished loading must still clear it. */
+D.wipe();
+D.seed({ g1: { text: 'already marked', at: Date.now() }, g2: { text: 'keep me', at: Date.now() } });
+D.setReadDelay(80);
+D.clearDraft('g1');
+await new Promise(r => setTimeout(r, 200));
+check('clearing during the read still clears', await D.readDraft('g1'), '');
+check('and leaves the others alone', await D.readDraft('g2'), 'keep me');
+
+/* Two cards read at once must share one load, not race each other. */
+D.wipe();
+D.seed({ p: { text: 'P', at: Date.now() }, q: { text: 'Q', at: Date.now() } });
+D.setReadDelay(60);
+const [rp, rq] = await Promise.all([D.readDraft('p'), D.readDraft('q')]);
+check('concurrent reads both get their own draft', [rp, rq], ['P', 'Q']);
+D.setReadDelay(0);
 
 console.log(`\n${failed ? failed + ' FAILED' : 'all passed'}`);
 if (failed) process.exit(1);
