@@ -29,7 +29,7 @@
 
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
-import { dirname, join } from 'node:path';
+import { dirname, join, resolve } from 'node:path';
 import { CASES } from './mark-eval-cases.mjs';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
@@ -300,7 +300,13 @@ async function main(){
   }
 
   report(rows);
-  const outPath = join(HERE, arg('out', 'mark-eval-results.json'));
+  /* join(HERE, ...) is right for a bare filename and wrong for a path the
+     caller typed: `--out tools/x.json` run from the repo root became
+     tools/tools/x.json, and the whole run was lost at the last line after
+     twenty minutes of live calls. Resolve against the cwd when the caller
+     gave a path, and keep the old behaviour when they gave a name. */
+  const outArg = arg('out', 'mark-eval-results.json');
+  const outPath = /[\\/]/.test(outArg) ? resolve(outArg) : join(HERE, outArg);
   const { writeFileSync } = await import('node:fs');
   writeFileSync(outPath, JSON.stringify(rows, null, 2));
   console.log(`\nFull rows: ${outPath}`);

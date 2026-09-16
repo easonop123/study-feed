@@ -1833,13 +1833,6 @@ function isRetryable(e){
   const m = (e && e.message) ? e.message : '';
   return /timed out|could not reach/i.test(m) || /API returned (429|5\d\d)/.test(m);
 }
-/* Specifically "the reply was not finished in the time allowed" — either our
-   proxy's own 55s abort (HTTP 504) or the browser's. Distinct from 429 or a
-   502, which say nothing about how long the answer was going to be. */
-function isTimeout(e){
-  const m = (e && e.message) ? e.message : '';
-  return /timed out/i.test(m) || /API returned 504/.test(m);
-}
 
 async function postChat(messages, maxTokens, model, lowEffort){
   const body = {
@@ -1863,24 +1856,6 @@ async function postChat(messages, maxTokens, model, lowEffort){
     catch (e){
       last = e;
       if (i === ATTEMPT_MS.length - 1 || !isRetryable(e)) break;
-      /* If the answer did not FIT IN THE TIME, asking for the identical answer
-         again is a bet on the queue being kinder, and it costs the student
-         another minute to place. Ask for a cheaper one instead: reasoning
-         comes out of the same budget as the reply on gpt-oss, and turning it
-         down measured a 60-70% cut in completion tokens, which is what moves a
-         call back inside the 55s wall.
-
-         The point is that this leaves the FIRST attempt alone. Marking still
-         asks for full reasoning every time, and a student only ever gets the
-         cheaper version on a request that had already failed — where the
-         alternative is not a better mark, it is no mark. That is a better
-         trade than turning the reasoning down for everybody to protect the
-         unlucky quarter, which is the other way this could have been fixed.
-
-         Only for timeouts. A 429 is rate limiting and a 502 is the far end
-         falling over; neither is a statement about the length of the reply, so
-         both retry unchanged. */
-      if (isTimeout(e) && takesReasoningEffort(model)) body.reasoning_effort = 'low';
       await sleep(RETRY_WAIT_MS[i]);
     }
   }
