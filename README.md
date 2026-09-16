@@ -223,7 +223,10 @@ the model declining to award Excellence when it has no room to think, marking
 those answers Merit instead. That is the one grade this product cannot get wrong;
 the landing page and the upgrade panel are both built on the Merit→Excellence gap,
 and a marker that quietly capped everyone at Merit would look healthy on every
-other number in the table. Run at `tools/mark-eval-low-reasoning.log`.
+other number in the table. The run is committed at
+`tools/mark-eval-low-reasoning.log` — force-added past the `*.log` ignore,
+because it is the evidence for a rule rather than the output of a run, and the
+next person tempted by this optimisation should be able to read it.
 
 **A retry that downshifts was tried and taken back out**, which is worth recording
 because it sounds obviously right. The idea: a request that did not fit the time
