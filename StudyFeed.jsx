@@ -211,6 +211,82 @@ async function save(key, value){
   } catch (e){ console.error('storage.set failed', key, e); return false; }
 }
 
+/* ---- answer drafts -------------------------------------------------------
+
+   A long answer is three hundred words the student typed, and until now it
+   lived in component state only: a reload, a closed tab or a stray tap on a
+   nav item destroyed it. That used to be a rare accident. It is not rare any
+   more — the free tier times out on roughly 1 call in 8, the marking screen
+   can sit there for over a minute, and the thing a person does to a screen
+   that looks stuck is reload it. The loading screen now asks them not to;
+   this is what makes that request unnecessary rather than merely polite.
+
+   A FIFTH storage key, which the app has avoided until now. It earns it:
+   drafts are written on a debounce while typing, and settings:main is held in
+   App state and saved whole, so routing draft writes through settings from a
+   component this deep would race with App's own writes and lose one or the
+   other. The Ask panel's "no fifth key" note is about a chat thread that is
+   meant to be transient; a half-written exam answer is not.
+
+   Drafts are deliberately NOT exported with a deck — they are work in
+   progress, not content.
+
+   Only a RECENT draft is offered back. Restoring an answer weeks later, when
+   the card has come round again in the feed, would hand the student their old
+   words at exactly the moment the point is to produce them from memory. */
+const DRAFT_KEY = 'drafts:main';
+const DRAFT_MAX_AGE_MS = 24 * 60 * 60 * 1000;   // a reload, not a revision cycle
+const DRAFT_MAX = 40;
+const DRAFT_DEBOUNCE_MS = 700;
+
+let draftCache = null;          // lazily loaded, then authoritative for the session
+let draftTimer = null;
+
+function pruneDrafts(all){
+  const now = Date.now();
+  const fresh = {};
+  const keys = Object.keys(all || {})
+    .filter(k => all[k] && (now - (all[k].at || 0)) < DRAFT_MAX_AGE_MS)
+    .sort((a, b) => (all[b].at || 0) - (all[a].at || 0))
+    .slice(0, DRAFT_MAX);
+  for (const k of keys) fresh[k] = all[k];
+  return fresh;
+}
+
+async function readDraft(cardId){
+  if (!cardId) return '';
+  if (!draftCache) draftCache = pruneDrafts(await load(DRAFT_KEY, {}));
+  const d = draftCache[cardId];
+  return (d && typeof d.text === 'string') ? d.text : '';
+}
+
+/* Debounced so a fast typist does not write the whole store on every keystroke.
+   The cache updates immediately, so a second component reading it in the same
+   tick sees the new value even before it has been persisted. */
+function writeDraft(cardId, text){
+  if (!cardId) return;
+  if (!draftCache) draftCache = {};
+  if (String(text || '').trim()) draftCache[cardId] = { text: text, at: Date.now() };
+  else delete draftCache[cardId];
+  if (draftTimer) clearTimeout(draftTimer);
+  draftTimer = setTimeout(() => {
+    draftTimer = null;
+    draftCache = pruneDrafts(draftCache);
+    save(DRAFT_KEY, draftCache);
+  }, DRAFT_DEBOUNCE_MS);
+}
+
+/* Called when the card is done with — the answer has been marked and the
+   student has moved on, so keeping it would only risk handing it back. */
+function clearDraft(cardId){
+  if (!cardId || !draftCache) return;
+  if (!(cardId in draftCache)) return;
+  delete draftCache[cardId];
+  if (draftTimer) clearTimeout(draftTimer);
+  draftTimer = null;
+  save(DRAFT_KEY, draftCache);
+}
+
 /* longMix = what % of your cards should be long (extended-response) answers.
    Drives both what gets generated and how the feed is blended. */
 const DEFAULT_SETTINGS = { interleave: true, newPerDay: 12, capNew: false, longMix: 30, theme: 'system', name: '', examDate: '', lastSeenVersion: '', onboarded: false, dismissedTips: {}, sound: true, font: 'inter', learnSession: null, diagnosis: null, paper: null };
@@ -365,6 +441,7 @@ const PATCH_NOTES = [
     'Fixed: the same thing was happening to Find my gaps when it read your answers — which is the half that actually tells you what is missing, so the report you were waiting for never arrived. Also fixed, and the answers come back roughly twice as fast.',
     'Both of those were checked against the same tests the marking is checked against, so they are quicker without being more forgiving: the method marker still credits every step after your first mistake, and the gaps it names are still the specific missing thing rather than "revise this topic".',
     'The long answer marker was NOT changed, and that is deliberate. Turning its thinking down the same way made it stop recognising Excellence — it marked nearly every Excellence answer as Merit and looked completely normal on everything else. It keeps taking its time.',
+    'Your writing survives a reload. A long answer or a page of working used to exist only on the screen you were looking at, so closing the tab, knocking the back button, or reloading because it looked stuck took the lot. It is kept as you type now and comes straight back. It is dropped once you have graded the card, and after a day — when a card comes round again the point is to write it from memory, not to be handed last week\'s attempt.',
     'The waiting screen tells you the truth now. If something is taking longer than usual it says so, and if the free AI is busy it says that, and asks you not to reload — reloading is what loses the answer you were waiting on.',
     'When the AI does run out of time, the message no longer blames your connection, or tells you to paste a smaller section when what you were doing was having an answer marked.',
     'And a deck with one card in it says "1 card".',
@@ -3237,7 +3314,12 @@ function StudyCard({ card, deck, onGrade, reduceMotion, prog, practice, onFeedba
     return { 0: forGrade(Q.AGAIN), 3: forGrade(Q.HARD), 4: forGrade(Q.GOOD), 5: forGrade(Q.EASY) };
   }, [prog, practice, committedWrong, card.id]);
 
-  const grade = (q) => onGrade(q, committedWrong);
+  /* Every card leaves the screen through here, whichever face it wore, so it
+     is the one place that knows an answer is finished with. Dropping the draft
+     now stops a long answer being handed back on a later review, when the
+     whole point is to produce it from memory again. Harmless for card types
+     that never had one. */
+  const grade = (q) => { clearDraft(card.id); return onGrade(q, committedWrong); };
   const anim = reduceMotion ? {} : { animation: 'sf-in 260ms cubic-bezier(.2,.8,.3,1)' };
 
   return (
@@ -3874,6 +3956,29 @@ const cannedAfter = (value, ms = 700) => new Promise(r => setTimeout(() => r(val
    markup, the states and the ordering are the ones a student meets later. */
 function ExtendedFace({ card, phase, deck, onReveal, onBack, demo }){
   const [answer, setAnswer] = useState('');
+  /* Bring back an unfinished answer from a reload or a closed tab. `demo` is
+     the tutorial, which has a canned answer and must never be restored into.
+     Guarded against landing after the student has started typing: this is
+     async, and an answer they are part-way through always wins. */
+  useEffect(() => {
+    if (demo || !card || !card.id) return undefined;
+    let live = true;
+    readDraft(card.id).then((text) => {
+      if (live && text) setAnswer((cur) => cur ? cur : text);
+    });
+    return () => { live = false; };
+  }, [card && card.id, demo]);
+
+  /* Every route by which the STUDENT changes the answer goes through here, so
+     the draft is saved on the edit rather than in an effect watching `answer`.
+     An effect would fire once on mount with the box still empty and delete the
+     very draft the restore above is in the middle of fetching. The tutorial is
+     excluded: its answer is canned, and persisting it would restore the demo's
+     words into a real card. */
+  const saveAnswer = (next) => {
+    setAnswer(next);
+    if (!demo && card && card.id) writeDraft(card.id, next);
+  };
   const [busy, setBusy] = useState(false);
   const [result, setResult] = useState(null);
   const [err, setErr] = useState('');
@@ -3914,7 +4019,7 @@ function ExtendedFace({ card, phase, deck, onReveal, onBack, demo }){
     selRef.current = { start: pos, end: pos };
     caretRef.current = pos;
     if (ta) ta.focus();
-    setAnswer(val.slice(0, start) + sym + val.slice(end));
+    saveAnswer(val.slice(0, start) + sym + val.slice(end));
   };
 
   useEffect(() => { setAnswer(''); setResult(null); setErr(''); setHints(null); setHintErr(''); setBig(null); setBigErr(''); setPhoto(null); setPhotoNote(''); selRef.current = { start: 0, end: 0 }; }, [card.id]);
@@ -3958,7 +4063,7 @@ function ExtendedFace({ card, phase, deck, onReveal, onBack, demo }){
         return;
       }
       const had = answer.trim();
-      setAnswer(had ? had + '\n\n' + read : read);
+      saveAnswer(had ? had + '\n\n' + read : read);
       setPhoto(null);
       setPhotoNote(had ? 'added' : 'read');
       track('photo_answer', { result: 'ok', words: read.split(/\s+/).length });
@@ -4068,7 +4173,7 @@ function ExtendedFace({ card, phase, deck, onReveal, onBack, demo }){
             )}
           </div>
           <textarea ref={taRef} value={answer}
-            onChange={e => { setAnswer(e.target.value); selRef.current = { start: e.target.selectionStart, end: e.target.selectionEnd }; }}
+            onChange={e => { saveAnswer(e.target.value); selRef.current = { start: e.target.selectionStart, end: e.target.selectionEnd }; }}
             onSelect={rememberSel} onClick={rememberSel} onKeyUp={rememberSel}
             placeholder={`Use the ${card.verb.toLowerCase()} command properly — ${card.marks} marks means ${card.marks >= 5 ? 'several linked points' : 'more than one point'}.`}
             rows={6}
@@ -4566,6 +4671,20 @@ function WorkedResult({ r, card, working, onEdit }){
 
 function WorkedFace({ card, phase, deck, onReveal, onBack }){
   const [working, setWorking] = useState('');
+  /* Same reasoning as ExtendedFace: a page of working is as expensive to lose
+     as a page of prose, and it is lost the same way. */
+  useEffect(() => {
+    if (!card || !card.id) return undefined;
+    let live = true;
+    readDraft(card.id).then((text) => {
+      if (live && text) setWorking((cur) => cur ? cur : text);
+    });
+    return () => { live = false; };
+  }, [card && card.id]);
+  const saveWorking = (next) => {
+    setWorking(next);
+    if (card && card.id) writeDraft(card.id, next);
+  };
   const [busy, setBusy] = useState(false);
   const [result, setResult] = useState(null);
   const [err, setErr] = useState('');
@@ -4600,7 +4719,7 @@ function WorkedFace({ card, phase, deck, onReveal, onBack }){
     selRef.current = { start: pos, end: pos };
     caretRef.current = pos;
     if (ta) ta.focus();
-    setWorking(val.slice(0, start) + sym + val.slice(end));
+    saveWorking(val.slice(0, start) + sym + val.slice(end));
   };
 
   useEffect(() => {
@@ -4624,7 +4743,7 @@ function WorkedFace({ card, phase, deck, onReveal, onBack }){
         return;
       }
       const had = working.trim();
-      setWorking(had ? had + '\n' + read : read);
+      saveWorking(had ? had + '\n' + read : read);
       setPhoto(null);
       setPhotoNote(had ? 'added' : 'read');
       track('photo_answer', { result: 'ok', kind: 'working', lines: read.split('\n').length });
@@ -4689,7 +4808,7 @@ function WorkedFace({ card, phase, deck, onReveal, onBack }){
             </>
           </div>
           <textarea ref={taRef} value={working}
-            onChange={e => { setWorking(e.target.value); selRef.current = { start: e.target.selectionStart, end: e.target.selectionEnd }; }}
+            onChange={e => { saveWorking(e.target.value); selRef.current = { start: e.target.selectionStart, end: e.target.selectionEnd }; }}
             onSelect={rememberSel} onClick={rememberSel} onKeyUp={rememberSel}
             placeholder={'One step per line — the marks are in the method, not in the number.'}
             rows={7}

@@ -310,7 +310,7 @@ after retrying and leaves the reason in `lastApiError`, so a rate-limited run re
 empty stack rather than throwing — counting only the `catch` would miss the failure
 that matters most under load.
 
-## Data model — four storage keys
+## Data model — five storage keys
 
 | Key | Holds |
 |---|---|
@@ -318,6 +318,31 @@ that matters most under load.
 | `progress:all` | `{ [cardId]: { ease, interval, reps, lapses, due, flagged, seen } }` |
 | `stats:main` | `{ streak, lastDay, newByDate, reviewsByDate, practiceByDate, bySubject }` |
 | `settings:main` | `{ interleave, newPerDay, capNew, longMix, theme, name, examDate, lastSeenVersion, onboarded, dismissedTips, learnSession, diagnosis, paper }` |
+| `drafts:main` | `{ [cardId]: { text, at } }` — unfinished long answers and working |
+
+**Why drafts got the fifth key**, after four were held to for a year. A long
+answer is three hundred words the student typed, and it lived in component
+state only: a reload, a closed tab or a stray tap on a nav item destroyed it.
+That was a rare accident until the free tier started timing out on ~1 call in 8
+and the marking screen began sitting there for over a minute — and what a person
+does to a screen that looks stuck is reload it. The loading screen now asks them
+not to; this is what makes that request unnecessary rather than merely polite.
+
+It is not folded into `settings:main` because drafts are written on a debounce
+while typing, and settings is held in App state and saved whole, so a draft
+write from a component that deep would race App's own writes and one of them
+would lose. (The Ask panel's "no fifth key" rule still stands — that is a chat
+thread meant to be transient. A half-written exam answer is not.)
+
+Drafts are **not exported** with a deck: work in progress, not content. Only a
+draft under 24h old is offered back, and the store is capped at 40 — restoring
+an answer weeks later, when the card has come round again, would hand the
+student their old words at exactly the moment the point is to produce them from
+memory. `StudyCard`'s `grade()` clears the draft, since every card leaves the
+screen through there whatever face it wore. Covered by
+`tools/draft-store-test.mjs` (18 offline tests, real `load`/`save` over a fake
+localStorage) and verified end-to-end in the browser: typed, reloaded, restored,
+then cleared on grading.
 
 Card shapes:
 - `flip` / `cloze` — `{ id, type, front, back }`
