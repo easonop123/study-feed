@@ -1687,12 +1687,27 @@ const isReasoner = (m) => /deepseek|nemotron/i.test(m || '');
    a 400 from NVIDIA and a dead generate button, so this must never be sent to a
    model nobody has tried it on.
 
-   GENERATION ONLY, and the caller has to ask for it — MODEL_SMART and MODEL_GEN
-   are currently the same model id, so nothing here can tell the two apart.
-   Generation is structured extraction and the output was byte-for-byte the same
-   with the effort turned down; marking is a judgement about a student's writing
-   and is the thing the app is actually for. Cutting its thinking to save tokens
-   has not been tested and is not a trade worth making blind. */
+   OPT-IN, and the caller has to ask for it — MODEL_SMART and MODEL_GEN are
+   currently the same model id, so nothing here can tell the two apart.
+
+   The rule is not "never on marking", it is "never on marking without the
+   eval". This started as generation-only, on the argument that generation is
+   structured extraction (output was byte-for-byte identical with the effort
+   turned down) while marking is a judgement about a student's writing and
+   must not be cheapened blind. That argument still holds — what changed is
+   that two marking calls were MEASURED, because they had stopped working.
+
+   markWorking and runDiagnosis now pass it, each against its own eval, and in
+   both the failures went away while every quality axis held. The reason is
+   worth keeping in mind before reaching for this again: at full effort those
+   two were spending ~1000-1200 completion tokens thinking, and at roughly 30
+   tokens a second that put them past the proxy's 55s ceiling. Reasoning you
+   cannot afford to wait for is not reasoning the student ever sees.
+
+   Still deliberately NOT here: markAnswer and the upgrade path. Both currently
+   return inside the wall, and tools/mark-eval.mjs measures markAnswer at full
+   reasoning. Moving either needs its eval re-run both ways first — the same
+   bar these two had to clear, not a guess from their result. */
 const takesReasoningEffort = (m) => /gpt-oss/i.test(m || '');
 
 function pickModel(mode, settings){
@@ -2146,9 +2161,21 @@ RULES FOR "notes" — these are shown highlighted on top of the student's own wo
 
 /* Same ceiling and the same reason as markAnswer: the step list plus the notes
    make this the longest reply the app asks for, and a truncated one is a total
-   loss of the mark rather than a degraded one. */
+   loss of the mark rather than a degraded one.
+
+   Reasoning turned DOWN, which is the opposite of what marking usually gets
+   here — see takesReasoningEffort. At full effort this call was failing: it
+   spent 1020-1184 completion tokens thinking about the arithmetic and landed
+   between 43s and past the proxy's 55s wall, so tools/worked-eval.mjs scored
+   1/4 with three HTTP 504s and tools/health.mjs reported the feature broken.
+   The ceiling is NOT the lever — dropping it to 1700 still timed out, and
+   finish_reason was "stop" every time, never "length", so nothing was being
+   truncated. Low effort costs 205-578 tokens and 15-25s, and it is measured:
+   7/8 cases across two runs, error carried forward respected 2/2, against a
+   baseline of 1/4. A mark that arrives beats a mark that reasons harder and
+   never comes back. */
 async function markWorking(card, working, level){
-  const reply = await callModel(markWorkingPrompt(card, working, level), 3000, MODEL_SMART);
+  const reply = await callModel(markWorkingPrompt(card, working, level), 3000, MODEL_SMART, true);
   const objs = rescueObjects(reply);
   return objs[0] || null;
 }
@@ -8297,8 +8324,17 @@ async function buildDiagnostic(topic, level, n){
    Anything the model failed to judge comes back "shaky" with no gap sentence
    rather than being dropped — a checkpoint that silently vanished from the
    report would read as a pass. */
+/* Reasoning turned down for the same measured reason as markWorking: this is
+   one verdict and one gap sentence per answer in a single reply, and at full
+   effort it was the app's most expensive call — 761-1159 tokens, 37-51s — so
+   it fell past the 55s wall often enough that tools/diagnose-eval.mjs recorded
+   a hard failure and the blank-answer case never returned at all. At low
+   effort it costs 398-755 tokens and 28-37s, and quality did not move on any
+   axis the eval measures: gap sentences 100% specific and 100% on target in
+   both arms, zero standard citations in both, and the blank set finally
+   graded (all missing, which is the answer it could never get to before). */
 async function runDiagnosis(topic, level, items){
-  const reply = await callModel(diagnosePrompt(topic, level, items), 3000, MODEL_SMART);
+  const reply = await callModel(diagnosePrompt(topic, level, items), 3000, MODEL_SMART, true);
   const obj = rescueObjects(reply)[0] || {};
   const byIndex = {};
   for (const r of (Array.isArray(obj.items) ? obj.items : [])){

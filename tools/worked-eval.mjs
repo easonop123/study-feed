@@ -168,6 +168,14 @@ const CASES = [
   },
 ];
 
+/* --low sends reasoning_effort:low, the same lever the hints use. The method
+   marker was timing out at the proxy's 55s wall often enough to be reported
+   broken, and turning the reasoning down is the only thing measured to move
+   it. Whether that is affordable is a QUALITY question — error carried forward
+   is the hardest thing this prompt asks for — so it is an arm here rather than
+   a change made on latency alone. */
+const LOW = process.argv.includes('--low');
+
 async function callOnce(prompt){
   const body = {
     model: MODEL,
@@ -177,6 +185,7 @@ async function callOnce(prompt){
     max_tokens: MAX_TOKENS,
     stream: false,
   };
+  if (LOW && /gpt-oss/i.test(MODEL)) body.reasoning_effort = 'low';
   const started = Date.now();
   const res = await fetch(ENDPOINT, {
     method: 'POST',
@@ -255,7 +264,7 @@ const run = CASES.filter(c => !only || c.kind === only);
 if (!run.length) throw new Error(`no case named "${only}"`);
 
 console.log(`Worked-problem eval — ${run.length * REPEAT} calls against ${ENDPOINT}`);
-console.log(`model ${MODEL}, ceiling ${MAX_TOKENS}\n`);
+console.log(`model ${MODEL}, ceiling ${MAX_TOKENS}, reasoning ${LOW ? 'LOW' : 'full'}\n`);
 
 const rows = [];
 for (let rep = 0; rep < REPEAT; rep++){
