@@ -589,6 +589,11 @@ function intervalWord(days){
 
 const uid = () => Date.now().toString(36) + Math.random().toString(36).slice(2, 7);
 
+/* "1 cards" is the kind of thing that makes an app look auto-generated, and a
+   deck with one card in it is the FIRST thing a new student ever sees on Home.
+   The share card has pluralised since it was written; the screens had not. */
+const plural = (n, word) => n + ' ' + word + (n === 1 ? '' : 's');
+
 /* ---- import / export -----------------------------------------------------
    Cards cost money to generate, so they should be movable: between the
    Artifact and the website, between devices, or to a friend. Text transfer
@@ -1735,6 +1740,17 @@ function friendlyApiError(e){
      rate limit as if it were their problem, and don't say "try again" in a way
      that invites everyone to hammer it in the same second. */
   if (/\b429\b/.test(m)) return 'Study Feed is busy right now — too many people generating at once. Give it about a minute and it\'ll go through.';
+  /* Our OWN proxy's 504, which is a different event from the browser giving
+     up and must be read first: api/nvidia.js aborts upstream at 55s and
+     returns {error:"NVIDIA did not respond in time — the model timed out."},
+     so the message carries the words "timed out" and used to fall into the
+     branch below — which blames the student's connection and tells them to
+     paste a smaller section. Neither is true here. The request reached the
+     server fine and the server waited the full 55 seconds; what ran out was
+     NVIDIA's free tier, and there may be nothing to "paste" because this is
+     just as often a mark as a generate. Measured 3 in 15 on a single
+     mark-eval run, so it is a message students will actually see. */
+  if (/API returned 504/.test(m)) return 'The free AI service is overloaded and didn\'t answer in time — it kept trying for a couple of minutes, so this isn\'t your device or your connection. Your work is still here; give it a minute and go again.';
   if (/timed out/i.test(m)) return 'The AI ran out of time, even after retrying and splitting the notes up. It\'s usually a slow connection — try again, or paste a smaller section.';
   if (/no images/i.test(m)) return m;
   // Reached only after the retries gave up, so don't suggest trying immediately.
@@ -2964,15 +2980,47 @@ function Progress({ label, value, valueText, right, colour, height = 12, reduceM
 
 /* Full loading state — rings plus the two lines of copy. Used while cards are
    being generated, which is the app's one genuinely slow wait. */
-function Loading({ title, subtitle, size }){
+/* Every one of these is a wait on the model, and the wait is not what it was
+   when these screens were written. The subtitles were authored for "10-20
+   seconds"; a health-check run measures a median of 39s, and because postChat
+   retries a timeout twice more the true worst case is closer to three minutes.
+   A screen that says the same nine words for three minutes reads as frozen,
+   and the student's next move is to reload — which throws away the answer they
+   were waiting on.
+
+   So the subtitle ages. It says nothing it cannot back up: no fake percentage,
+   no countdown it would have to guess at, just an honest account of what is
+   happening, which is that the free tier is busy and we are still waiting. The
+   title never changes, because what it is doing has not changed.
+
+   Thresholds sit either side of the two things that actually happen: past ~22s
+   this call is slower than most, and past ~50s it is near the proxy's 55s
+   abort, after which the client quietly starts again — which is exactly when a
+   student needs telling that "still trying" is true. */
+const SLOW_AFTER_MS = 22000;
+const VERY_SLOW_AFTER_MS = 50000;
+
+function Loading({ title, subtitle, size, steady }){
+  const [waited, setWaited] = useState(0);
+  useEffect(() => {
+    if (steady) return undefined;
+    const t0 = Date.now();
+    const id = setInterval(() => setWaited(Date.now() - t0), 1000);
+    return () => clearInterval(id);
+  }, [steady]);
+
+  let line = subtitle;
+  if (!steady && waited >= VERY_SLOW_AFTER_MS) line = 'The free AI is busy. Still trying — hang on rather than reloading, or you will lose this.';
+  else if (!steady && waited >= SLOW_AFTER_MS) line = 'Taking longer than usual. Still going.';
+
   return (
     <div className="flex flex-col items-center justify-center" style={{ gap: 22, padding: '26px 8px' }}>
       <Rings size={size || 92} />
       <div style={{ textAlign: 'center', maxWidth: 260 }}>
         <div style={{ fontFamily: SANS, fontSize: 15.5, fontWeight: 600, color: T.ink,
           letterSpacing: '-0.02em', animation: 'sf-pulse 3s ease-in-out infinite' }}>{title}</div>
-        {subtitle && (
-          <Sub style={{ marginTop: 7, fontSize: 13.5, animation: 'sf-pulse 4s ease-in-out infinite' }}>{subtitle}</Sub>
+        {line && (
+          <Sub style={{ marginTop: 7, fontSize: 13.5, animation: 'sf-pulse 4s ease-in-out infinite' }}>{line}</Sub>
         )}
       </div>
     </div>
@@ -4042,8 +4090,10 @@ function ExtendedFace({ card, phase, deck, onReveal, onBack, demo }){
           <div className="flex items-center justify-between" style={{ marginTop: 7, marginBottom: 11 }}>
             <Sub style={{ fontSize: 12 }}>{words > 0 ? `${words} words` : 'Even a rough attempt beats reading the answer'}</Sub>
           </div>
-          {/* Marking is a 10-20 second wait against the model. Without this the
-              screen just sits there and reads as frozen. */}
+          {/* Marking is a long wait against the model — tens of seconds, and
+              longer when the free tier is busy. Without this the screen just
+              sits there and reads as frozen; Loading ages its own subtitle so
+              a slow one says so rather than repeating itself. */}
           {busy ? (
             <div style={{ ...PANEL, padding: '8px 12px' }}>
               <Loading size={70} title="Marking your answer…"
@@ -4282,7 +4332,7 @@ function AnnotatedAnswer({ answer, notes, defaultOpen = true }){
           <Chip colour={T.muted}>What you wrote</Chip>
           <Sub style={{ fontSize: 11.5 }}>
             {(located.length + orphans.length) > 0 ? `${located.length + orphans.length} note${(located.length + orphans.length) === 1 ? '' : 's'} · ` : ''}
-            {words} words · {open ? 'hide' : 'show'}
+            {plural(words, 'word')} · {open ? 'hide' : 'show'}
           </Sub>
         </div>
       </button>
@@ -5115,7 +5165,7 @@ function ExamPaper({ decks, defaultLevel, saved, onSave, onClose }){
                         <span style={{ minWidth: 0, flex: 1 }}>
                           <span style={{ display: 'block', fontFamily: SANS, fontSize: 14.5, fontWeight: 700, color: T.ink }}>{d.subject || 'Untitled'}</span>
                           <span style={{ display: 'block', fontFamily: SANS, fontSize: 12.5, color: T.faint }}>
-                            {d.topic || ''}{d.topic ? ' · ' : ''}{d.cards.length} cards
+                            {d.topic || ''}{d.topic ? ' · ' : ''}{plural(d.cards.length, 'card')}
                           </span>
                         </span>
                       </button>
@@ -6194,7 +6244,7 @@ function Decks({ decks, progress, onEditCard, onDeleteCard, onDeleteDeck, onRena
               <div style={{ flex: 1, minWidth: 0 }}>
                 <div style={{ fontFamily: SANS, fontSize: 15.5, fontWeight: 700, color: T.ink,
                   overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{d.topic || d.subject || 'Untitled'}</div>
-                <Sub style={{ fontSize: 13 }}>{d.cards.length} cards · {d.subject || 'Untitled'}</Sub>
+                <Sub style={{ fontSize: 13 }}>{plural(d.cards.length, 'card')} · {d.subject || 'Untitled'}</Sub>
               </div>
               <div className="flex flex-col items-end gap-1">
                 {dueN > 0 && <Chip colour={T.red}>{dueN} due</Chip>}
@@ -6255,7 +6305,7 @@ function DeckEditor({ deck, progress, onBack, onEditCard, onDeleteCard, onDelete
             cursor: 'pointer', fontSize: 17, color: T.ink, boxShadow: SH.raised, flexShrink: 0 }}>‹</button>
         <div style={{ minWidth: 0, flex: 1 }}>
           <Title style={{ fontSize: 18, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{deck.topic || 'Deck'}</Title>
-          <Sub style={{ fontSize: 13 }}>{deck.subject} · {deck.cards.length} cards</Sub>
+          <Sub style={{ fontSize: 13 }}>{deck.subject} · {plural(deck.cards.length, 'card')}</Sub>
         </div>
         {!renaming && (
           <div className="flex gap-2" style={{ flexShrink: 0 }}>
@@ -6351,7 +6401,7 @@ function DeckEditor({ deck, progress, onBack, onEditCard, onDeleteCard, onDelete
         ) : (
           <div className="flex gap-2">
             <Btn full kind="danger" onClick={onDeleteDeck} style={{ background: T.red, color: '#fff' }}>
-              Delete {deck.cards.length} cards
+              Delete {plural(deck.cards.length, 'card')}
             </Btn>
             <Btn full kind="soft" onClick={() => setConfirmDeck(false)}>Keep</Btn>
           </div>
@@ -6989,7 +7039,7 @@ function Home({ library, progress, stats, settings, due, onStart, onCreate, onDe
                     <Tile colour={c} glyph={(d.subject || '?').trim().charAt(0).toUpperCase()} size={38} />
                     <div style={{ flex: 1, minWidth: 0 }}>
                       <div style={{ fontFamily: SANS, fontSize: 14, fontWeight: 650, color: T.ink, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{d.topic || d.subject || 'Untitled'}</div>
-                      <div style={{ fontFamily: SANS, fontSize: 12, color: T.faint, marginTop: 1 }}>{d.subject || 'Untitled'} · {d.cards.length} cards</div>
+                      <div style={{ fontFamily: SANS, fontSize: 12, color: T.faint, marginTop: 1 }}>{d.subject || 'Untitled'} · {plural(d.cards.length, 'card')}</div>
                     </div>
                     <div style={{ width: 72, height: 6, background: T.well, borderRadius: R.pill, overflow: 'hidden', flexShrink: 0 }}>
                       <div style={{ height: '100%', width: pct + '%', background: T.green, borderRadius: R.pill }} />
@@ -7971,7 +8021,7 @@ function LearnMode({ decks, deckId, session, onSaveSession, onClose, onDone }){
           {enough ? (
             <>
               <Sub style={{ marginBottom: 14 }}>
-                {scopeCards.length} cards in this run. Long answers sit this one out — they belong in the feed, where they get marked.
+                {plural(scopeCards.length, 'card')} in this run. Long answers sit this one out — they belong in the feed, where they get marked.
               </Sub>
               {!saved && <Btn full kind="primary" onClick={start}>Start learning →</Btn>}
             </>
