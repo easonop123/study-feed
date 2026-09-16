@@ -211,6 +211,120 @@ async function save(key, value){
   } catch (e){ console.error('storage.set failed', key, e); return false; }
 }
 
+/* ---- answer drafts -------------------------------------------------------
+
+   A long answer is three hundred words the student typed, and until now it
+   lived in component state only: a reload, a closed tab or a stray tap on a
+   nav item destroyed it. That used to be a rare accident. It is not rare any
+   more — the free tier times out on roughly 1 call in 8, the marking screen
+   can sit there for over a minute, and the thing a person does to a screen
+   that looks stuck is reload it. The loading screen now asks them not to;
+   this is what makes that request unnecessary rather than merely polite.
+
+   A FIFTH storage key, which the app has avoided until now. It earns it:
+   drafts are written on a debounce while typing, and settings:main is held in
+   App state and saved whole, so routing draft writes through settings from a
+   component this deep would race with App's own writes and lose one or the
+   other. The Ask panel's "no fifth key" note is about a chat thread that is
+   meant to be transient; a half-written exam answer is not.
+
+   Drafts are deliberately NOT exported with a deck — they are work in
+   progress, not content.
+
+   Only a RECENT draft is offered back. Restoring an answer weeks later, when
+   the card has come round again in the feed, would hand the student their old
+   words at exactly the moment the point is to produce them from memory. */
+const DRAFT_KEY = 'drafts:main';
+const DRAFT_MAX_AGE_MS = 24 * 60 * 60 * 1000;   // a reload, not a revision cycle
+const DRAFT_MAX = 40;
+const DRAFT_DEBOUNCE_MS = 700;
+
+let draftCache = null;          // the store, once read; authoritative thereafter
+let draftPending = null;        // typed before the read landed — newer than disk
+let draftLoading = null;        // the single in-flight read, shared by all callers
+let draftTimer = null;
+
+function pruneDrafts(all){
+  const now = Date.now();
+  const fresh = {};
+  const keys = Object.keys(all || {})
+    .filter(k => all[k] && (now - (all[k].at || 0)) < DRAFT_MAX_AGE_MS)
+    .sort((a, b) => (all[b].at || 0) - (all[a].at || 0))
+    .slice(0, DRAFT_MAX);
+  for (const k of keys) fresh[k] = all[k];
+  return fresh;
+}
+
+/* ONE read of the store, shared by everyone who asks while it is in flight.
+
+   The read is genuinely async — in the Artifact it is a `window.storage.get`
+   round trip — and the student is typing into the box the whole time. The
+   window is small and the two things that can go wrong in it are not:
+   assigning the loaded store over the cache throws away whatever they typed
+   while it was loading, and letting the debounce fire before the load lands
+   persists a store containing ONLY the card in front of them, wiping every
+   other draft they had.
+
+   So the load merges rather than assigns, and anything typed meanwhile wins —
+   it is newer than what was on disk by definition. Everything that writes
+   waits on this same promise before it persists. */
+function ensureDrafts(){
+  if (draftCache) return Promise.resolve(draftCache);
+  if (!draftLoading){
+    draftLoading = load(DRAFT_KEY, {}).then((stored) => {
+      draftCache = pruneDrafts({ ...(stored || {}), ...(draftPending || {}) });
+      draftPending = null;
+      draftLoading = null;
+      return draftCache;
+    });
+  }
+  return draftLoading;
+}
+
+async function readDraft(cardId){
+  if (!cardId) return '';
+  const all = await ensureDrafts();
+  const d = all[cardId];
+  return (d && typeof d.text === 'string') ? d.text : '';
+}
+
+/* Debounced so a fast typist does not write the whole store on every
+   keystroke. The in-memory copy updates synchronously, so a component reading
+   it in the same tick sees the new value before it has been persisted — and
+   before the load has even finished, which is the case that matters. */
+function writeDraft(cardId, text){
+  if (!cardId) return;
+  if (!draftCache && !draftPending) draftPending = {};
+  const into = draftCache || draftPending;
+  if (String(text || '').trim()) into[cardId] = { text: text, at: Date.now() };
+  else delete into[cardId];
+  ensureDrafts();
+  if (draftTimer) clearTimeout(draftTimer);
+  draftTimer = setTimeout(() => {
+    draftTimer = null;
+    /* Work from the value the load resolved with, not from the module
+       variable — by the time this runs the variable may have been replaced,
+       and reading it is how a stale or missing store gets written back. */
+    ensureDrafts().then((all) => {
+      draftCache = pruneDrafts(all);
+      save(DRAFT_KEY, draftCache);
+    });
+  }, DRAFT_DEBOUNCE_MS);
+}
+
+/* Called when the card is done with — the answer has been marked and the
+   student has moved on, so keeping it would only risk handing it back. */
+function clearDraft(cardId){
+  if (!cardId) return;
+  if (draftPending) delete draftPending[cardId];
+  if (draftCache && !(cardId in draftCache) && !draftLoading) return;
+  if (draftTimer){ clearTimeout(draftTimer); draftTimer = null; }
+  ensureDrafts().then((all) => {
+    delete all[cardId];
+    save(DRAFT_KEY, all);
+  });
+}
+
 /* longMix = what % of your cards should be long (extended-response) answers.
    Drives both what gets generated and how the feed is blended. */
 const DEFAULT_SETTINGS = { interleave: true, newPerDay: 12, capNew: false, longMix: 30, theme: 'system', name: '', examDate: '', lastSeenVersion: '', onboarded: false, dismissedTips: {}, sound: true, font: 'inter', learnSession: null, diagnosis: null, paper: null };
@@ -358,8 +472,18 @@ function failureKind(e){
    1.x numbers sitting above the new 1.0.0 cannot cause a mis-fire. They are not
    shown next to the pre-launch entries either — those were dev builds and the
    numbers mean nothing to a student. */
-const APP_VERSION = '1.6.1';
+const APP_VERSION = '1.6.2';
 const PATCH_NOTES = [
+  { v: '1.6.2', date: '2026-09-16', title: 'Two things that had quietly stopped working', items: [
+    'Fixed: marking your working on a problem was failing outright. It was thinking about the arithmetic for so long that it ran out of time before it had written anything, so pressing the button got you an error and nothing else. It now comes back in about twenty seconds.',
+    'Fixed: the same thing was happening to Find my gaps when it read your answers — which is the half that actually tells you what is missing, so the report you were waiting for never arrived. Also fixed, and the answers come back roughly twice as fast.',
+    'Both of those were checked against the same tests the marking is checked against, so they are quicker without being more forgiving: the method marker still credits every step after your first mistake, and the gaps it names are still the specific missing thing rather than "revise this topic".',
+    'The long answer marker was NOT changed, and that is deliberate. Turning its thinking down the same way made it stop recognising Excellence — it marked nearly every Excellence answer as Merit and looked completely normal on everything else. It keeps taking its time.',
+    'Your writing survives a reload. A long answer or a page of working used to exist only on the screen you were looking at, so closing the tab, knocking the back button, or reloading because it looked stuck took the lot. It is kept as you type now and comes straight back. It is dropped once you have graded the card, and after a day — when a card comes round again the point is to write it from memory, not to be handed last week\'s attempt.',
+    'The waiting screen tells you the truth now. If something is taking longer than usual it says so, and if the free AI is busy it says that, and asks you not to reload — reloading is what loses the answer you were waiting on.',
+    'When the AI does run out of time, the message no longer blames your connection, or tells you to paste a smaller section when what you were doing was having an answer marked.',
+    'And a deck with one card in it says "1 card".',
+  ] },
   { v: '1.6.1', date: '2026-08-29', title: 'Faster, and the stuck button works again', items: [
     'Fixed: "Still stuck? sentence starters" returned nothing at all. It was spending its entire budget thinking and had none left to answer with, so the button just failed. It now answers in about three seconds.',
     'Making cards is quicker and, more to the point, it stops timing out. It was asking for more cards in one go than it could finish in the time allowed, so some runs died and had to start over. It asks for a sensible number now and gets through.',
@@ -588,6 +712,11 @@ function intervalWord(days){
 }
 
 const uid = () => Date.now().toString(36) + Math.random().toString(36).slice(2, 7);
+
+/* "1 cards" is the kind of thing that makes an app look auto-generated, and a
+   deck with one card in it is the FIRST thing a new student ever sees on Home.
+   The share card has pluralised since it was written; the screens had not. */
+const plural = (n, word) => n + ' ' + word + (n === 1 ? '' : 's');
 
 /* ---- import / export -----------------------------------------------------
    Cards cost money to generate, so they should be movable: between the
@@ -1687,12 +1816,27 @@ const isReasoner = (m) => /deepseek|nemotron/i.test(m || '');
    a 400 from NVIDIA and a dead generate button, so this must never be sent to a
    model nobody has tried it on.
 
-   GENERATION ONLY, and the caller has to ask for it — MODEL_SMART and MODEL_GEN
-   are currently the same model id, so nothing here can tell the two apart.
-   Generation is structured extraction and the output was byte-for-byte the same
-   with the effort turned down; marking is a judgement about a student's writing
-   and is the thing the app is actually for. Cutting its thinking to save tokens
-   has not been tested and is not a trade worth making blind. */
+   OPT-IN, and the caller has to ask for it — MODEL_SMART and MODEL_GEN are
+   currently the same model id, so nothing here can tell the two apart.
+
+   The rule is not "never on marking", it is "never on marking without the
+   eval". This started as generation-only, on the argument that generation is
+   structured extraction (output was byte-for-byte identical with the effort
+   turned down) while marking is a judgement about a student's writing and
+   must not be cheapened blind. That argument still holds — what changed is
+   that two marking calls were MEASURED, because they had stopped working.
+
+   markWorking and runDiagnosis now pass it, each against its own eval, and in
+   both the failures went away while every quality axis held. The reason is
+   worth keeping in mind before reaching for this again: at full effort those
+   two were spending ~1000-1200 completion tokens thinking, and at roughly 30
+   tokens a second that put them past the proxy's 55s ceiling. Reasoning you
+   cannot afford to wait for is not reasoning the student ever sees.
+
+   Still deliberately NOT here: markAnswer and the upgrade path. Both currently
+   return inside the wall, and tools/mark-eval.mjs measures markAnswer at full
+   reasoning. Moving either needs its eval re-run both ways first — the same
+   bar these two had to clear, not a guess from their result. */
 const takesReasoningEffort = (m) => /gpt-oss/i.test(m || '');
 
 function pickModel(mode, settings){
@@ -1720,6 +1864,17 @@ function friendlyApiError(e){
      rate limit as if it were their problem, and don't say "try again" in a way
      that invites everyone to hammer it in the same second. */
   if (/\b429\b/.test(m)) return 'Study Feed is busy right now — too many people generating at once. Give it about a minute and it\'ll go through.';
+  /* Our OWN proxy's 504, which is a different event from the browser giving
+     up and must be read first: api/nvidia.js aborts upstream at 55s and
+     returns {error:"NVIDIA did not respond in time — the model timed out."},
+     so the message carries the words "timed out" and used to fall into the
+     branch below — which blames the student's connection and tells them to
+     paste a smaller section. Neither is true here. The request reached the
+     server fine and the server waited the full 55 seconds; what ran out was
+     NVIDIA's free tier, and there may be nothing to "paste" because this is
+     just as often a mark as a generate. Measured 3 in 15 on a single
+     mark-eval run, so it is a message students will actually see. */
+  if (/API returned 504/.test(m)) return 'The free AI service is overloaded and didn\'t answer in time — it kept trying for a couple of minutes, so this isn\'t your device or your connection. Your work is still here; give it a minute and go again.';
   if (/timed out/i.test(m)) return 'The AI ran out of time, even after retrying and splitting the notes up. It\'s usually a slow connection — try again, or paste a smaller section.';
   if (/no images/i.test(m)) return m;
   // Reached only after the retries gave up, so don't suggest trying immediately.
@@ -2146,9 +2301,21 @@ RULES FOR "notes" — these are shown highlighted on top of the student's own wo
 
 /* Same ceiling and the same reason as markAnswer: the step list plus the notes
    make this the longest reply the app asks for, and a truncated one is a total
-   loss of the mark rather than a degraded one. */
+   loss of the mark rather than a degraded one.
+
+   Reasoning turned DOWN, which is the opposite of what marking usually gets
+   here — see takesReasoningEffort. At full effort this call was failing: it
+   spent 1020-1184 completion tokens thinking about the arithmetic and landed
+   between 43s and past the proxy's 55s wall, so tools/worked-eval.mjs scored
+   1/4 with three HTTP 504s and tools/health.mjs reported the feature broken.
+   The ceiling is NOT the lever — dropping it to 1700 still timed out, and
+   finish_reason was "stop" every time, never "length", so nothing was being
+   truncated. Low effort costs 205-578 tokens and 15-25s, and it is measured:
+   7/8 cases across two runs, error carried forward respected 2/2, against a
+   baseline of 1/4. A mark that arrives beats a mark that reasons harder and
+   never comes back. */
 async function markWorking(card, working, level){
-  const reply = await callModel(markWorkingPrompt(card, working, level), 3000, MODEL_SMART);
+  const reply = await callModel(markWorkingPrompt(card, working, level), 3000, MODEL_SMART, true);
   const objs = rescueObjects(reply);
   return objs[0] || null;
 }
@@ -2937,15 +3104,54 @@ function Progress({ label, value, valueText, right, colour, height = 12, reduceM
 
 /* Full loading state — rings plus the two lines of copy. Used while cards are
    being generated, which is the app's one genuinely slow wait. */
-function Loading({ title, subtitle, size }){
+/* Every one of these is a wait on the model, and the wait is not what it was
+   when these screens were written. The subtitles were authored for "10-20
+   seconds"; a health-check run measures a median of 39s, and because postChat
+   retries a timeout twice more the true worst case is closer to three minutes.
+   A screen that says the same nine words for three minutes reads as frozen,
+   and the student's next move is to reload — which throws away the answer they
+   were waiting on.
+
+   So the subtitle ages. It says nothing it cannot back up: no fake percentage,
+   no countdown it would have to guess at, just an honest account of what is
+   happening, which is that the free tier is busy and we are still waiting. The
+   title never changes, because what it is doing has not changed.
+
+   Thresholds sit either side of the two things that actually happen: past ~22s
+   this call is slower than most, and past ~50s it is near the proxy's 55s
+   abort, after which the client quietly starts again — which is exactly when a
+   student needs telling that "still trying" is true.
+
+   `steady` is for the screens that are already telling the truth themselves:
+   writing a paper, marking a paper and generating cards all make MANY calls
+   and count them in the title. Those cross both thresholds every time by
+   design, so ageing their subtitle would replace real information with
+   "the free AI is busy" while a counter ticks up in front of the student —
+   alarming, and wrong. Ageing is for a single call with nothing else to say. */
+const SLOW_AFTER_MS = 22000;
+const VERY_SLOW_AFTER_MS = 50000;
+
+function Loading({ title, subtitle, size, steady }){
+  const [waited, setWaited] = useState(0);
+  useEffect(() => {
+    if (steady) return undefined;
+    const t0 = Date.now();
+    const id = setInterval(() => setWaited(Date.now() - t0), 1000);
+    return () => clearInterval(id);
+  }, [steady]);
+
+  let line = subtitle;
+  if (!steady && waited >= VERY_SLOW_AFTER_MS) line = 'The free AI is busy. Still trying — hang on rather than reloading, or you will lose this.';
+  else if (!steady && waited >= SLOW_AFTER_MS) line = 'Taking longer than usual. Still going.';
+
   return (
     <div className="flex flex-col items-center justify-center" style={{ gap: 22, padding: '26px 8px' }}>
       <Rings size={size || 92} />
       <div style={{ textAlign: 'center', maxWidth: 260 }}>
         <div style={{ fontFamily: SANS, fontSize: 15.5, fontWeight: 600, color: T.ink,
           letterSpacing: '-0.02em', animation: 'sf-pulse 3s ease-in-out infinite' }}>{title}</div>
-        {subtitle && (
-          <Sub style={{ marginTop: 7, fontSize: 13.5, animation: 'sf-pulse 4s ease-in-out infinite' }}>{subtitle}</Sub>
+        {line && (
+          <Sub style={{ marginTop: 7, fontSize: 13.5, animation: 'sf-pulse 4s ease-in-out infinite' }}>{line}</Sub>
         )}
       </div>
     </div>
@@ -3153,7 +3359,12 @@ function StudyCard({ card, deck, onGrade, reduceMotion, prog, practice, onFeedba
     return { 0: forGrade(Q.AGAIN), 3: forGrade(Q.HARD), 4: forGrade(Q.GOOD), 5: forGrade(Q.EASY) };
   }, [prog, practice, committedWrong, card.id]);
 
-  const grade = (q) => onGrade(q, committedWrong);
+  /* Every card leaves the screen through here, whichever face it wore, so it
+     is the one place that knows an answer is finished with. Dropping the draft
+     now stops a long answer being handed back on a later review, when the
+     whole point is to produce it from memory again. Harmless for card types
+     that never had one. */
+  const grade = (q) => { clearDraft(card.id); return onGrade(q, committedWrong); };
   const anim = reduceMotion ? {} : { animation: 'sf-in 260ms cubic-bezier(.2,.8,.3,1)' };
 
   return (
@@ -3790,6 +4001,29 @@ const cannedAfter = (value, ms = 700) => new Promise(r => setTimeout(() => r(val
    markup, the states and the ordering are the ones a student meets later. */
 function ExtendedFace({ card, phase, deck, onReveal, onBack, demo }){
   const [answer, setAnswer] = useState('');
+  /* Bring back an unfinished answer from a reload or a closed tab. `demo` is
+     the tutorial, which has a canned answer and must never be restored into.
+     Guarded against landing after the student has started typing: this is
+     async, and an answer they are part-way through always wins. */
+  useEffect(() => {
+    if (demo || !card || !card.id) return undefined;
+    let live = true;
+    readDraft(card.id).then((text) => {
+      if (live && text) setAnswer((cur) => cur ? cur : text);
+    });
+    return () => { live = false; };
+  }, [card && card.id, demo]);
+
+  /* Every route by which the STUDENT changes the answer goes through here, so
+     the draft is saved on the edit rather than in an effect watching `answer`.
+     An effect would fire once on mount with the box still empty and delete the
+     very draft the restore above is in the middle of fetching. The tutorial is
+     excluded: its answer is canned, and persisting it would restore the demo's
+     words into a real card. */
+  const saveAnswer = (next) => {
+    setAnswer(next);
+    if (!demo && card && card.id) writeDraft(card.id, next);
+  };
   const [busy, setBusy] = useState(false);
   const [result, setResult] = useState(null);
   const [err, setErr] = useState('');
@@ -3830,7 +4064,7 @@ function ExtendedFace({ card, phase, deck, onReveal, onBack, demo }){
     selRef.current = { start: pos, end: pos };
     caretRef.current = pos;
     if (ta) ta.focus();
-    setAnswer(val.slice(0, start) + sym + val.slice(end));
+    saveAnswer(val.slice(0, start) + sym + val.slice(end));
   };
 
   useEffect(() => { setAnswer(''); setResult(null); setErr(''); setHints(null); setHintErr(''); setBig(null); setBigErr(''); setPhoto(null); setPhotoNote(''); selRef.current = { start: 0, end: 0 }; }, [card.id]);
@@ -3874,7 +4108,7 @@ function ExtendedFace({ card, phase, deck, onReveal, onBack, demo }){
         return;
       }
       const had = answer.trim();
-      setAnswer(had ? had + '\n\n' + read : read);
+      saveAnswer(had ? had + '\n\n' + read : read);
       setPhoto(null);
       setPhotoNote(had ? 'added' : 'read');
       track('photo_answer', { result: 'ok', words: read.split(/\s+/).length });
@@ -3984,7 +4218,7 @@ function ExtendedFace({ card, phase, deck, onReveal, onBack, demo }){
             )}
           </div>
           <textarea ref={taRef} value={answer}
-            onChange={e => { setAnswer(e.target.value); selRef.current = { start: e.target.selectionStart, end: e.target.selectionEnd }; }}
+            onChange={e => { saveAnswer(e.target.value); selRef.current = { start: e.target.selectionStart, end: e.target.selectionEnd }; }}
             onSelect={rememberSel} onClick={rememberSel} onKeyUp={rememberSel}
             placeholder={`Use the ${card.verb.toLowerCase()} command properly — ${card.marks} marks means ${card.marks >= 5 ? 'several linked points' : 'more than one point'}.`}
             rows={6}
@@ -4013,10 +4247,12 @@ function ExtendedFace({ card, phase, deck, onReveal, onBack, demo }){
           )}
           <SymbolBar onInsert={insertSymbol} />
           <div className="flex items-center justify-between" style={{ marginTop: 7, marginBottom: 11 }}>
-            <Sub style={{ fontSize: 12 }}>{words > 0 ? `${words} words` : 'Even a rough attempt beats reading the answer'}</Sub>
+            <Sub style={{ fontSize: 12 }}>{words > 0 ? plural(words, 'word') : 'Even a rough attempt beats reading the answer'}</Sub>
           </div>
-          {/* Marking is a 10-20 second wait against the model. Without this the
-              screen just sits there and reads as frozen. */}
+          {/* Marking is a long wait against the model — tens of seconds, and
+              longer when the free tier is busy. Without this the screen just
+              sits there and reads as frozen; Loading ages its own subtitle so
+              a slow one says so rather than repeating itself. */}
           {busy ? (
             <div style={{ ...PANEL, padding: '8px 12px' }}>
               <Loading size={70} title="Marking your answer…"
@@ -4255,7 +4491,7 @@ function AnnotatedAnswer({ answer, notes, defaultOpen = true }){
           <Chip colour={T.muted}>What you wrote</Chip>
           <Sub style={{ fontSize: 11.5 }}>
             {(located.length + orphans.length) > 0 ? `${located.length + orphans.length} note${(located.length + orphans.length) === 1 ? '' : 's'} · ` : ''}
-            {words} words · {open ? 'hide' : 'show'}
+            {plural(words, 'word')} · {open ? 'hide' : 'show'}
           </Sub>
         </div>
       </button>
@@ -4480,6 +4716,20 @@ function WorkedResult({ r, card, working, onEdit }){
 
 function WorkedFace({ card, phase, deck, onReveal, onBack }){
   const [working, setWorking] = useState('');
+  /* Same reasoning as ExtendedFace: a page of working is as expensive to lose
+     as a page of prose, and it is lost the same way. */
+  useEffect(() => {
+    if (!card || !card.id) return undefined;
+    let live = true;
+    readDraft(card.id).then((text) => {
+      if (live && text) setWorking((cur) => cur ? cur : text);
+    });
+    return () => { live = false; };
+  }, [card && card.id]);
+  const saveWorking = (next) => {
+    setWorking(next);
+    if (card && card.id) writeDraft(card.id, next);
+  };
   const [busy, setBusy] = useState(false);
   const [result, setResult] = useState(null);
   const [err, setErr] = useState('');
@@ -4514,7 +4764,7 @@ function WorkedFace({ card, phase, deck, onReveal, onBack }){
     selRef.current = { start: pos, end: pos };
     caretRef.current = pos;
     if (ta) ta.focus();
-    setWorking(val.slice(0, start) + sym + val.slice(end));
+    saveWorking(val.slice(0, start) + sym + val.slice(end));
   };
 
   useEffect(() => {
@@ -4538,7 +4788,7 @@ function WorkedFace({ card, phase, deck, onReveal, onBack }){
         return;
       }
       const had = working.trim();
-      setWorking(had ? had + '\n' + read : read);
+      saveWorking(had ? had + '\n' + read : read);
       setPhoto(null);
       setPhotoNote(had ? 'added' : 'read');
       track('photo_answer', { result: 'ok', kind: 'working', lines: read.split('\n').length });
@@ -4603,7 +4853,7 @@ function WorkedFace({ card, phase, deck, onReveal, onBack }){
             </>
           </div>
           <textarea ref={taRef} value={working}
-            onChange={e => { setWorking(e.target.value); selRef.current = { start: e.target.selectionStart, end: e.target.selectionEnd }; }}
+            onChange={e => { saveWorking(e.target.value); selRef.current = { start: e.target.selectionStart, end: e.target.selectionEnd }; }}
             onSelect={rememberSel} onClick={rememberSel} onKeyUp={rememberSel}
             placeholder={'One step per line — the marks are in the method, not in the number.'}
             rows={7}
@@ -4775,7 +5025,7 @@ function PaperPart({ q, part, value, onChange, onCommit }){
       </div>
 
       <div className="flex items-center justify-between gap-3" style={{ marginBottom: 6 }}>
-        <Sub style={{ fontSize: 12 }}>{words > 0 ? `${words} words` : ' '}</Sub>
+        <Sub style={{ fontSize: 12 }}>{words > 0 ? plural(words, 'word') : ' '}</Sub>
         <>
           <input ref={photoRef} type="file" accept="image/*" style={{ display: 'none' }}
             onChange={(e) => { const f = (e.target.files || [])[0]; if (e.target) e.target.value = ''; if (f) usePhoto(f); }} />
@@ -5088,7 +5338,7 @@ function ExamPaper({ decks, defaultLevel, saved, onSave, onClose }){
                         <span style={{ minWidth: 0, flex: 1 }}>
                           <span style={{ display: 'block', fontFamily: SANS, fontSize: 14.5, fontWeight: 700, color: T.ink }}>{d.subject || 'Untitled'}</span>
                           <span style={{ display: 'block', fontFamily: SANS, fontSize: 12.5, color: T.faint }}>
-                            {d.topic || ''}{d.topic ? ' · ' : ''}{d.cards.length} cards
+                            {d.topic || ''}{d.topic ? ' · ' : ''}{plural(d.cards.length, 'card')}
                           </span>
                         </span>
                       </button>
@@ -5124,7 +5374,7 @@ function ExamPaper({ decks, defaultLevel, saved, onSave, onClose }){
 
         {phase === 'building' && (
           <Card style={{ padding: '10px 14px' }}>
-            <Loading size={92}
+            <Loading size={92} steady
               title={prog ? `Writing question ${prog.i} of ${prog.n}…` : 'Writing your paper…'}
               subtitle="A scenario, then parts that climb from naming it to justifying it." />
           </Card>
@@ -5222,7 +5472,7 @@ function ExamPaper({ decks, defaultLevel, saved, onSave, onClose }){
 
         {phase === 'marking' && (
           <Card style={{ padding: '10px 14px' }}>
-            <Loading size={92}
+            <Loading size={92} steady
               title={prog ? `Marking part ${prog.i} of ${prog.n}…` : 'Marking your paper…'}
               subtitle="Every part against its own Achieved, Merit and Excellence — one at a time, so none of them get dropped." />
           </Card>
@@ -6001,7 +6251,7 @@ function Create({ onSave, settings, onSettings, onPending, onStarter, seed, onSe
       )}
       {busy && (
         <Card style={{ marginTop: 14, padding: '10px 8px', boxShadow: SH.raised }}>
-          <Loading title={progText} subtitle="Writing questions, answers and the marking for each one." />
+          <Loading steady title={progText} subtitle="Writing questions, answers and the marking for each one." />
         </Card>
       )}
 
@@ -6121,7 +6371,7 @@ function DraftReview({ drafts, setDrafts, meta, setMeta, onSave, onCancel, short
         })}
       </div>
 
-      <Btn full kind="primary" onClick={onSave} disabled={!kept}>Save {kept} cards</Btn>
+      <Btn full kind="primary" onClick={onSave} disabled={!kept}>Save {plural(kept, 'card')}</Btn>
     </div>
   );
 }
@@ -6167,7 +6417,7 @@ function Decks({ decks, progress, onEditCard, onDeleteCard, onDeleteDeck, onRena
               <div style={{ flex: 1, minWidth: 0 }}>
                 <div style={{ fontFamily: SANS, fontSize: 15.5, fontWeight: 700, color: T.ink,
                   overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{d.topic || d.subject || 'Untitled'}</div>
-                <Sub style={{ fontSize: 13 }}>{d.cards.length} cards · {d.subject || 'Untitled'}</Sub>
+                <Sub style={{ fontSize: 13 }}>{plural(d.cards.length, 'card')} · {d.subject || 'Untitled'}</Sub>
               </div>
               <div className="flex flex-col items-end gap-1">
                 {dueN > 0 && <Chip colour={T.red}>{dueN} due</Chip>}
@@ -6228,7 +6478,7 @@ function DeckEditor({ deck, progress, onBack, onEditCard, onDeleteCard, onDelete
             cursor: 'pointer', fontSize: 17, color: T.ink, boxShadow: SH.raised, flexShrink: 0 }}>‹</button>
         <div style={{ minWidth: 0, flex: 1 }}>
           <Title style={{ fontSize: 18, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{deck.topic || 'Deck'}</Title>
-          <Sub style={{ fontSize: 13 }}>{deck.subject} · {deck.cards.length} cards</Sub>
+          <Sub style={{ fontSize: 13 }}>{deck.subject} · {plural(deck.cards.length, 'card')}</Sub>
         </div>
         {!renaming && (
           <div className="flex gap-2" style={{ flexShrink: 0 }}>
@@ -6324,7 +6574,7 @@ function DeckEditor({ deck, progress, onBack, onEditCard, onDeleteCard, onDelete
         ) : (
           <div className="flex gap-2">
             <Btn full kind="danger" onClick={onDeleteDeck} style={{ background: T.red, color: '#fff' }}>
-              Delete {deck.cards.length} cards
+              Delete {plural(deck.cards.length, 'card')}
             </Btn>
             <Btn full kind="soft" onClick={() => setConfirmDeck(false)}>Keep</Btn>
           </div>
@@ -6476,7 +6726,7 @@ function Stats({ decks, progress, stats }){
           );
         })}
       </div>
-      <Sub style={{ marginTop: 18, textAlign: 'center' }}>{totalCards} cards across {decks.length} decks</Sub>
+      <Sub style={{ marginTop: 18, textAlign: 'center' }}>{plural(totalCards, 'card')} across {plural(decks.length, 'deck')}</Sub>
     </div>
   );
 }
@@ -6552,7 +6802,7 @@ function TransferCard({ library, progress, onImport }){
     try {
       const res = mergeImport(JSON.parse(raw), library, progress);
       onImport(res);
-      say(`Added ${res.deckCount} deck${res.deckCount > 1 ? 's' : ''} · ${res.cardCount} cards.`);
+      say(`Added ${plural(res.deckCount, 'deck')} · ${plural(res.cardCount, 'card')}.`);
       setText(''); setPasting(false);
     } catch (e){ say(e.message || 'That did not look like an export.', true); }
   };
@@ -6573,7 +6823,7 @@ function TransferCard({ library, progress, onImport }){
 
       <div className="flex items-center justify-between" style={{ marginBottom: 7 }}>
         <Sub style={{ fontSize: 12.5, fontWeight: 700, color: T.ink }}>
-          Export {chosenCards > 0 ? `(${chosen.length} deck${chosen.length > 1 ? 's' : ''} · ${chosenCards} card${chosenCards > 1 ? 's' : ''})` : ''}
+          Export {chosenCards > 0 ? `(${plural(chosen.length, 'deck')} · ${plural(chosenCards, 'card')})` : ''}
         </Sub>
         {library.decks.length > 1 && (
           <button className="sf-tap" onClick={() => picking ? setPicking(false) : startPicking()}
@@ -6861,7 +7111,7 @@ function Home({ library, progress, stats, settings, due, onStart, onCreate, onDe
           <Card style={{ padding: '22px 24px', marginBottom: 16, display: 'flex', alignItems: 'center', gap: 22, flexWrap: 'wrap' }}>
             <div style={{ flex: '1 1 260px' }}>
               <div style={{ fontFamily: SANS, fontSize: 21, fontWeight: 750, letterSpacing: '-0.01em', color: T.ink }}>
-                {due > 0 ? `You've got ${due} card${due > 1 ? 's' : ''} ready` : 'You\'re all caught up'}
+                {due > 0 ? `You've got ${plural(due, 'card')} ready` : 'You\'re all caught up'}
               </div>
               <Sub style={{ marginTop: 5, marginBottom: 18 }}>
                 {due > 0 ? `A mix of quick recall and long answers — about ${mins} min.` : 'Nothing due right now. Get ahead with some extra practice, or make more cards.'}
@@ -6962,7 +7212,7 @@ function Home({ library, progress, stats, settings, due, onStart, onCreate, onDe
                     <Tile colour={c} glyph={(d.subject || '?').trim().charAt(0).toUpperCase()} size={38} />
                     <div style={{ flex: 1, minWidth: 0 }}>
                       <div style={{ fontFamily: SANS, fontSize: 14, fontWeight: 650, color: T.ink, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{d.topic || d.subject || 'Untitled'}</div>
-                      <div style={{ fontFamily: SANS, fontSize: 12, color: T.faint, marginTop: 1 }}>{d.subject || 'Untitled'} · {d.cards.length} cards</div>
+                      <div style={{ fontFamily: SANS, fontSize: 12, color: T.faint, marginTop: 1 }}>{d.subject || 'Untitled'} · {plural(d.cards.length, 'card')}</div>
                     </div>
                     <div style={{ width: 72, height: 6, background: T.well, borderRadius: R.pill, overflow: 'hidden', flexShrink: 0 }}>
                       <div style={{ height: '100%', width: pct + '%', background: T.green, borderRadius: R.pill }} />
@@ -7018,7 +7268,7 @@ function Home({ library, progress, stats, settings, due, onStart, onCreate, onDe
             {[
               { icon: 'plus', t: 'Make new cards', s: 'Paste notes, a file, or a topic', on: onCreate },
               flagged > 0
-                ? { icon: 'warn', t: 'Review your tricky ones', s: `${flagged} card${flagged > 1 ? 's' : ''} keep tripping you up`, on: onStart }
+                ? { icon: 'warn', t: 'Review your tricky ones', s: `${plural(flagged, 'card')} keep tripping you up`, on: onStart }
                 : { icon: 'stack', t: 'Study your feed', s: 'Review what\'s due today', on: onStart },
               { icon: 'folder', t: 'All my decks', s: 'Edit, rename, export or delete', on: onDecks },
             ].map((q, i) => (
@@ -7944,7 +8194,7 @@ function LearnMode({ decks, deckId, session, onSaveSession, onClose, onDone }){
           {enough ? (
             <>
               <Sub style={{ marginBottom: 14 }}>
-                {scopeCards.length} cards in this run. Long answers sit this one out — they belong in the feed, where they get marked.
+                {plural(scopeCards.length, 'card')} in this run. Long answers sit this one out — they belong in the feed, where they get marked.
               </Sub>
               {!saved && <Btn full kind="primary" onClick={start}>Start learning →</Btn>}
             </>
@@ -8297,8 +8547,17 @@ async function buildDiagnostic(topic, level, n){
    Anything the model failed to judge comes back "shaky" with no gap sentence
    rather than being dropped — a checkpoint that silently vanished from the
    report would read as a pass. */
+/* Reasoning turned down for the same measured reason as markWorking: this is
+   one verdict and one gap sentence per answer in a single reply, and at full
+   effort it was the app's most expensive call — 761-1159 tokens, 37-51s — so
+   it fell past the 55s wall often enough that tools/diagnose-eval.mjs recorded
+   a hard failure and the blank-answer case never returned at all. At low
+   effort it costs 398-755 tokens and 28-37s, and quality did not move on any
+   axis the eval measures: gap sentences 100% specific and 100% on target in
+   both arms, zero standard citations in both, and the blank set finally
+   graded (all missing, which is the answer it could never get to before). */
 async function runDiagnosis(topic, level, items){
-  const reply = await callModel(diagnosePrompt(topic, level, items), 3000, MODEL_SMART);
+  const reply = await callModel(diagnosePrompt(topic, level, items), 3000, MODEL_SMART, true);
   const obj = rescueObjects(reply)[0] || {};
   const byIndex = {};
   for (const r of (Array.isArray(obj.items) ? obj.items : [])){
@@ -8784,9 +9043,9 @@ function StarterPicker({ onAdd, onClose }){
                   <Sub style={{ fontSize: 13, marginTop: 2 }}>{d.blurb}</Sub>
                   <div className="flex items-center gap-1.5" style={{ marginTop: 8, flexWrap: 'wrap' }}>
                     <Chip colour={T.muted}>{d.subject}</Chip>
-                    <Chip colour={T.muted}>{n.total} cards</Chip>
+                    <Chip colour={T.muted}>{plural(n.total, 'card')}</Chip>
                     {/* the long answers are the reason to pick one of these up */}
-                    <Chip colour={T.accentInk}>{n.long} long answer{n.long === 1 ? '' : 's'}</Chip>
+                    <Chip colour={T.accentInk}>{plural(n.long, 'long answer')}</Chip>
                   </div>
                 </div>
               </button>

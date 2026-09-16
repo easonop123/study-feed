@@ -48,13 +48,23 @@ async function loadApp(){
   return { app: mod, model };
 }
 
+/* --low sends reasoning_effort:low. The answer-reading half was timing out at
+   the proxy's 55s wall — it is the longest single reply the app asks for, one
+   verdict and one gap sentence per answer — and reasoning is the only lever
+   measured to move it. It is an arm rather than an assumption because the gap
+   sentence is the entire feature: a faster diagnostic that says "revise
+   collision theory" is worse than a slow one. */
+const LOW = process.argv.includes('--low');
+
 async function ask(model, prompt, maxTokens){
   const started = Date.now();
+  const body = { model, messages: [{ role: 'user', content: prompt }],
+    temperature: 0.7, top_p: 0.9, max_tokens: maxTokens, stream: false };
+  if (LOW && /gpt-oss/i.test(model)) body.reasoning_effort = 'low';
   const res = await fetch(ENDPOINT, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ model, messages: [{ role: 'user', content: prompt }],
-      temperature: 0.7, top_p: 0.9, max_tokens: maxTokens, stream: false }),
+    body: JSON.stringify(body),
   });
   const text = await res.text();
   const ms = Date.now() - started;

@@ -29,7 +29,7 @@
 
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
-import { dirname, join } from 'node:path';
+import { dirname, join, resolve } from 'node:path';
 import { CASES } from './mark-eval-cases.mjs';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
@@ -131,6 +131,18 @@ function promptFor(card, answer, level){
    be making — it has never seen the standard. */
 const STANDARD_CITATION = /\bAS\s?9\d{4}\b|\b9[0-2]\d{3}\b|\bNZQA\b|\bthe standard (?:requires|says|wants|asks)\b|\bmarking schedule\b/gi;
 
+/* --low sends reasoning_effort:low. markAnswer is the one call this repo has
+   always refused to turn the reasoning down on without measuring, and this is
+   the measurement: run it against the stored full-reasoning corpus
+   (tools/mark-eval-results-3000.json, same 42 cases, same ceiling) and compare
+   grade accuracy, note anchoring and balance before deciding.
+
+   It is worth answering because marking is landing near the proxy's 55s wall —
+   48.1s on one health run — and the two calls that went past it were fixed by
+   exactly this lever. Speed is not a reason to take it on its own; the corpus
+   is. */
+const LOW = process.argv.includes('--low');
+
 async function mark(card, answer, level){
   const body = {
     model: MODEL,
@@ -140,6 +152,7 @@ async function mark(card, answer, level){
     max_tokens: MARK_MAX_TOKENS,
     stream: false,
   };
+  if (LOW && /gpt-oss/i.test(MODEL)) body.reasoning_effort = 'low';
   const started = Date.now();
   const res = await fetch(ENDPOINT, {
     method: 'POST',
@@ -256,7 +269,7 @@ async function main(){
 
   const total = cases.length * repeat;
   console.log(`Marking eval — ${total} calls against ${ENDPOINT}`);
-  console.log(`Model: ${MODEL}, max_tokens ${MARK_MAX_TOKENS}${NO_NCEA ? ', NCEA rules OFF' : ''}${arg('level', null) ? ', level "' + arg('level', '') + '"' : ''}\n`);
+  console.log(`Model: ${MODEL}, max_tokens ${MARK_MAX_TOKENS}, reasoning ${LOW ? 'LOW' : 'full'}${NO_NCEA ? ', NCEA rules OFF' : ''}${arg('level', null) ? ', level "' + arg('level', '') + '"' : ''}\n`);
 
   const rows = [];
   let n = 0;
@@ -287,7 +300,13 @@ async function main(){
   }
 
   report(rows);
-  const outPath = join(HERE, arg('out', 'mark-eval-results.json'));
+  /* join(HERE, ...) is right for a bare filename and wrong for a path the
+     caller typed: `--out tools/x.json` run from the repo root became
+     tools/tools/x.json, and the whole run was lost at the last line after
+     twenty minutes of live calls. Resolve against the cwd when the caller
+     gave a path, and keep the old behaviour when they gave a name. */
+  const outArg = arg('out', 'mark-eval-results.json');
+  const outPath = /[\\/]/.test(outArg) ? resolve(outArg) : join(HERE, outArg);
   const { writeFileSync } = await import('node:fs');
   writeFileSync(outPath, JSON.stringify(rows, null, 2));
   console.log(`\nFull rows: ${outPath}`);

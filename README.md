@@ -189,11 +189,62 @@ now read from the app.
   overlaps them, and per-call latency barely moved. A twelve-slide PDF goes from
   twelve waits to four; a nine-part paper from nine to three.
 - **Turn the reasoning down where it is not needed.** The hints and the explainer
-  now pass `lowEffort`: sentence starters went from *broken at 21.9s* to working at
-  2.7s, writing points 5.1s → 6.6s-ish but reliable, explain 9.9s → 5.5s. Marking is
-  deliberately NOT given this — see `takesReasoningEffort` — because grades are the
-  product's core claim and `tools/mark-eval.mjs` measures them at full reasoning.
-  Changing that needs the eval re-run both ways first, not a guess.
+  pass `lowEffort`: sentence starters went from *broken at 21.9s* to working at
+  2.7s, writing points 5.1s → 6.6s-ish but reliable, explain 9.9s → 5.5s. The rule
+  for marking is **not "never", it is "never without the eval"** — see
+  `takesReasoningEffort`. Two marking calls have since earned it and one has
+  failed it, which is the useful part.
+
+### What the reasoning lever costs, measured (16 Sep 2026)
+
+`tools/health.mjs` found **"mark working" and "diagnostic: read" returning HTTP 504**
+— the proxy's own 55s abort — so the method marker and the half of Find my gaps
+that reads your answers were both failing outright. The obvious suspect was the
+token ceiling and it was **wrong**: dropping 3000 → 1700 still timed out, and
+`finish_reason` was `stop` on every call that returned, never `length`, so nothing
+was being truncated. The cost was reasoning. At full effort those two spent
+~1000–1200 completion tokens thinking, and at the endpoint's ~30 tokens a second
+that is 35–45 seconds before the answer starts.
+
+Both now pass `lowEffort`, each measured first, with a `--low` arm added to
+`mark-eval.mjs`, `worked-eval.mjs` and `diagnose-eval.mjs` so any of it can be
+re-run:
+
+| call | full reasoning | low |
+|---|---|---|
+| `markWorking` (`worked-eval`) | 1/4, three 504s | 7/8 over two runs, ECF 2/2, 15–25s |
+| `runDiagnosis` (`diagnose-eval`) | 1 hard failure, blank set never returned | no failures, gaps 100% specific and on-target in **both** arms |
+| `markAnswer` (`mark-eval`, 42 cases) | 90% in band, **Excellence 5/6** | 84% in band, **Excellence 1/6** |
+
+**`markAnswer` stays at full reasoning.** Read its second figure rather than its
+first: every other band is untouched at low effort — achieved 6/6, merit 6/6,
+waffle 4/4, terse-correct 4/4, confident-error 6/6 — and the whole regression is
+the model declining to award Excellence when it has no room to think, marking
+those answers Merit instead. That is the one grade this product cannot get wrong;
+the landing page and the upgrade panel are both built on the Merit→Excellence gap,
+and a marker that quietly capped everyone at Merit would look healthy on every
+other number in the table. The run is committed at
+`tools/mark-eval-low-reasoning.log` — force-added past the `*.log` ignore,
+because it is the evidence for a rule rather than the output of a run, and the
+next person tempted by this optimisation should be able to read it.
+
+**A retry that downshifts was tried and taken back out**, which is worth recording
+because it sounds obviously right. The idea: a request that did not fit the time
+should be re-asked more cheaply rather than identically. The arithmetic kills it.
+Only two call sites still ask for full reasoning — `markAnswer` and the upgrade
+path — so they are the only two it could ever affect. About 1 call in 8 times out
+at the moment, so ~12% of marks would reach a degraded second attempt, while the
+triple failure it was meant to rescue is 0.12³, about 2 in 1000. It would have
+spoiled marks ~60× more often than it saved one. Retrying unchanged is right: a
+fresh attempt gets a fresh roll of the congestion dice at no cost to the grade.
+
+- **The free tier is now the binding constraint, and it is measurable.** That
+  mark-eval run took **5 hard timeouts in 42 calls (12%)** on single attempts. The
+  app retries three times so students mostly still get their mark, but they wait a
+  minute extra for it, and a health-check median of 39s is not a fast product. No
+  prompt change fixes this — it is queue time at NVIDIA, not output length (one
+  call spent 51.9s producing 525 tokens, about 10 tokens/sec). The lever left is a
+  paid inference path.
 
 ## Usage counts
 
@@ -262,7 +313,7 @@ after retrying and leaves the reason in `lastApiError`, so a rate-limited run re
 empty stack rather than throwing — counting only the `catch` would miss the failure
 that matters most under load.
 
-## Data model — four storage keys
+## Data model — five storage keys
 
 | Key | Holds |
 |---|---|
@@ -270,6 +321,31 @@ that matters most under load.
 | `progress:all` | `{ [cardId]: { ease, interval, reps, lapses, due, flagged, seen } }` |
 | `stats:main` | `{ streak, lastDay, newByDate, reviewsByDate, practiceByDate, bySubject }` |
 | `settings:main` | `{ interleave, newPerDay, capNew, longMix, theme, name, examDate, lastSeenVersion, onboarded, dismissedTips, learnSession, diagnosis, paper }` |
+| `drafts:main` | `{ [cardId]: { text, at } }` — unfinished long answers and working |
+
+**Why drafts got the fifth key**, after four were held to for a year. A long
+answer is three hundred words the student typed, and it lived in component
+state only: a reload, a closed tab or a stray tap on a nav item destroyed it.
+That was a rare accident until the free tier started timing out on ~1 call in 8
+and the marking screen began sitting there for over a minute — and what a person
+does to a screen that looks stuck is reload it. The loading screen now asks them
+not to; this is what makes that request unnecessary rather than merely polite.
+
+It is not folded into `settings:main` because drafts are written on a debounce
+while typing, and settings is held in App state and saved whole, so a draft
+write from a component that deep would race App's own writes and one of them
+would lose. (The Ask panel's "no fifth key" rule still stands — that is a chat
+thread meant to be transient. A half-written exam answer is not.)
+
+Drafts are **not exported** with a deck: work in progress, not content. Only a
+draft under 24h old is offered back, and the store is capped at 40 — restoring
+an answer weeks later, when the card has come round again, would hand the
+student their old words at exactly the moment the point is to produce them from
+memory. `StudyCard`'s `grade()` clears the draft, since every card leaves the
+screen through there whatever face it wore. Covered by
+`tools/draft-store-test.mjs` (18 offline tests, real `load`/`save` over a fake
+localStorage) and verified end-to-end in the browser: typed, reloaded, restored,
+then cleared on grading.
 
 Card shapes:
 - `flip` / `cloze` — `{ id, type, front, back }`
