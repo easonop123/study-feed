@@ -189,11 +189,59 @@ now read from the app.
   overlaps them, and per-call latency barely moved. A twelve-slide PDF goes from
   twelve waits to four; a nine-part paper from nine to three.
 - **Turn the reasoning down where it is not needed.** The hints and the explainer
-  now pass `lowEffort`: sentence starters went from *broken at 21.9s* to working at
-  2.7s, writing points 5.1s → 6.6s-ish but reliable, explain 9.9s → 5.5s. Marking is
-  deliberately NOT given this — see `takesReasoningEffort` — because grades are the
-  product's core claim and `tools/mark-eval.mjs` measures them at full reasoning.
-  Changing that needs the eval re-run both ways first, not a guess.
+  pass `lowEffort`: sentence starters went from *broken at 21.9s* to working at
+  2.7s, writing points 5.1s → 6.6s-ish but reliable, explain 9.9s → 5.5s. The rule
+  for marking is **not "never", it is "never without the eval"** — see
+  `takesReasoningEffort`. Two marking calls have since earned it and one has
+  failed it, which is the useful part.
+
+### What the reasoning lever costs, measured (16 Sep 2026)
+
+`tools/health.mjs` found **"mark working" and "diagnostic: read" returning HTTP 504**
+— the proxy's own 55s abort — so the method marker and the half of Find my gaps
+that reads your answers were both failing outright. The obvious suspect was the
+token ceiling and it was **wrong**: dropping 3000 → 1700 still timed out, and
+`finish_reason` was `stop` on every call that returned, never `length`, so nothing
+was being truncated. The cost was reasoning. At full effort those two spent
+~1000–1200 completion tokens thinking, and at the endpoint's ~30 tokens a second
+that is 35–45 seconds before the answer starts.
+
+Both now pass `lowEffort`, each measured first, with a `--low` arm added to
+`mark-eval.mjs`, `worked-eval.mjs` and `diagnose-eval.mjs` so any of it can be
+re-run:
+
+| call | full reasoning | low |
+|---|---|---|
+| `markWorking` (`worked-eval`) | 1/4, three 504s | 7/8 over two runs, ECF 2/2, 15–25s |
+| `runDiagnosis` (`diagnose-eval`) | 1 hard failure, blank set never returned | no failures, gaps 100% specific and on-target in **both** arms |
+| `markAnswer` (`mark-eval`, 42 cases) | 90% in band, **Excellence 5/6** | 84% in band, **Excellence 1/6** |
+
+**`markAnswer` stays at full reasoning.** Read its second figure rather than its
+first: every other band is untouched at low effort — achieved 6/6, merit 6/6,
+waffle 4/4, terse-correct 4/4, confident-error 6/6 — and the whole regression is
+the model declining to award Excellence when it has no room to think, marking
+those answers Merit instead. That is the one grade this product cannot get wrong;
+the landing page and the upgrade panel are both built on the Merit→Excellence gap,
+and a marker that quietly capped everyone at Merit would look healthy on every
+other number in the table. Run at `tools/mark-eval-low-reasoning.log`.
+
+**A retry that downshifts was tried and taken back out**, which is worth recording
+because it sounds obviously right. The idea: a request that did not fit the time
+should be re-asked more cheaply rather than identically. The arithmetic kills it.
+Only two call sites still ask for full reasoning — `markAnswer` and the upgrade
+path — so they are the only two it could ever affect. About 1 call in 8 times out
+at the moment, so ~12% of marks would reach a degraded second attempt, while the
+triple failure it was meant to rescue is 0.12³, about 2 in 1000. It would have
+spoiled marks ~60× more often than it saved one. Retrying unchanged is right: a
+fresh attempt gets a fresh roll of the congestion dice at no cost to the grade.
+
+- **The free tier is now the binding constraint, and it is measurable.** That
+  mark-eval run took **5 hard timeouts in 42 calls (12%)** on single attempts. The
+  app retries three times so students mostly still get their mark, but they wait a
+  minute extra for it, and a health-check median of 39s is not a fast product. No
+  prompt change fixes this — it is queue time at NVIDIA, not output length (one
+  call spent 51.9s producing 525 tokens, about 10 tokens/sec). The lever left is a
+  paid inference path.
 
 ## Usage counts
 

@@ -358,8 +358,17 @@ function failureKind(e){
    1.x numbers sitting above the new 1.0.0 cannot cause a mis-fire. They are not
    shown next to the pre-launch entries either — those were dev builds and the
    numbers mean nothing to a student. */
-const APP_VERSION = '1.6.1';
+const APP_VERSION = '1.6.2';
 const PATCH_NOTES = [
+  { v: '1.6.2', date: '2026-09-16', title: 'Two things that had quietly stopped working', items: [
+    'Fixed: marking your working on a problem was failing outright. It was thinking about the arithmetic for so long that it ran out of time before it had written anything, so pressing the button got you an error and nothing else. It now comes back in about twenty seconds.',
+    'Fixed: the same thing was happening to Find my gaps when it read your answers — which is the half that actually tells you what is missing, so the report you were waiting for never arrived. Also fixed, and the answers come back roughly twice as fast.',
+    'Both of those were checked against the same tests the marking is checked against, so they are quicker without being more forgiving: the method marker still credits every step after your first mistake, and the gaps it names are still the specific missing thing rather than "revise this topic".',
+    'The long answer marker was NOT changed, and that is deliberate. Turning its thinking down the same way made it stop recognising Excellence — it marked nearly every Excellence answer as Merit and looked completely normal on everything else. It keeps taking its time.',
+    'The waiting screen tells you the truth now. If something is taking longer than usual it says so, and if the free AI is busy it says that, and asks you not to reload — reloading is what loses the answer you were waiting on.',
+    'When the AI does run out of time, the message no longer blames your connection, or tells you to paste a smaller section when what you were doing was having an answer marked.',
+    'And a deck with one card in it says "1 card".',
+  ] },
   { v: '1.6.1', date: '2026-08-29', title: 'Faster, and the stuck button works again', items: [
     'Fixed: "Still stuck? sentence starters" returned nothing at all. It was spending its entire budget thinking and had none left to answer with, so the button just failed. It now answers in about three seconds.',
     'Making cards is quicker and, more to the point, it stops timing out. It was asking for more cards in one go than it could finish in the time allowed, so some runs died and had to start over. It asks for a sensible number now and gets through.',
