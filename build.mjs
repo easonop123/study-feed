@@ -16,6 +16,23 @@ export const BUILD = {
   bundle: true,
   minify: true,
   jsx: 'automatic',
+  /* Stated rather than left to esbuild's defaults. Both of these were already
+     what it inferred, so pinning them changes nothing today — verified
+     byte-for-byte — and that is the point: the bundle is what the site serves,
+     and it should not depend on a value being guessed correctly.
+
+     IT IS NOT ENOUGH ON ITS OWN, WHICH IS WORTH WRITING DOWN. Adding
+     `"type": "module"` to package.json — a tempting one-liner, because Node
+     prints a MODULE_TYPELESS_PACKAGE_JSON warning four lines deep through the
+     top of every tool run and that is exactly what it asks for — moves the
+     shipped bundle anyway: esbuild reads the field when deciding how to interop
+     CommonJS dependencies, and `__toESM(react())` becomes `__toESM(react(), 1)`.
+     Harmless for React, which sets no `__esModule`, and precisely the kind of
+     harmless that stops being harmless the day a dependency does. Measured on
+     18 Sep 2026 and not shipped: a warning in the developer's terminal is not
+     worth a change to the thing students load. */
+  format: 'iife',
+  platform: 'browser',
   loader: { '.jsx': 'jsx' },
   define: {
     'process.env.NODE_ENV': '"production"',
