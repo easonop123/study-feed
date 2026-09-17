@@ -29,7 +29,7 @@
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
-import { allModels, numberNamed } from './app-source.mjs';
+import { allModels, numberNamed, checkerDeadlineMs } from './app-source.mjs';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const SRC = readFileSync(join(HERE, '..', 'StudyFeed.jsx'), 'utf8');
@@ -75,6 +75,10 @@ function grab(fns, consts){
 
 const ENDPOINT = process.env.SF_ENDPOINT || 'https://studyfeed.app/api/nvidia';
 const CATALOGUE = 'https://integrate.api.nvidia.com/v1/models';
+/* Derived from the proxy, never written down: a probe that gives up BEFORE the
+   server does turns a slow model into a dead one, and this file's whole job is
+   deciding which models are dead. */
+const DEADLINE_MS = checkerDeadlineMs(readFileSync(join(HERE, '..', 'api', 'nvidia.js'), 'utf8'));
 
 /* The ids the app ships with, so the control row is always the real one. */
 const shippingIds = () => allModels(SRC);
@@ -160,7 +164,7 @@ async function aliveScan(){
 
   const alive = [];
   for (const model of cands){
-    const row = await probe(model, 'Reply with the single word: ready', 300, 45000);
+    const row = await probe(model, 'Reply with the single word: ready', 300, DEADLINE_MS);
     if (row.status === 200){
       let tok = 0;
       try { tok = (JSON.parse(row.text).usage || {}).completion_tokens || 0; } catch {}
@@ -258,7 +262,7 @@ async function bake(models){
         const extra = {};
         if (job.low && takesReasoningEffort(model)) extra.reasoning_effort = 'low';
         if (isReasoner(model)) extra.chat_template_kwargs = { thinking: false };
-        const row = await probe(model, job.prompt(), job.max, 70000, extra);
+        const row = await probe(model, job.prompt(), job.max, DEADLINE_MS, extra);
         score[model].ran++;
         let cell;
         if (row.status === 200){
