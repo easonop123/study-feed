@@ -30,6 +30,7 @@ import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
 import { modelNamed } from './app-source.mjs';
+import { checkerDeadlineMs } from './app-source.mjs';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const SRC = readFileSync(join(HERE, '..', 'StudyFeed.jsx'), 'utf8');
@@ -140,7 +141,12 @@ const LEAKS = [
    should have been. A checker that cannot survive a slow endpoint reports
    nothing on exactly the evenings worth measuring. The proxy's own ceiling is
    about 55s, so anything still open at 90 is never arriving. */
-const CALL_TIMEOUT_MS = 90000;
+/* Derived from the proxy's own budget rather than written down: it has to sit
+   comfortably PAST the point where the proxy gives up and returns its 504, or
+   this starts reporting a timeout for an answer that was about to arrive. That
+   number moved from 55s to 85s on 18 Sep 2026 and three files had it hardcoded
+   at 90000 with a comment explaining why 90 was safely past 55. */
+const CALL_TIMEOUT_MS = checkerDeadlineMs(readFileSync(join(HERE, '..', 'api', 'nvidia.js'), 'utf8'));
 
 async function callOnce(prompt, cap){
   const started = Date.now();

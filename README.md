@@ -27,7 +27,7 @@ Model calls are OpenAI-compatible requests to NVIDIA Build (`integrate.api.nvidi
 | `VISION_MODELS` | `meta/llama-3.2-11b-vision-instruct` | reading slides/photos (one image per request) |
 
 - Key lives in the Vercel env var `NVIDIA_API_KEY` — never in a file (`.env*` is gitignored).
-- `postChat`'s first attempt runs to 58s, just past the proxy's own 55s abort, so the client receives the proxy's structured 504 rather than hanging up first and hiding it. `api/nvidia.js` sets `maxDuration = 60` and passes the upstream status and **response** through unchanged — the request is rebuilt rather than forwarded, see below.
+- `postChat`'s first attempt runs to 88s, just past the proxy's own 85s abort, so the client receives the proxy's structured 504 rather than hanging up first and hiding it. `api/nvidia.js` sets `maxDuration = 90` and passes the upstream status and **response** through unchanged — the request is rebuilt rather than forwarded, see below.
 - **NVIDIA retires free models with days of notice, and that is now handled rather than documented.** A 404 or 410 answers in about a third of a second, so `postChat` falls onto the next model in the chain and the student never finds out. Replacing a dead head is still worth doing — the chain buys the time to do it calmly instead of during an outage. `node tools/models.mjs` finds the replacement; see "when the catalogue collapsed" below.
 - **A model that HANGS is a different failure from one that is retired,** and costs a whole attempt rather than a third of a second. `noteHang` moves it to the back of the chain for the rest of the page's life. In memory, never in storage: it is a fact about NVIDIA this minute, not about this student, and a browser that cached "gemma is down" for a week would be worse than the problem.
 - Reasoning models (`deepseek`, `nemotron`) need `chat_template_kwargs: { thinking: false }` or chain-of-thought pollutes the JSON. `isReasoner` handles this.
@@ -266,11 +266,15 @@ now read from the app.
 
 **A checker that can hang for sixteen minutes is not a checker.** Measured 7 Sep 2026:
 one call sat inside `fetch` for **991 seconds** before undici gave up on a hung HTTP/2
-stream and threw. The proxy's own ceiling is about 55s, so nothing still open at 90 is
-coming — every second past that is the tool hanging rather than the feature being slow,
-and from the outside those look identical while you watch a blank row. `tools/paper-eval.mjs`
-learned this and grew a 90-second deadline; this file had not, and a run that takes
-twenty minutes to report a flake gets stopped rather than read.
+stream and threw. Every model-backed checker carries a deadline of its own now, and
+**it is derived from the proxy's budget rather than written down** — `checkerDeadlineMs`
+in `tools/app-source.mjs`. Three files used to hardcode 90 seconds with a comment
+explaining why 90 was safely past the proxy's 55; when the proxy's budget moved to 85s
+that sentence became false in all three at once, and a deadline five seconds after the
+server's would have started cutting off real replies. Past the deadline, every second is
+the tool hanging rather than the feature being slow, and from the outside those look
+identical while you watch a blank row — a run that takes twenty minutes to report a flake
+gets stopped rather than read.
 
 **And the deadline is kept on the wall clock, not only on a timer**, because on a laptop
 a timer is not enough. A run left going overnight came back with five rows reading TIMEOUT
@@ -524,6 +528,43 @@ of them cost an afternoon between them.
   lives once, in `tools/app-source.mjs`, which is also what stopped six of them
   breaking at once when `MODEL_SMART` became `TEXT_MODELS[0]`.
 
+### Every failure that day was the wall, and nothing else
+
+Eighteen real calls through the live proxy, three models, the app's own generate
+and mark prompts at the sizes the app really sends (`node tools/models.mjs
+--bake`):
+
+| Model | usable | median | every failure |
+|---|---|---|---|
+| `openai/gpt-oss-20b` | 5/6 | 31.4s | `504` at 55.3s |
+| `google/gemma-4-31b-it` | 4/6 | 30.7s | `504` at 55.4s and 55.5s |
+| `nvidia/nemotron-3.5-lightning-30b-a3b` | 4/6 | 32.4s | `504` at 55.3s |
+
+**Not one call failed for any other reason.** No malformed JSON, no empty reply,
+no truncation, no refusal, no rate limit — thirteen usable replies and five
+requests cut off by the clock at exactly the moment the proxy stops waiting. The
+successes run from 5.8s to 48.6s, right up to the edge, which is what a
+distribution looks like when it is being clipped rather than failing.
+
+So `maxDuration` went from 60 to 90 (18 Sep 2026), and the README's long-standing
+caution about not changing it blind is honoured rather than ignored: the failure
+is now measured. Trivial requests to the same endpoint in the same minutes came
+back in 0.3-2.0s, so there is no queue in front of the function — the delay is
+NVIDIA writing. A ~570-token reply that has not arrived by 55s is being written
+at under 10 tokens a second, inside the measured 12-46 range. Those are answers
+that exist and were being thrown away five seconds before they landed.
+
+**It costs the student nothing.** `ATTEMPT_MS` went from three attempts to two,
+so the worst case is 180 seconds either way — the same total, spent on two tries
+that can finish instead of three that cannot. A chain of three is still walked in
+full when the failures are cheap, because a retired or busy model does not spend
+the clock.
+
+**And it was tested where a wrong answer is free.** Vercel fails the *build* on a
+`maxDuration` the plan does not allow, so the change went up as a pull request
+first and the preview deployment's green check is the proof that the plan permits
+it. A red check costs nothing; a bad guess in production costs the app.
+
 ### `node tools/models.mjs` — is there anything to move to?
 
 ```bash
@@ -671,7 +712,7 @@ Decks are portable: export the whole library, a chosen subset, or one deck on it
 - **One retry per question.** A question that does not come back is not a degraded paper, it is a missing one: the student is handed two questions where a real sitting has three. `genChunk` splits a failed generate in half instead, because a chunk of notes can be halved and still make cards; a question is one indivisible reply, so the only useful move is to ask again. Exactly one retry, not a loop — the failures are timeouts, and a third attempt mostly stacks another minute onto someone already waiting, while a second is nearly free now the questions run in parallel and only the failures are still going.
 - **The pure functions are pinned offline.** `--dedup` also exercises the two changes that were bugs of omission rather than of wording, for no API call and in about a second: that `paperSource` now reaches the end of a long deck (a 300-card deck gets as far as card 295, where the old prefix-cap stopped near card 30) and never sends the answer side, and that `weakSpots` ranks a flagged card above a merely lapsed one and returns nothing rather than throwing when there is no deck or no history. 21 checks, and they are the ones to run on every change since they cannot fail because the endpoint is busy.
 - **The report now has somewhere to go.** The diagnostic has always ended by turning its findings into study material; the paper, which costs an hour rather than ten minutes, ended by naming where the marks went and stopping — leaving the most motivated minute in the app, the one just after a grade nobody wanted, with nothing to press. `paperToSource` builds notes from the parts that came in under the headline grade, biggest marks first, each carrying the question's own topic, **the rung above the one reached** (teaching the Achieved descriptor to someone already at Achieved teaches them what they just proved), and the marker's single line on what was missing from *their* answer. Drafts into Create, same as the diagnostic, so nothing is kept unlooked-at.
-- **The checker no longer dies when the endpoint stalls.** A run was ending in a stack trace rather than results: undici gives up on a hung HTTP/2 stream after five minutes and throws out of `fetch`, uncaught, so one stalled request took the remaining subjects with it. `callOnce` now has a 90-second deadline of its own — the proxy's ceiling is about 55s, so anything still open at 90 is not coming — and returns a failure row instead of throwing. The very next run proved the point: History timed out, and the other three subjects still reported.
+- **The checker no longer dies when the endpoint stalls.** A run was ending in a stack trace rather than results: undici gives up on a hung HTTP/2 stream after five minutes and throws out of `fetch`, uncaught, so one stalled request took the remaining subjects with it. `callOnce` now has a deadline of its own, derived from the proxy's budget rather than written down (`checkerDeadlineMs`), and returns a failure row instead of throwing. The very next run proved the point: History timed out, and the other three subjects still reported.
 - **What the relevance measurement has and has not shown.** The plan step itself is verified: the blueprint returns three distinct, on-topic focuses reliably, in about eleven seconds. Running three questions at once is verified: **2.41× faster over three real generates, no failures**. The *end-to-end* claim that planned papers are more relevant than unplanned ones is **not yet demonstrated** — a three-paper comparison against the live endpoint scored the two arms level on topic coverage, and more than a third of the calls in it failed with timeouts, which is too little surviving signal to conclude anything from. The topic metric is also blunt by construction here: every rates question names temperature and collision theory whatever it is about. Situations per question is the sharper measure and is the one to re-run when the endpoint is behaving.
 - **Relevance is measured, not asserted.** `tools/paper-eval.mjs --relevance` scores two numbers the older checks could not see, because "is it exam-shaped" and "does it leak a standard number" can both pass while the paper is still not worth sitting. **On-material** is the fraction of questions touching an idea the student is demonstrably studying — a question touching none of them is the drift being complained about. **Coverage** is how many *distinct* core ideas the paper reaches, which is the one that catches three good questions all on temperature. `--unplanned` runs the same measurement with the planning step off, so the plan's contribution can be isolated rather than assumed.
 - **Marked part by part through `markAnswer`** — the marker with the eval behind it — rather than a second marker written for this screen. Every part is already an extended-response question, so it is handed over as the card it is, and each part gets the annotated answer and the upgrade path for free. Sequentially, because eight parallel calls at a free tier that limits ~40/min is eight failures after an hour's work.

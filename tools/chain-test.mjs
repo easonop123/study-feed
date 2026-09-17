@@ -87,7 +87,9 @@ function harness(script, opts){
     'async function postOnce(body, timeoutMs){',
     '  const step = __script[__calls.length];',
     '  __calls.push({ model: body.model, timeoutMs: timeoutMs, body: body });',
-    '  const took = step && step.ms != null ? step.ms : 0;',
+    /* A hang lasts exactly as long as the wall it was given, which is what a
+       real one does — the request is cut off by the clock, not by the model. */
+    '  const took = step && step.ms === "wall" ? timeoutMs : (step && step.ms != null ? step.ms : 0);',
     '  __now += took;',
     '  if (step && step.ok) return step.ok;',
     '  throw new Error(step ? step.err : "API returned 500 — no script left");',
@@ -126,7 +128,7 @@ const eq = (got, want, what) => {
 const OK = (text) => ({ ok: text, ms: 1200 });
 const gone = (code) => ({ err: `API returned ${code} — model retired`, ms: 300 });
 const busy = () => ({ err: 'API returned 503 — no capacity', ms: 400 });
-const hang = () => ({ err: 'timed out — the AI took too long to respond', ms: 58000 });
+const hang = () => ({ err: 'timed out — the AI took too long to respond', ms: 'wall' });
 const dead = () => ({ err: 'API returned 401 — bad key', ms: 200 });
 
 /* ------------------------------------------------------------------ */
@@ -207,21 +209,36 @@ check('a bad key stops at once — the next model cannot help', () => {
       () => { eq(h.calls.length, 1, 'calls'); });
 });
 
-check('the worst case is still the three waits, not more', () => {
-  const h = harness([hang(), hang(), hang(), hang(), hang(), hang(), hang(), hang()]);
+check('the worst case is the attempt schedule, and not a second longer', () => {
+  /* Everything hangs, on every model. This is the state the student actually
+     complained about, and the only thing standing between them and an unbounded
+     wait is that the budget is a deadline. Read from the source, because the
+     schedule moved once already: the point is that the walk obeys whatever it
+     says, not that it says any particular thing. */
+  const budget = ((SRC.match(/const ATTEMPT_MS = \[([^\]]+)\]/) || [])[1] || '')
+    .split(',').map(n => Number(n.trim())).reduce((a, b) => a + b, 0);
+  if (!budget) throw new Error('could not read ATTEMPT_MS from StudyFeed.jsx');
+  const h = harness(Array.from({ length: 12 }, hang));
   return h.postChat([{ role: 'user', content: 'x' }], 950, h.TEXT_MODELS[0], true)
     .then(() => { throw new Error('should have thrown'); },
       () => {
-        const budget = 58000 + 62000 + 62000;
-        if (h.now() > budget + 6000) throw new Error(`spent ${h.now()}ms of a ${budget}ms budget`);
-        if (h.calls.length > 4) throw new Error(`${h.calls.length} attempts for a three-wait budget`);
+        /* The overrun allowance is the retry pauses, which are paid on top. */
+        if (h.now() > budget + 12000) throw new Error(`spent ${h.now()}ms of a ${budget}ms budget`);
+        if (h.calls.length > 4) throw new Error(`${h.calls.length} attempts against a ${h.waits.length + 1}-wait schedule`);
       });
 });
 
-check('the first wall clock is the one the proxy budget was set against', () => {
+check('the first attempt is given the first wall clock, whatever it is set to', () => {
+  /* The VALUE is not asserted here — `npm test`'s proxy check owns that, because
+     what makes it right is its relationship to the proxy's own abort, which
+     lives in another file. What this holds is that the schedule is used at all:
+     a walk that quietly gave every attempt the same clock would still pass every
+     other case in this file. */
+  const first = Number((SRC.match(/const ATTEMPT_MS = \[\s*(\d+)/) || [])[1]);
+  if (!first) throw new Error('could not read ATTEMPT_MS from StudyFeed.jsx');
   const h = harness([OK('cards')]);
   return h.postChat([{ role: 'user', content: 'x' }], 950, h.TEXT_MODELS[0], true).then(() => {
-    eq(h.calls[0].timeoutMs, 58000, 'first attempt wall clock');
+    eq(h.calls[0].timeoutMs, first, 'first attempt wall clock');
   });
 });
 
@@ -230,7 +247,10 @@ check('reasoning switches are decided per MODEL, not once per call', () => {
      stop, and gpt-oss takes a different lever entirely. A call that walks all
      three must send all three shapes — deciding this once, from the head, is
      how a fallback gets a request the model cannot use. */
-  const h = harness([hang(), hang(), OK('cards')]);
+  /* Busy rather than hung, so the walk reaches the third model: a hang spends a
+     whole attempt and the budget only stretches to two of those. What is being
+     checked here is the SHAPE of each request, not the failure handling. */
+  const h = harness([busy(), busy(), OK('cards')]);
   return h.postChat([{ role: 'user', content: 'x' }], 950, h.TEXT_MODELS[0], true).then(() => {
     const [a, b, c] = h.calls;
     if (a.body.chat_template_kwargs) throw new Error('gemma is not a reasoner and was told to stop thinking');
@@ -242,7 +262,7 @@ check('reasoning switches are decided per MODEL, not once per call', () => {
 });
 
 check('marking is never given low reasoning, whichever model answers', () => {
-  const h = harness([hang(), hang(), OK('grade')]);
+  const h = harness([busy(), busy(), OK('grade')]);
   return h.postChat([{ role: 'user', content: 'x' }], 3000, h.TEXT_MODELS[0], undefined).then(() => {
     for (const c of h.calls)
       if (c.body.reasoning_effort) throw new Error(`${c.model} was asked to think less about a mark`);

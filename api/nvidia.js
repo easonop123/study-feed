@@ -11,12 +11,27 @@
 
 const NVIDIA_URL = 'https://integrate.api.nvidia.com/v1/chat/completions';
 
-// How long this function may run. 60 was the Hobby-plan maximum when this was
-// written. It is the single number that sets the whole time budget: the abort
-// below is derived from it, and the client's first attempt has to outlast the
-// abort so it receives this function's own structured 504 rather than hanging
-// up first and hiding it.
-export const maxDuration = 60;
+// How long this function may run. It is the single number that sets the whole
+// time budget: the abort below is derived from it, and the client's first
+// attempt has to outlast the abort so it receives this function's own
+// structured 504 rather than hanging up first and hiding it.
+//
+// 60 -> 90 on 17 Sep 2026, and the reasoning is worth keeping because the
+// README spent a paragraph saying this could not be changed blind.
+//
+// What changed is that the failure is now MEASURED rather than assumed. Every
+// generate that failed that day failed the same way: nothing at all by 55s,
+// while trivial requests to the same endpoint in the same minutes came back in
+// 0.3-2.0s. A queue in front of this function would have slowed those too, so
+// the delay is NVIDIA writing, not Vercel waiting — and a ~570-token reply that
+// has not arrived by 55s is a reply being written at under 10 tokens a second,
+// which is inside the 12-46 range measured that evening. Those are answers that
+// exist and are thrown away five seconds before they land.
+//
+// The student does not wait longer for it. ATTEMPT_MS went from three attempts
+// to two, so the worst case is 180s either way — the same total, spent on two
+// tries that can finish instead of three that cannot.
+export const maxDuration = 90;
 
 /* Derived, not written down a second time. Three numbers have to move together
    whenever this budget changes — this function's ceiling, the abort below, and
@@ -28,11 +43,13 @@ export const maxDuration = 60;
    being killed by the platform, which serves an HTML error page the client
    cannot parse.
 
-   RAISING THIS IS THE ONE FIX FOR THE MARKING TIMEOUTS THAT COSTS NO QUALITY —
-   see the README's "the endpoint got three times slower". 60 was the Hobby
-   ceiling when this was written; Vercel's Fluid compute allows more now. Change
-   `maxDuration` alone and everything here follows; then raise `ATTEMPT_MS` to
-   match, or the test will tell you. */
+   RAISING THIS IS THE ONE FIX FOR THE TIMEOUTS THAT COSTS NO QUALITY — see the
+   README's "the endpoint got three times slower". Change `maxDuration` alone and
+   everything here follows; then move `ATTEMPT_MS` to match, or `npm test` will
+   say exactly what is wrong. Vercel fails the BUILD on a maxDuration the plan
+   does not allow, which is why this is safe to try on a preview deployment
+   before it goes near main: a red check costs nothing, a bad guess in
+   production costs the app. */
 const UPSTREAM_ABORT_MS = (maxDuration - 5) * 1000;
 
 /* ---------------------------------------------------------------------------

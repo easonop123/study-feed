@@ -64,3 +64,34 @@ export function allModels(src){
     ...[...src.matchAll(/const MODEL_[A-Z]+\s*=\s*'([^']+)'/g)].map(m => m[1]),
   ])];
 }
+
+/* The proxy's own time budget, read from `api/nvidia.js`.
+
+   Every checker here needs a deadline of its own, because undici will sit on a
+   stalled HTTP/2 stream for five minutes before throwing and take the rest of
+   the run down with it. That deadline only makes sense relative to the proxy:
+   it has to be comfortably past the point where the proxy gives up and returns
+   its own 504, or the checker starts reporting timeouts for answers that were
+   about to arrive — which is the same mistake the CLIENT made once, and the
+   reason `npm test` polices the three numbers.
+
+   Three files had `90000` written out with a comment saying "the proxy gives up
+   at 55s, so nothing still open at 90 is coming". When the proxy's budget moved
+   to 85s that sentence became false in all three at once, and the number became
+   a deadline 5 seconds after the server's — close enough to cut off real
+   replies. Derived here instead. */
+export function proxyBudget(proxySrc){
+  const maxDuration = Number((proxySrc.match(/export const maxDuration = (\d+)/) || [])[1]) || 0;
+  const slack = Number((proxySrc.match(/const UPSTREAM_ABORT_MS = \(maxDuration - (\d+)\)/) || [])[1]);
+  const abortMs = (maxDuration && Number.isFinite(slack)) ? (maxDuration - slack) * 1000 : 0;
+  return { maxDuration, abortMs };
+}
+
+/* How long a checker should wait before calling a request dead: the proxy's
+   abort plus enough room for the 504 to travel. Generous on purpose — a
+   checker that gives up early reports a broken feature that works. */
+export function checkerDeadlineMs(proxySrc){
+  const { abortMs } = proxyBudget(proxySrc);
+  if (!abortMs) throw new Error('could not read the proxy time budget from api/nvidia.js');
+  return abortMs + 35000;
+}
