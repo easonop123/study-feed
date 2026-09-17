@@ -20,6 +20,7 @@
 import { readFileSync, writeFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
+import { modelNamed } from './app-source.mjs';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const SRC = readFileSync(join(HERE, '..', 'StudyFeed.jsx'), 'utf8');
@@ -73,8 +74,8 @@ const grabbed = new Function(
   `\nreturn { ${CONSTS.concat(FNS).join(', ')} };`)();
 const { upgradePrompt, rescueObjects } = grabbed;
 
-const ENDPOINT = 'https://studyfeed.app/api/nvidia';
-const MODEL = (SRC.match(/const MODEL_SMART = '([^']+)'/) || [])[1];
+const ENDPOINT = process.env.SF_ENDPOINT || 'https://studyfeed.app/api/nvidia';
+const MODEL = modelNamed(SRC, 'MODEL_SMART');
 const UPGRADE_MAX = Number((SRC.match(/upgradePrompt\(card, answer, result, level\), (\d+)/) || [])[1]) || 1600;
 
 const arg = (n, d) => { const i = process.argv.indexOf('--' + n); return i > 0 && process.argv[i + 1] ? process.argv[i + 1] : d; };

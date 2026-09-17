@@ -5,7 +5,11 @@
   "description": "Turns dead time into revision. Runs as a claude.ai Artifact or as a website.",
   "scripts": {
     "build": "node build.mjs",
-    "check": "esbuild StudyFeed.jsx --bundle --loader:.jsx=jsx --external:react --format=esm --outfile=.check-out.js"
+    "check": "esbuild StudyFeed.jsx --bundle --loader:.jsx=jsx --external:react --format=esm --outfile=.check-out.js",
+    "test": "node tools/offline.mjs",
+    "health": "node tools/health.mjs",
+    "models": "node tools/models.mjs",
+    "serve": "npx esbuild --servedir=docs --serve=8123"
   },
   "dependencies": {
     "@vercel/analytics": "^2.0.1",

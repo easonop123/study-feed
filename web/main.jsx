@@ -59,6 +59,32 @@ if (POSTHOG_KEY.startsWith('phc_') && !POSTHOG_KEY.includes('REPLACE_ME')) {
   } catch {}
 }
 
+/* OFFLINE SUPPORT, and it belongs here for the same reason the analytics do:
+   `StudyFeed.jsx` also runs as a claude.ai Artifact, where there is no origin to
+   scope a service worker to and registering one would throw.
+
+   Registered after load rather than during it. A service worker installing
+   while the page is still fetching its own bundle competes for the same
+   connection, and the first visit is the one where that is most expensive and
+   least useful — nothing is cached yet, so there is nothing to gain by being
+   early.
+
+   See `docs/app/sw.js` for why it is network-first: nothing here may pin a
+   student to a stale build. If this ever needs to be switched off in a hurry,
+   deploy an `sw.js` whose install step calls `self.registration.unregister()` —
+   the browser re-checks the worker file on every navigation, so a fix reaches
+   everyone on their next load. Removing this call alone would NOT do it: an
+   already-installed worker keeps running. */
+/* `isSecureContext` rather than a check for https, because it is also true on
+   localhost — which is where this gets tested. The path check is the real
+   guard: a worker scoped to /app/ can only be registered by a page inside it,
+   and the landing page at / is deliberately left alone. */
+if ('serviceWorker' in navigator && window.isSecureContext && location.pathname.indexOf('/app/') === 0){
+  window.addEventListener('load', () => {
+    navigator.serviceWorker.register('/app/sw.js', { scope: '/app/' }).catch(() => {});
+  });
+}
+
 createRoot(document.getElementById('root')).render(
   <>
     <App />

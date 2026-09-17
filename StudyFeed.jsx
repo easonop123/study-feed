@@ -358,8 +358,32 @@ function failureKind(e){
    1.x numbers sitting above the new 1.0.0 cannot cause a mis-fire. They are not
    shown next to the pre-launch entries either — those were dev builds and the
    numbers mean nothing to a student. */
-const APP_VERSION = '1.6.1';
+const APP_VERSION = '1.8.1';
 const PATCH_NOTES = [
+  { v: '1.8.1', date: '2026-09-17', title: 'Making cards works again', items: [
+    'Fixed: making cards had stopped working almost every time. The AI service behind the app has got about three times slower over the past few weeks, and the app was still asking each request to write as much as it did when the service was quick — so most attempts ran out of time before they finished, and you got "the AI ran out of time" over and over. It now asks for a smaller batch at a time and gets through. The same notes still make the same number of cards, they just arrive in more, shorter goes, and the progress bar actually moves while it happens.',
+    'One model being retired no longer takes the whole app down. NVIDIA, who provide the free models this runs on, retire them constantly — of the thirty-four the app has used or considered, twenty-seven are now gone, most of them in the last three weeks — and until now that meant every AI feature stopped at the same moment and stayed stopped until somebody noticed and updated the app by hand. It now keeps a short list and moves down it. Falling past a retired model takes about a third of a second and you never see it happen.',
+    'And it stops asking a model that has gone quiet. If one takes the entire time limit without answering, the app remembers that for the rest of your visit and starts with a different one, instead of spending another minute finding out the same thing.',
+  ] },
+  { v: '1.8.0', date: '2026-09-08', title: 'It works with no signal', items: [
+    'Study Feed now opens without a connection. Add it to your home screen, get on a bus, open it in a tunnel — your cards, Learn, Quiz, your notes and your stats are all on your phone already and none of them ever needed the internet. Until now the app itself still had to be downloaded first, so no signal meant a blank screen. Making cards and marking still need a connection, and it says so instead of just failing.',
+    'It loads without waiting on anyone else. The layout used to come from a stylesheet built in your browser by a script from another website, every single time you opened the app. On a school network that blocks it, the whole app came out unstyled; on a slow phone you got a flicker before it caught up. It is a few lines of ordinary CSS now, and it arrives with the page.',
+    'Marking tells you what it is doing. A long answer can take the better part of a minute to mark, and if the first attempt runs out of time it quietly tries again — which looked exactly like the app having frozen. It now says which of those is happening, and that your answer is safe either way.',
+    'Every switch and slider says what it is. If you use a screen reader, the toggles used to announce themselves as "button" with no name and no on-or-off, and the long/quick slider read out a bare number. They now say what they control and what they are set to.',
+    'When marking does run out of time, it says something true about it. Every timeout used to be reported with advice written for making cards — "try again, or paste a smaller section" — which is not something you can do to an answer you have just written.',
+  ] },
+  { v: '1.7.0', date: '2026-09-04', title: 'A practice paper about what you are actually studying', items: [
+    'The paper is planned before it is written. It used to be written one question at a time, and the only thing keeping the questions apart was being told "pick something different from the last one" — so it wandered. Now it decides what the whole paper should examine first, then writes each question to that plan. Three questions that cover three things you are actually being taught, rather than three things that merely are not each other.',
+    'It leans on your cards properly. It used to read only the first chunk of a deck, so the back half of anything sizeable never influenced a paper at all — if you made cards in the order you were taught, it was writing you a paper on term one. It now reads across the whole deck.',
+    'New: "anything in particular?" Name the topics you want examined and the entire paper is built inside them. Leave it empty and you get a sweep of the standard, the way it worked before.',
+    'New: it can aim at what keeps tripping you up. The app has been recording which cards you get wrong — and especially the ones you were sure about — since your first review, and the paper never used to be told. Turn it on and at least one question makes you do one of them properly.',
+    'Maths and physics papers can finally ask you to work something out. Every part of every paper used to be an essay — Describe, Explain, Discuss — because those were the only kinds of question it was allowed to write. In a subject examined by working, that is the wrong paper however good the questions are. It can now ask you to Calculate, Determine, Solve or Show that, and it marks the method: a correct method carried through is Achieved, showing the reasoning is Merit, justifying it is Excellence.',
+    'It stops writing you the same experiment three times. Left alone it reached for the one setup the textbook uses first and built the whole paper on it — four questions in five, when we measured. It is now told to vary the situation, so three questions means three things to think about.',
+    'A question that fails to arrive is asked for again. The paper used to just come back short and tell you the connection dropped.',
+    'New: one button at the end turns what the paper cost you into cards. It takes the parts you lost marks on, biggest first, with what the next grade up needed and the marker\'s line on what was missing from your answer. They land in Create as drafts, so you look through them before anything is kept. Find my gaps has ended this way since it shipped; the paper, which costs you an hour rather than ten minutes, used to name the damage and stop.',
+    'The report says what each question was on. "Question 2(c)" told you where you lost the marks but not what to revise; it now names the topic underneath.',
+    'Faster, despite doing more. Planning first means the questions no longer have to wait for each other, so they are written at the same time — a three-question paper is about two waits instead of three, and that is with the planning step paid for.',
+  ] },
   { v: '1.6.1', date: '2026-08-29', title: 'Faster, and the stuck button works again', items: [
     'Fixed: "Still stuck? sentence starters" returned nothing at all. It was spending its entire budget thinking and had none left to answer with, so the button just failed. It now answers in about three seconds.',
     'Making cards is quicker and, more to the point, it stops timing out. It was asking for more cards in one go than it could finish in the time allowed, so some runs died and had to start over. It asks for a sensible number now and gets through.',
@@ -1220,6 +1244,33 @@ function shuffle(a){
    ========================================================================== */
 const COMMAND_VERBS = ['Describe','Explain','Discuss','Compare and contrast','Evaluate','Justify','Analyse'];
 
+/* THE PAPER MAY ASK A CALCULATION; A CARD MAY NOT.
+
+   COMMAND_VERBS is seven ways of asking for prose, which is right for an
+   extended-response card — that card type exists to grade WRITING. It was
+   also, until now, the only list the full paper could pick from, and the
+   paper is supposed to be a whole exam. So a student who named a maths,
+   physics or chemistry standard got three questions of "Describe", "Explain"
+   and "Discuss": every part an essay, in a subject examined mostly by
+   working. That is the sharpest form of the paper being "not relevant" and
+   it was invisible to the eval, which only ever checked that the last part
+   was not "Describe".
+
+   The app already decided this argument once — `worked` cards exist because
+   half of NCEA is not an essay — but the paper never got the same treatment.
+   These four verbs are added for the paper alone, so nothing about card
+   generation or marking moves.
+
+   A calculation part still grades on the A/M/E ladder rather than needing the
+   step-by-step method marker, because the ladder already says the right thing
+   about working: Achieved is a correct method carried through, Merit shows
+   the reasoning, Excellence justifies the choice of method. That is the same
+   rule `markWorkingPrompt` spells out at length, so a calculation part can go
+   through `markAnswer` with the rest of the paper instead of needing a second
+   marking path bolted onto this screen. */
+const CALC_VERBS = ['Calculate','Determine','Show that','Solve'];
+const PAPER_VERBS = COMMAND_VERBS.concat(CALC_VERBS);
+
 function rescueObjects(text){
   const out = [];
   let depth = 0, start = -1, inStr = false, esc = false;
@@ -1307,10 +1358,13 @@ function dedupeCards(cards){
 
 /* Batch size is a trade: bigger batches burn less usage (fewer API calls), but
    a bigger batch means a longer reply, and a long reply is what pushes a
-   request past the proxy's 60s ceiling. 6k characters keeps a single reply
-   comfortably inside it even on a slow school connection — the old 12k could
-   finish in ~11s at home and still time out on a congested network. */
-function batchText(text, size = 4000){
+   request past the proxy's ceiling. It moves with `mixTargets` and for the same
+   reason — the chunk is what the model is asked to make cards FROM, so handing
+   over twice the material while asking for half the cards just invites it to
+   ignore one of the two instructions. 12k → 6k (Aug) → 4k (29 Aug) → 2.4k
+   (17 Sep), each time the endpoint got slower. See GEN_MAX_TOKENS for the
+   arithmetic that sets all three. */
+function batchText(text, size = 2400){
   const paras = text.split(/\n\s*\n/);
   const batches = [];
   let cur = '';
@@ -1374,6 +1428,8 @@ ${source}`;
 function extendedPrompt(source, level, strict){
   return `You are an expert ${level} examiner. From the material below, write EXTENDED-RESPONSE exam questions that reward how an answer is CONSTRUCTED, not single-word recall.
 
+Write between 2 and 3 questions. Not more — an extended card carries five written descriptors, so it is the most expensive thing you can be asked for, and a long reply is what pushes this request past the time limit. Three finished questions beat five unfinished ones.
+
 Return ONLY a JSON array. Each element:
 { "type":"extended",
   "verb": one of ${COMMAND_VERBS.map(v => '"' + v + '"').join(', ')},
@@ -1427,21 +1483,30 @@ ${source}`;
 }
 
 /* turn the slider percentage into concrete per-reply counts */
-/* Per-reply card targets. Tuned to ~18-20 cards/batch so a generate returns a
-   full set (Qwen produces close to exactly what's asked, so ask for more). */
-/* Cut roughly in half on 29 Aug 2026 — see the note above GEN_MAX_TOKENS.
-   The same notes still produce the same number of cards overall, because
-   batchText splits them across more calls; each call now finishes instead of
-   one in three dying at the ceiling, and the progress bar moves while it
-   happens rather than sitting still for 55 seconds. */
+/* Per-reply card targets. These ARE the ceiling in another form — the model
+   writes about what it is asked for, so this is what decides how long the reply
+   takes to come back, and therefore whether it comes back at all.
+
+   Halved on 29 Aug 2026 when the endpoint slowed down, and halved again on
+   17 Sep 2026 when it slowed down further. The arithmetic is in the note above
+   GEN_MAX_TOKENS: at the measured 29 tokens a second the whole reply has to fit
+   in about 950 tokens, and a long card costs roughly 220 of those, an MCQ 90, a
+   quick card 50. The set below comes to about 500 at the default slider
+   position, which leaves room for a model that is feeling generous.
+
+   THE SAME NOTES STILL MAKE THE SAME NUMBER OF CARDS. `batchText` splits the
+   material into more, smaller chunks and `mapLimit` runs three at a time, so
+   what changes is that each call finishes — instead of most of them dying on
+   the clock and the student being told the AI is slow. It also keeps the
+   progress bar moving, which a single 55-second wait does not. */
 function mixTargets(pctLong){
   const p = Math.max(0, Math.min(100, pctLong));
-  if (p <= 5)  return { long: 0, mcq: 2, quick: 11 };
-  if (p >= 95) return { long: 6, mcq: 2, quick: 0 };
+  if (p <= 5)  return { long: 0, mcq: 1, quick: 6 };
+  if (p >= 95) return { long: 3, mcq: 1, quick: 0 };
   return {
-    long:  Math.max(1, Math.round((p / 100) * 6)),
-    mcq:   2,
-    quick: Math.max(2, Math.round(((100 - p) / 100) * 11)),
+    long:  Math.max(1, Math.round((p / 100) * 3)),
+    mcq:   1,
+    quick: Math.max(2, Math.round(((100 - p) / 100) * 6)),
   };
 }
 
@@ -1524,35 +1589,248 @@ const PAPER_SHAPES = {
   full:  { questions: 3, minutes: 60, label: 'Full paper',  blurb: '3 questions · about 60 min' },
 };
 
-/* Material for the paper comes from the student's own cards. A paper built out
-   of nothing is a paper about nothing, and this app already has the one thing
-   that makes it specific to them. Capped so the prompt stays inside budget —
-   the model needs enough to find a context, not the whole deck. */
-function paperSource(deck, cap = 3500){
-  const bits = [];
+/* WHAT THE PAPER IS ABOUT — the deck, sampled, plus what keeps going wrong.
+
+   Two things were wrong with reading the deck as one capped string. It walked
+   the cards in storage order and stopped dead at the cap, so a big deck only
+   ever steered the paper with the cards someone happened to make first — the
+   back half of a 200-card deck was invisible to every paper they ever sat. And
+   it handed over whole question-and-answer pairs, which read to a model as
+   questions to imitate rather than as ground to cover, which is how you get
+   the three-flashcards-in-a-trenchcoat paper the eval already warns about.
+
+   So: stride across the WHOLE deck rather than taking a prefix, and hand over
+   the question side only. The question side is the topic; the answer side is
+   the thing the paper is supposed to make the student produce, and printing it
+   next to a request for exam questions is an invitation to ask for it back. */
+function paperSource(deck, cap = 2200){
+  const all = [];
   for (const c of deck.cards){
-    const qa = cardQA(c);
-    const line = (qa.q || '').trim() + (qa.a ? ' — ' + qa.a.replace(/\s+/g, ' ').trim() : '');
-    if (line.length > 4) bits.push(line);
+    const q = (cardQA(c).q || '').replace(/\s+/g, ' ').trim();
+    if (q.length > 4) all.push(q.length > 110 ? q.slice(0, 110) : q);
   }
+  if (!all.length) return '';
+  /* Stride, so front, middle and end are all represented however long the
+     deck is. A deck that fits under the cap is unaffected — stride is 1. */
+  const room = Math.max(1, Math.floor(cap / 46));
+  const stride = Math.max(1, Math.ceil(all.length / room));
   let out = '';
-  for (const b of bits){
-    if (out.length + b.length > cap) break;
-    out += b + '\n';
+  for (let i = 0; i < all.length; i += stride){
+    if (out.length + all[i].length > cap) break;
+    out += '- ' + all[i] + '\n';
   }
   return out.trim();
 }
 
-function paperPrompt(source, level, standard, n, total, already){
-  const avoid = already && already.length
+/* THE CARDS THAT KEEP TRIPPING THEM UP.
+
+   The app has known this all along and the paper has never been told. Every
+   review writes `lapses` and `flagged` into progress — `flagged` specifically
+   meaning "you were sure and you were wrong", which is the most useful signal
+   in the store — and a practice paper that leans on those is a different
+   product from one that picks three ideas out of a subject at random. It is
+   also the honest version of what this screen claims to be for: the week
+   before an exam, the question worth sitting is the one you keep losing.
+
+   A steer, not a syllabus. These come back as a short list the blueprint is
+   told to weight towards, not as the only thing it may ask about — a paper
+   built ONLY from your worst cards is a punishment, not a practice paper. */
+function weakSpots(deck, progress, cap = 700){
+  if (!deck || !progress) return '';
+  const scored = [];
+  for (const c of deck.cards){
+    const p = progress[c.id];
+    if (!p || !p.seen) continue;
+    /* Flagged outranks lapse count: being confidently wrong is a sharper
+       signal than having found something hard and worked at it. */
+    const score = (p.flagged ? 100 : 0) + (p.lapses || 0) * 10 + (p.ease < 2.2 ? 5 : 0);
+    if (score <= 0) continue;
+    const q = (cardQA(c).q || '').replace(/\s+/g, ' ').trim();
+    if (q.length > 4) scored.push({ score: score, q: q.length > 100 ? q.slice(0, 100) : q });
+  }
+  scored.sort((a, b) => b.score - a.score);
+  let out = '';
+  for (const s of scored){
+    if (out.length + s.q.length > cap) break;
+    out += '- ' + s.q + '\n';
+  }
+  return out.trim();
+}
+
+/* PLAN THE PAPER BEFORE WRITING IT.
+
+   This is the fix for the complaint that the questions were not relevant, and
+   the reason is structural rather than a matter of prompt wording. Questions
+   used to be generated one at a time with no plan, and the only thing holding
+   them apart was a list of the contexts already used and an instruction to
+   "pick a DIFFERENT idea". That is a negative constraint. Told only what to
+   avoid, a model drifts away from the middle of a subject — the second and
+   third questions kept landing somewhere defensibly on-topic and nowhere near
+   what the student came to practise. Nothing in the old loop ever said what
+   the paper as a whole was supposed to COVER.
+
+   So the paper gets a blueprint first, exactly as the diagnostic does, and for
+   the same reason: the set is the unit. One cheap call picks the ideas, weighs
+   them against the student's own material and their weak spots, and then each
+   question is written to an assigned focus instead of to an exclusion list.
+
+   It also makes the questions independent of each other, which is what lets
+   them be written in parallel below — so the extra call costs less wall time
+   than it saves. */
+function blueprintPaperPrompt(source, weak, level, standard, cover, n){
+  const steer = source
+    ? `\n\nWHAT THE STUDENT HAS BEEN STUDYING — the questions on their own cards. This is the best evidence you have of what their course actually covers, so weight the paper towards this ground:\n${source}`
+    : '';
+  const trouble = weak
+    ? `\n\nWHAT THEY KEEP GETTING WRONG — from their review history. At least one question should make them do one of these properly:\n${weak}`
+    : '';
+  const asked = cover
+    ? `\n\nTHE STUDENT ASKED FOR THIS PAPER TO COVER: ${cover}\nThis is the strongest signal on the page. Unless it is impossible, every focus below should sit inside it.`
+    : '';
+  return `You are an expert ${level} examiner planning a practice examination paper${standard ? ` for: "${standard}"` : ''}.
+
+Plan ${n} question${n === 1 ? '' : 's'}. You are choosing WHAT the paper examines, not writing it yet.
+
+The paper has to be worth an hour of a student's revision the week before their exam. That means the ideas at the CENTRE of this material — the ones the course is built on and the ones examiners come back to every year — not the interesting corners. A question that is defensibly on-topic but peripheral is the main way a practice paper wastes someone's time.
+
+Return ONLY a JSON array of exactly ${n} object${n === 1 ? '' : 's'}:
+{ "focus": the ONE idea this question examines, 3-10 words, as a topic and not as a question,
+  "setup": 2-5 words naming the MATERIALS this question is built on — the substances, the apparatus, the source, the scenario. "magnesium and hydrochloric acid", "marble chips", "a trolley on a ramp", "a settler's diary". EVERY QUESTION MUST HAVE A DIFFERENT ONE.,
+  "context": one line describing that situation concretely, using the setup above.,
+  "why": a few words on why this earns its place on the paper }
+
+Rules:
+- NO TWO QUESTIONS MAY SHARE A "setup". This is the rule most often broken, so check it before you answer: read your three setups back and make sure no two name the same substances or the same apparatus. Every subject has one stock example the textbooks reach for first — and if the material below happens to mention it, that pull is stronger still. Left alone, a paper uses it for all three questions with only the wording changed. Measured on this feature, four questions in five came back built on the same reaction. A student who sits that paper has practised one situation three times, which is the opposite of what an exam does to them. Reach for the other standard situations this topic is taught with.
+- If this subject is examined by working — maths, physics, chemistry, statistics — then at least one focus should be an idea the student has to CALCULATE with, not just write about. A plan of three discussion topics produces three essays, which is the wrong paper for these subjects. But pick a calculation that belongs to THIS topic: drifting to a neighbouring topic because it has more numbers in it hands the student a paper on something they were not revising, which is the worst thing this plan can do.
+- The ${n} focuses must be genuinely DIFFERENT ideas, not one idea in three costumes.
+- Every focus must be central to this material. If you would not expect it to appear on a real paper for this standard, do not plan it.
+- Stay inside the subject named above. A focus belonging to a different subject is a failure however good it is.
+- ${n > 1 ? 'At most ONE of them may go beyond what the student has written down — the rest must sit on ground they are clearly studying. A paper that is mostly stretch is a paper that reads as irrelevant.' : 'It must sit on ground the student is clearly studying.'}
+- The "context" line must be something to work from, not a restatement of the focus.
+- Pitch it at ${level} and no higher.
+- No JSON outside the array.${asked}${steer}${trouble}${nceaRules(level)}`;
+}
+
+/* A blueprint the paper can actually be written from. A plan entry with no
+   focus is dropped rather than repaired — a question written to an empty
+   focus is exactly the unanchored question this whole step exists to stop.
+   If nothing survives, buildPaper falls back to the old unplanned path
+   rather than refusing to write a paper.
+
+   AND THE REPEATED SETUP IS CAUGHT HERE, not asked for nicely.
+
+   Telling the model to vary the situations does not work: measured over six
+   plans, two thirds still put all three questions on the same reaction, at
+   0.56 distinct setups per question. That is the same lesson the plan itself
+   taught — an instruction the model is free to ignore is not a mechanism —
+   so the constraint is enforced where it cannot be talked out of. A plan
+   entry whose setup repeats an earlier one loses its context and is handed
+   the list of setups already taken, and `paperPrompt` then requires it to
+   build on something else. The check is deliberately loose about wording
+   (word overlap, not string equality) because "magnesium ribbon and HCl" and
+   "magnesium and hydrochloric acid" are the same experiment. */
+/* Words that do not distinguish one situation from another, so they must not
+   be what makes two situations look alike. The joining words are obvious; the
+   reagents are the ones that matter and are easy to miss. Nearly every rates
+   experiment is run in hydrochloric acid, so "magnesium and hydrochloric
+   acid" and "sodium thiosulfate and hydrochloric acid" share two words out of
+   three and were being called the same experiment — which would have banned
+   a perfectly good second question. What distinguishes a setup is the
+   substance being reacted and the apparatus, never the solvent it sits in. */
+const SETUP_NOISE = ['and', 'a', 'an', 'the', 'of', 'with', 'in', 'on', 'to', 'two', 'using',
+  'acid', 'acids', 'hydrochloric', 'sulfuric', 'sulphuric', 'solution', 'solutions',
+  'water', 'dilute', 'concentrated', 'gas', 'versus', 'against',
+  'experiment', 'reaction', 'student', 'sample', 'test', 'trial'];
+function setupWords(s){
+  const out = [];
+  for (const w of String(s || '').toLowerCase().split(/[^a-z0-9]+/)){
+    if (w.length > 2 && SETUP_NOISE.indexOf(w) < 0) out.push(w);
+  }
+  return out;
+}
+/* Same situation if either one's distinctive words are mostly inside the
+   other's. Judged against the SHORTER list, so "magnesium" does not escape
+   being a repeat of "magnesium ribbon and dilute hydrochloric acid". */
+function sameSetup(a, b){
+  const A = setupWords(a), B = setupWords(b);
+  if (!A.length || !B.length) return false;
+  const small = A.length <= B.length ? A : B, big = A.length <= B.length ? B : A;
+  let hit = 0;
+  for (const w of small) if (big.indexOf(w) >= 0) hit++;
+  return hit / small.length >= 0.5;
+}
+
+function cleanPaperPlan(arr, want){
+  const out = [];
+  for (const o of arr || []){
+    if (!o || typeof o !== 'object') continue;
+    const focus = String(o.focus == null ? '' : o.focus).replace(/\s+/g, ' ').trim();
+    if (!focus) continue;
+    const setup = String(o.setup == null ? '' : o.setup).replace(/\s+/g, ' ').trim();
+    const taken = out.filter(e => e.setup && sameSetup(e.setup, setup)).length > 0;
+    out.push({
+      focus: focus,
+      setup: setup,
+      /* A repeat keeps its focus — the IDEA was fine, it is the situation
+         that was borrowed — but loses the context, so the question writer
+         has to build one, and is told what it may not build it on. */
+      context: taken ? '' : String(o.context == null ? '' : o.context).replace(/\s+/g, ' ').trim(),
+      avoid: taken ? out.map(e => e.setup).filter(Boolean) : [],
+      why: String(o.why == null ? '' : o.why).replace(/\s+/g, ' ').trim(),
+    });
+    if (out.length >= want) break;
+  }
+  return out;
+}
+
+/* Small and quick — three focuses with a line each. The ceiling is a fifth of
+   a question's, and it buys every question below an anchor. */
+const PLAN_MAX_TOKENS = 700;
+
+async function planPaper(source, weak, level, standard, cover, n){
+  try {
+    const reply = await callModel(
+      blueprintPaperPrompt(source, weak, level, standard, cover, n),
+      PLAN_MAX_TOKENS, MODEL_SMART, true);
+    return cleanPaperPlan(parseJsonArray(reply), n);
+  } catch (e){ noteApiError(e); return []; }
+}
+
+function paperPrompt(source, level, standard, n, total, already, plan, cover){
+  /* The exclusion list is now the FALLBACK, not the mechanism. When the
+     blueprint came back, each question already knows what it is for and does
+     not need to be told what to dodge; when it did not, this is what keeps
+     three unplanned questions off the same idea. */
+  const avoid = (!plan && already && already.length)
     ? `\n\nALREADY ON THIS PAPER — pick a DIFFERENT idea and a different context:\n${already.map(a => '- ' + a).join('\n')}`
     : '';
+  /* A plan entry whose setup repeated an earlier one arrives with no context
+     and a list of what is already taken. It keeps its focus — the idea was
+     fine, the situation was borrowed — so this asks for the same idea built
+     on different material, which is the whole point of catching it. */
+  const banned = (plan && plan.avoid && plan.avoid.length)
+    ? `\n- DO NOT BUILD IT ON: ${plan.avoid.join('; ')}. Another question on this paper already uses that, and a paper that runs the same materials twice examines one situation twice. Pick different substances, different apparatus, a different scenario — the same idea, somewhere else.`
+    : '';
+  const brief = plan
+    ? `\n\nWHAT THIS QUESTION IS FOR — decided when the paper was planned, so that it covers the right ground as a whole. Write THIS question, not another one:\n- EXAMINES: ${plan.focus}${plan.context ? `\n- BUILD IT ON: ${plan.context}` : ''}${banned}\nThe context you write must make the student use that idea. If you find yourself writing about something else, you have written the wrong question.`
+    : '';
+  const asked = cover
+    ? `\n\nTHE STUDENT ASKED FOR A PAPER COVERING: ${cover}. Keep this question inside that.`
+    : '';
+  /* The steer is worded as ground to cover rather than as a fence, but it no
+     longer tells the model that the best question is the one the student has
+     not written down. That line was written to stop a nine-card deck
+     producing a nine-card paper, and it overshot: combined with no plan, it
+     read as an instruction to go looking away from the student's course, and
+     the paper that came back was the one they said was not relevant. The
+     blueprint now owns that balance — it is allowed exactly one question
+     beyond the notes — so this can simply say what the material is. */
   const steer = source
-    ? `\n\nTHE STUDENT'S OWN NOTES — a steer, not a fence. Lean towards the emphases here, but you are NOT limited to them and you should NOT avoid a topic just because it is missing:\n${source}`
+    ? `\n\nTHE STUDENT'S OWN NOTES — the questions on the cards they have been studying. This is the best evidence of what their course covers and what the paper should feel like:\n${source}`
     : '';
   return `You are writing QUESTION ${n} of ${total} of a ${level} practice examination paper${standard ? ` for: "${standard}"` : ''}.
 
-Draw on the whole subject, not on any one set of notes: any idea a course on this topic would teach is fair game, and the best question is often about the part a student has not written down. Write it as a real senior-secondary examination question — a concrete situation carrying real numbers or real material to work from, then parts that climb off it.
+Write it as a real senior-secondary examination question — a concrete situation carrying real numbers or real material to work from, then parts that climb off it.
 
 STAY INSIDE THE SUBJECT NAMED ABOVE. A question that belongs to a different subject is a failure however good it is. Give the context whatever a question in THAT subject would actually have: an experiment and its measurements for a science, an expression or a set of values for a maths topic, a source or an account for a history one. Do not reach for laboratory apparatus unless the subject is a laboratory science.
 
@@ -1566,7 +1844,7 @@ Return ONLY JSON, one object:
 { "context": a short resource or scenario the parts all refer to — 1-3 sentences of situation, data or description, the way an exam gives you something to work from. Concrete and specific, never a restatement of the topic.,
   "parts": [ 2-3 objects, in order, each:
     { "label": "a" then "b" then "c",
-      "verb": one of ${COMMAND_VERBS.map(v => '"' + v + '"').join(', ')},
+      "verb": one of ${PAPER_VERBS.map(v => '"' + v + '"').join(', ')},
       "prompt": the question for this part, referring to the context above,
       "marks": integer 2-6,
       "achieved": what the WHAT looks like for this part,
@@ -1575,13 +1853,16 @@ Return ONLY JSON, one object:
 
 RULES THAT MAKE IT AN EXAM QUESTION RATHER THAN THREE CARDS:
 - The parts must CLIMB. Part (a) asks them to name or describe, part (b) to explain with cause and effect, part (c) to apply it to the context and justify. That climb is the whole point — it is the ladder the answers are graded on.
+- IF THIS SUBJECT IS EXAMINED BY WORKING — maths, physics, chemistry, statistics, economics, anything where a real paper would put numbers in front of the student — then a part should ask for a calculation, using ${CALC_VERBS.map(v => '"' + v + '"').join(', ')}. A paper of nothing but "Describe" and "Explain" in a subject examined by working is the wrong paper however good the prose questions are. Put real figures with units in the context so there is something to work from, and say what to find.
+- BUT THE CALCULATION MUST BE ABOUT THE IDEA THIS QUESTION EXAMINES. Do not go looking for a different topic because it happens to have numbers in it: asked for a question on reaction rates, a question about heat energy is off the syllabus the student is revising, and it is worse than asking them to explain something in words. If the idea genuinely cannot be calculated with, ask for it in words and let another question carry the numbers.
+- For a calculation part, write the three rungs about the METHOD, because that is how working is marked: "achieved" is the correct method carried through to an answer with units; "merit" shows the reasoning, meaning the relationship or rearrangement is stated rather than just used; "excellence" justifies the method or evaluates the result — whether it is reasonable, what it depends on, what a change would do.
 - Every part hangs off the ONE context. A part that could be answered without reading the context does not belong on this question.
 - The context must be something to think about, not decoration: a set of results, a situation, a claim someone has made, a design that has to be judged.
 - Marks go up across the parts. The last part is worth the most.
 - Pitch it where that standard actually sits. Not harder than the real thing to seem rigorous, and not easier to be kind — a practice paper that misjudges the level teaches the wrong thing about how much to write.
 - Use a real, concrete context: named apparatus, actual figures with units, a specific situation or claim. Vague contexts produce vague answers and cannot be marked properly.
 - Do NOT number the question or write "Question ${n}" — that is added around you.
-- No JSON outside the object.${steer}${avoid}${nceaRules(level)}`;
+- No JSON outside the object.${brief}${asked}${steer}${avoid}${nceaRules(level)}`;
 }
 
 /* Ceiling per question. One question with three parts and a ladder for each is
@@ -1598,7 +1879,7 @@ function partsFromJson(o){
     if (!p || !p.prompt) continue;
     out.push({
       label: labels[out.length] || String(out.length + 1),
-      verb: COMMAND_VERBS.includes(p.verb) ? p.verb : (p.verb || 'Explain'),
+      verb: PAPER_VERBS.includes(p.verb) ? p.verb : (p.verb || 'Explain'),
       prompt: String(p.prompt),
       marks: Math.max(1, Math.min(9, Number(p.marks) || 3)),
       achieved: String(p.achieved || ''),
@@ -1610,38 +1891,126 @@ function partsFromJson(o){
   return out;
 }
 
-/* Build the paper, question by question, reporting progress as it goes.
+/* Build the paper: plan it, then write every question against that plan.
+
    A question that comes back unusable is skipped rather than retried forever;
    if NONE survive the caller shows the failure, and if some do the student is
-   told the paper is short rather than being handed one silently. */
-async function buildPaper(deck, level, standard, shapeKey, onProgress){
+   told the paper is short rather than being handed one silently.
+
+   WRITTEN IN PARALLEL, which the blueprint is what makes safe. The old loop
+   had to run in series because each question was told which contexts were
+   already taken, so question three could not start until question two came
+   back. With a plan, the focuses are decided up front and no question depends
+   on any other — so they go through mapLimit at the same GEN_CONCURRENCY the
+   rest of the app uses, and a three-question paper is two waits instead of
+   three even after paying for the plan. Order is preserved by mapLimit, so
+   the paper still reads in the order it was planned.
+
+   Without a plan it falls back to the old sequential path. A paper is worth
+   having even when the planning call is the one that fails. */
+async function buildPaper(deck, level, standard, shapeKey, onProgress, opts){
   const shape = PAPER_SHAPES[shapeKey] || PAPER_SHAPES.full;
   /* No deck is a perfectly good way to sit a paper — name the standard and go.
      The deck, when there is one, only steers the emphasis. */
   const source = deck ? paperSource(deck) : '';
+  const o = opts || {};
+  const cover = String(o.cover == null ? '' : o.cover).trim();
+  const weak = (deck && o.progress && o.targetWeak) ? weakSpots(deck, o.progress) : '';
+
+  /* Counted as a step of its own so the student sees movement rather than a
+     blank wait — it is the slowest part of the screen before anything appears. */
+  const steps = shape.questions + 1;
+  if (onProgress) onProgress(0, steps, 'plan');
+  const plan = await planPaper(source, weak, level, standard, cover, shape.questions);
+
+  const read = (reply) => {
+    let obj = rescueObjects(reply)[0];
+    /* One backslash the model should not have written is otherwise a
+       question lost: "\\(x + 2\\)" is not valid JSON and the whole reply
+       fails to parse. Strip the escapes JSON does not define and try once
+       more, rather than throwing away a good question over its notation. */
+    if (!obj) obj = rescueObjects(reply.replace(/\\(?!["\\/bfnrtu])/g, ''))[0];
+    return obj;
+  };
+
+  /* ONE RETRY PER QUESTION.
+
+     A question that does not come back is not a degraded paper, it is a
+     missing one — the student is handed two questions where a real sitting
+     has three, and told the connection dropped. That was measured at roughly
+     1 in 8 when this screen was built and it is worse whenever the free tier
+     is busy, which is exactly when someone is revising in the evening.
+
+     genChunk splits a failed generate in half instead of retrying, because a
+     chunk of notes can be halved and still produce cards. A question cannot:
+     it is one indivisible reply, so the only useful move is to ask again.
+
+     Exactly one retry, not a loop. The failures here are timeouts, and a
+     third attempt would mostly stack another minute onto a student already
+     waiting — while a second attempt is nearly free when the questions run in
+     parallel, since only the ones that failed are still going. */
+  const askQuestion = async (i, p, avoid) => {
+    for (let attempt = 0; attempt < 2; attempt++){
+      try {
+        const reply = await callModel(
+          paperPrompt(source, level, standard, i + 1, shape.questions, avoid, p, cover),
+          PAPER_MAX_TOKENS, MODEL_SMART, true);
+        const obj = read(reply);
+        if (obj && partsFromJson(obj).length) return obj;
+      } catch (e){ noteApiError(e); }
+    }
+    return null;
+  };
+
+  let raw = [];
+  if (plan.length){
+    /* A plan can come back short — two focuses for a three-question paper.
+       The missing slots are still written, just without a brief, rather than
+       silently shortening the paper: a short paper is reported to the student
+       as the connection dropping, and blaming the network for a thin plan
+       would be a lie on the one screen that has to be trusted about marks.
+       The unbriefed ones are handed the planned focuses as an exclusion list
+       so they cannot simply re-ask what was already planned — which is known
+       up front, and is what keeps these safe to run in parallel. */
+    const slots = [];
+    for (let i = 0; i < shape.questions; i++) slots.push(plan[i] || null);
+    const planned = plan.map(p => p.focus);
+
+    let done = 0;
+    if (onProgress) onProgress(1, steps, 'write');
+    raw = await mapLimit(slots, GEN_CONCURRENCY,
+      (p, i) => askQuestion(i, p, p ? [] : planned),
+      () => { done++; if (onProgress) onProgress(1 + done, steps, 'write'); });
+  } else {
+    /* Unplanned fallback — the original loop, exclusion list and all. */
+    const already = [];
+    for (let i = 1; i <= shape.questions; i++){
+      if (onProgress) onProgress(i, steps, 'write');
+      const obj = await askQuestion(i - 1, null, already);
+      raw.push(obj);
+      if (obj){
+        const c = String(obj.context || '').trim();
+        const ps = partsFromJson(obj);
+        already.push(c.slice(0, 120) || (ps.length ? ps[0].prompt.slice(0, 120) : ''));
+      }
+    }
+  }
 
   const questions = [];
-  const already = [];
-  for (let i = 1; i <= shape.questions; i++){
-    if (onProgress) onProgress(i, shape.questions);
-    let obj = null;
-    try {
-      const reply = await callModel(
-        paperPrompt(source, level, standard, i, shape.questions, already),
-        PAPER_MAX_TOKENS, MODEL_SMART, true);
-      obj = rescueObjects(reply)[0];
-      /* One backslash the model should not have written is otherwise a
-         question lost: "\\(x + 2\\)" is not valid JSON and the whole reply
-         fails to parse. Strip the escapes JSON does not define and try once
-         more, rather than throwing away a good question over its notation. */
-      if (!obj) obj = rescueObjects(reply.replace(/\\(?!["\\/bfnrtu])/g, ''))[0];
-    } catch (e){ noteApiError(e); }
+  for (let i = 0; i < raw.length; i++){
+    const obj = raw[i];
     if (!obj) continue;
     const parts = partsFromJson(obj);
     if (!parts.length) continue;
-    const context = String(obj.context || '').trim();
-    questions.push({ n: questions.length + 1, context: context, parts: parts });
-    already.push(context.slice(0, 120) || parts[0].prompt.slice(0, 120));
+    questions.push({
+      n: questions.length + 1,
+      context: String(obj.context || '').trim(),
+      parts: parts,
+      /* Kept so the report can say what each question was FOR. A student
+         reading "this one was on collision theory" learns more from a bad
+         mark than one reading "Question 2". */
+      focus: (plan[i] && plan[i].focus) || '',
+    });
   }
 
   const totalMarks = questions.reduce((s, q) => s + q.parts.reduce((t, p) => t + p.marks, 0), 0);
@@ -1650,26 +2019,112 @@ async function buildPaper(deck, level, standard, shapeKey, onProgress){
     minutes: shape.minutes,
     totalMarks: totalMarks,
     asked: shape.questions,
+    planned: plan.length > 0,
   };
 }
 
 /* Models served free (rate-limited) by NVIDIA Build (build.nvidia.com), called
-   through their OpenAI-compatible endpoint. Everything text runs on gpt-oss-20b:
-   fast (a full ~15-card batch in ~11s), returns clean JSON, handles long-answer
-   cards, and stays well under the 60s timeout — the 49B Nemotron model was too
-   slow on the free tier and hit the timeout on big generates.
-   NOTE: NVIDIA retires free models with little notice — qwen3-next-80b-a3b was
-   EOL'd 2026-07-27 and returned HTTP 410 "Gone". If generation starts failing
-   with 410, the model here was retired: pick a live one at build.nvidia.com and
-   swap the id below (and re-check its speed against the 60s cap). */
+   through their OpenAI-compatible endpoint.
+
+   THIS IS A CHAIN, NOT A CONSTANT, AND THAT IS THE WHOLE POINT.
+
+   For a year the app named one model id per job. Every few weeks NVIDIA retired
+   it, every AI feature in the app stopped at the same moment, and the app stayed
+   broken until a human noticed, found a live id, edited this line and deployed.
+   That is not a rare accident. Scanned on 17 Sep 2026 with `tools/models.mjs`,
+   **27 of 34 ids this project had used or considered answered 404 or 410**, and
+   the whole Meta line-up had gone EOL inside three weeks:
+
+     meta/llama-3.1-8b / 3.1-70b / 3.3-70b / 3.2-1b / 3.2-3b   EOL 26 Aug 2026
+     openai/gpt-oss-120b                                        EOL  3 Sep 2026
+     nvidia/*-nemotron-* (the whole previous generation)         EOL 26 Aug 2026
+     google/gemma-3-27b-it, moonshotai/kimi-k2, qwen3-coder      EOL earlier
+
+   A single id is therefore a single point of failure with a known failure rate,
+   and naming a fresh one only resets the clock. So each job gets an ORDER of
+   models and `postChat` walks it: a 404 or a 410 costs about a third of a second
+   and moves to the next one, and the student never finds out. Replacing a dead
+   head is still worth doing — the chain buys the time to do it calmly instead of
+   during an outage.
+
+   HOW TO PICK AND ORDER THEM: `node tools/models.mjs` reads NVIDIA's public
+   catalogue, probes every chat-shaped id through our own proxy and prints what
+   is alive; `--bake` then runs the app's real generate and mark prompts through
+   the survivors and scores them on whether the app's own parsers can use the
+   reply. Order by that, fastest usable first. Anything added here must also be
+   added to ALLOWED_MODELS in api/nvidia.js — `npm test` fails if it is not. */
 const NVIDIA_BASE = 'https://integrate.api.nvidia.com/v1/chat/completions';
-const MODEL_SMART = 'openai/gpt-oss-20b';   // marking + hints
-const MODEL_CHEAP = 'openai/gpt-oss-20b';
-const MODEL_GEN   = 'openai/gpt-oss-20b';   // generation
-/* Vision model for reading slide images (diagrams, photos of notes). It accepts
+/* Text, in the order they are tried. Every one of these was measured on the
+   app's own generate and mark prompts on 17 Sep 2026, at the request the app
+   really sends — a model that is merely alive is not a model that is usable.
+
+     gemma-4-31b-it      14-33s, 6 cards, grade in 8s   — fastest, and it does
+                                                          not think out loud
+     nemotron-3.5-light  20s, 7 cards                   — needs thinking off,
+                                                          which isReasoner does
+     gpt-oss-20b         36-50s, 6 cards                — the old head; slowest
+                                                          now, kept as a floor
+
+   Two live models are deliberately NOT here. `nemotron-3-super-120b-a12b`
+   answered in 15s once and then 503'd twice inside a minute, and a fallback
+   that is down half the time spends the student's budget to tell you so.
+   `mistral-nemotron` took 55s on the same prompt and timed out. Neither is
+   wrong as a model; they are wrong as a safety net. */
+const TEXT_MODELS = [
+  'google/gemma-4-31b-it',
+  'nvidia/nemotron-3.5-lightning-30b-a3b',
+  'openai/gpt-oss-20b',
+];
+/* Vision, for reading slide images (diagrams, photos of notes). These accept
    only ONE image per request, so images are transcribed to text one at a time
    and that text is fed to the text model — same card quality as typed notes. */
-const MODEL_VISION = 'meta/llama-3.2-11b-vision-instruct';
+const VISION_MODELS = [
+  'meta/llama-3.2-11b-vision-instruct',
+];
+/* The heads, so the twenty-odd call sites and every checker in tools/ keep
+   naming a model the way they always have. Which model actually answers is
+   postChat's business, not the call site's. */
+const MODEL_SMART = TEXT_MODELS[0];   // marking + hints
+const MODEL_CHEAP = TEXT_MODELS[0];
+const MODEL_GEN   = TEXT_MODELS[0];   // generation
+const MODEL_VISION = VISION_MODELS[0];
+/* Which chain a named model belongs to. Called with the head, but written to
+   answer for any member so a future caller can name one directly. */
+function chainFor(model){
+  return VISION_MODELS.indexOf(model) >= 0 ? VISION_MODELS : TEXT_MODELS;
+}
+/* A model that HUNG, remembered for this page's lifetime only.
+
+   The two failures are not the same shape and must not be handled the same way.
+   A retired model answers 404/410 in about a third of a second, so falling past
+   it costs nothing and there is nothing worth remembering. A model that has
+   stopped answering costs a full attempt — 58 seconds of a student's evening —
+   every single time it is asked, and on 17 Sep 2026 that was the live failure:
+   gpt-oss-20b was neither retired nor working, and simply never replied to most
+   requests. So a hang moves that model to the BACK of the chain, and the next
+   call starts with one that answered.
+
+   BUT IT EXPIRES, because the thing being remembered is a bad minute and the
+   student is here for two hours. A blip in minute three should not leave them on
+   the third-choice model all evening — the order exists because the head is the
+   one that was measured fastest, so every call spent away from it is slower than
+   it needed to be. Ten minutes is long enough to ride out an outage and short
+   enough that a recovery is noticed within one revision session.
+
+   In memory rather than in storage on purpose. It is a fact about NVIDIA this
+   minute, not about this student, and a browser that cached "gemma is down" for
+   a week would be worse than the problem. A reload re-learns it in one call. */
+const SULK_MS = 10 * 60 * 1000;
+const sulking = Object.create(null);
+const noteHang = (m) => { if (m) sulking[m] = Date.now(); };
+const isSulking = (m) => !!sulking[m] && (Date.now() - sulking[m]) < SULK_MS;
+/* The chain with the sulking ones moved to the back, order otherwise kept. */
+function liveChain(model){
+  const all = chainFor(model);
+  const ok = [], bad = [];
+  for (const m of all) (isSulking(m) ? bad : ok).push(m);
+  return ok.concat(bad);
+}
 /* Reasoning models ("deepseek", Nemotron) think out loud by default; that
    reasoning would pollute the JSON the parser expects, so turn it off. */
 const isReasoner = (m) => /deepseek|nemotron/i.test(m || '');
@@ -1696,10 +2151,28 @@ const isReasoner = (m) => /deepseek|nemotron/i.test(m || '');
 const takesReasoningEffort = (m) => /gpt-oss/i.test(m || '');
 
 function pickModel(mode, settings){
-  // Generation is all Qwen for now — it returns clean structured output and is
-  // the free NVIDIA endpoint. (saveUsage kept for later multi-model routing.)
+  /* Every generate mode wants the same thing — clean structured output — so
+     there is nothing to route on here. Which model actually answers is decided
+     in `postChat`, by walking TEXT_MODELS until one does. */
   return MODEL_GEN;
 }
+
+/* WHICH MODEL ACTUALLY ANSWERED — for the events table, not for the screen.
+
+   The chain makes a retirement invisible to the student, which is the point. It
+   also makes it invisible to US, which is not: `generate_failed: timeout` does
+   not say whether the head died overnight and everybody has quietly been
+   running on the last resort for a week. That is precisely the state this
+   feature is designed to survive and therefore precisely the state nobody would
+   notice. One property on events already being sent turns the next retirement
+   into something the dashboard shows, rather than something somebody has to
+   reproduce on a laptop three weeks later.
+
+   `served` is the id that answered (or the last one tried, on a failure) and
+   `walked` is how many were asked before it — 0 means the head answered, which
+   is what a healthy day looks like. */
+let servedBy = '', servedWalk = 0;
+const servedTags = () => ({ served: servedBy, walked: servedWalk });
 
 /* One bad batch shouldn't sink the rest — but a failure hitting EVERY batch
    would otherwise surface as a blank "nothing came back". Record it. */
@@ -1707,20 +2180,60 @@ let lastApiError = '';
 const noteApiError = (e) => { lastApiError = (e && e.message) ? String(e.message) : String(e); };
 
 /* Turn a raw fetch/API failure into something the user can act on. The most
-   common one on the website is simply "no key yet". */
-function friendlyApiError(e){
+   common one on the website is simply "no key yet".
+
+   `what` says which feature failed, and it exists because of one wrong
+   sentence. Every timeout in the app used to be reported as "The AI ran out of
+   time, even after retrying and splitting the notes up... try again, or paste a
+   smaller section" — which is good advice for card generation, the feature it
+   was written for, and nonsense everywhere else. A student who has just written
+   three hundred words, waited out three attempts and been told to paste a
+   smaller section has been told to do something that does not exist on the
+   screen they are looking at. Marking is also the feature where a timeout is
+   most likely, so it was the wrong message shown at the worst moment. */
+function friendlyApiError(e, what){
   const m = (e && e.message) ? e.message : '';
+  /* Offline is a different sentence from a failure, and it is now a state a
+     student can actually be in for a while: the app has a service worker, so it
+     opens on a bus and everything local keeps working. Told only "couldn't
+     reach the AI", the reasonable conclusion is that the app is broken and the
+     reasonable response is to close it — when the feed, Learn and Quiz in front
+     of them are all still working perfectly.
+
+     Only the FALSE case is used. `navigator.onLine === true` means a network
+     interface exists, not that anything is reachable, so treating it as proof
+     of a connection would produce a confidently wrong message. False is the
+     half the browser actually knows. */
+  if (typeof navigator !== 'undefined' && navigator.onLine === false)
+    return 'You\'re offline. Your cards, Learn and Quiz all still work — it\'s only making cards and marking that need a connection.';
   if (/no API key|not set on the server/i.test(m)) return 'The AI isn\'t switched on for this site yet — the owner needs to add the API key.';
   if (/\b401\b/.test(m) || /\b403\b/.test(m)) return 'The AI key was rejected by NVIDIA — the site owner needs to check it.';
-  if (/\b404\b/.test(m)) return 'That model wasn\'t found — it may have been removed from NVIDIA\'s catalog. ' + m;
-  if (/\b410\b/.test(m)) return 'This AI model was retired by NVIDIA — the app needs a quick update to point at a current one. ' + m;
+  /* Reaching either of these now means EVERY model in the chain is gone, not
+     just the one the app prefers — `postChat` falls past a retired model in a
+     third of a second and only gives up when it runs out of them. So the
+     sentence has to say that this is the app's problem and not the student's,
+     and it must not suggest waiting: a retirement does not heal. */
+  if (/\b404\b/.test(m) || /\b410\b/.test(m))
+    return 'Every AI model this app uses has been retired by NVIDIA, so it needs an update before the AI features work again. Your cards, Learn and Quiz are all unaffected. ' + m;
   /* The likeliest error on launch day by a distance: the free tier's ~40
      requests/minute is shared across everyone using the app at once, so a spike
      hits this and not any one student's doing. Don't hand them our vendor's
      rate limit as if it were their problem, and don't say "try again" in a way
      that invites everyone to hammer it in the same second. */
-  if (/\b429\b/.test(m)) return 'Study Feed is busy right now — too many people generating at once. Give it about a minute and it\'ll go through.';
-  if (/timed out/i.test(m)) return 'The AI ran out of time, even after retrying and splitting the notes up. It\'s usually a slow connection — try again, or paste a smaller section.';
+  if (/\b429\b/.test(m)) return 'Study Feed is busy right now — too many people using the AI at once. Give it about a minute and it\'ll go through.';
+  if (/timed out/i.test(m)){
+    /* Measured 8 Sep 2026: the endpoint writes about a third as fast as it did
+       in August, so marking a six-mark answer lands close to the proxy's
+       ceiling and a fair share go over it. Nothing the student did causes it
+       and nothing they can do fixes it, so the message says that rather than
+       inventing an action for them. */
+    /* No "your answer is safe" here — the marking call sites append that
+       themselves, for every kind of failure, and saying it twice reads as
+       protesting. */
+    if (what === 'mark') return 'The AI ran out of time. It has been slow lately, and a long answer is the most it gets asked to do — pressing Mark again usually gets it through.';
+    if (what === 'paper') return 'The AI ran out of time on part of this paper. It has been slow lately; marking it again usually gets through.';
+    return 'The AI ran out of time, even after retrying and splitting the notes up. It\'s usually a slow connection — try again, or paste a smaller section.';
+  }
   if (/no images/i.test(m)) return m;
   // Reached only after the retries gave up, so don't suggest trying immediately.
   if (/API returned 5\d\d/.test(m)) return 'NVIDIA\'s servers are having trouble — it kept failing after three tries, so it isn\'t your device. Give it a minute.';
@@ -1796,36 +2309,105 @@ const ATTEMPT_MS = [58000, 62000, 62000];
 const RETRY_WAIT_MS = [1200, 4000];
 const sleep = (ms) => new Promise(r => setTimeout(r, ms));
 /* Worth another go: a timeout, a dropped connection, rate limiting, or a 5xx.
-   A 401/404/410 is a configuration problem — retrying only wastes the student's
+   A 401/403 is a configuration problem — retrying only wastes the student's
    time and shows them a slower version of the same error. */
 function isRetryable(e){
   const m = (e && e.message) ? e.message : '';
   return /timed out|could not reach/i.test(m) || /API returned (429|5\d\d)/.test(m);
 }
+/* THIS MODEL is gone, which is a different thing from THE AI is gone. A 404 or
+   a 410 says the id no longer exists in NVIDIA's catalogue; a 400 from our own
+   proxy says the id is not in its allowlist, which happens the same way — one
+   half of a model swap shipped without the other. All three are answered
+   immediately, cost nothing, and are cured by trying the next model in the
+   chain rather than by trying this one again. */
+function isGoneModel(e){
+  const m = (e && e.message) ? e.message : '';
+  return /API returned (400|404|410)\b/.test(m);
+}
 
+/* One request, spread across the chain instead of hammered at one model.
+
+   THE BUDGET IS TIME, SO TIME IS WHAT GETS SPENT. The worst case for the
+   student is exactly what it was — the three waits in `ATTEMPT_MS`, about three
+   minutes — but that total is now a deadline rather than a count of tries, and
+   each try goes to a DIFFERENT model. Both halves matter:
+
+   - A different model is strictly the better bet. When a model is not
+     answering, asking it again mostly buys another timeout. On 17 Sep 2026 that
+     was not hypothetical: gpt-oss-20b answered a two-token prompt in 1.6s and
+     then failed to answer the same prompt at all, repeatedly. Three tries at
+     one id turn that into three minutes of nothing.
+   - A failure that comes back FAST has not spent the budget, so it should not
+     cost a try. A retired model answers 410 in a third of a second; a busy one
+     answers 503 in half that. Counting those as attempts meant a chain could
+     burn all three tries in under two seconds and give up while nearly the
+     whole three minutes was still unspent — the fallback failing precisely
+     because the fallbacks were quick about it.
+
+   So the loop walks the chain until the clock runs out, and only a genuinely
+   slow attempt moves the clock. A one-model chain behaves exactly as this did
+   before the chain existed. `HARD_TRIES` is only a stop against an endpoint
+   that fails instantly forever; it is never what ends a normal call. */
+const TOTAL_BUDGET_MS = ATTEMPT_MS.reduce(function (a, b){ return a + b; }, 0);
+const HARD_TRIES = 8;
 async function postChat(messages, maxTokens, model, lowEffort){
-  const body = {
-    model,
-    messages,
-    temperature: isReasoner(model) ? 0.6 : 0.7,
-    top_p: 0.9,
-    max_tokens: maxTokens,
-    stream: false,
-  };
-  // Reasoning models: switch off chain-of-thought so replies are clean JSON.
-  if (isReasoner(model)) body.chat_template_kwargs = { thinking: false };
-  // gpt-oss ignores that flag; this is the lever it does take. Opt-in only:
-  // MODEL_SMART and MODEL_GEN are the same model id, so the caller has to say
-  // so — see takesReasoningEffort for why marking is deliberately left out.
-  if (lowEffort && takesReasoningEffort(model)) body.reasoning_effort = 'low';
+  const chain = liveChain(model);
+  const started = Date.now();
+  const left = () => TOTAL_BUDGET_MS - (Date.now() - started);
+  let last, attempt = 0, tries = 0, i = 0;
+  while (tries < HARD_TRIES && left() > 1000){
+    tries++;
+    const id = chain[i % chain.length];
+    const body = {
+      model: id,
+      messages,
+      temperature: isReasoner(id) ? 0.6 : 0.7,
+      top_p: 0.9,
+      max_tokens: maxTokens,
+      stream: false,
+    };
+    // Reasoning models: switch off chain-of-thought so replies are clean JSON.
+    if (isReasoner(id)) body.chat_template_kwargs = { thinking: false };
+    // gpt-oss ignores that flag; this is the lever it does take. Opt-in only,
+    // and decided per model in the chain rather than once per call — see
+    // takesReasoningEffort for why marking is deliberately left out.
+    if (lowEffort && takesReasoningEffort(id)) body.reasoning_effort = 'low';
 
-  let last;
-  for (let i = 0; i < ATTEMPT_MS.length; i++){
-    try { return await postOnce(body, ATTEMPT_MS[i]); }
+    /* Never wait past the deadline, and never on a clock longer than the one
+       the attempt schedule allows for this position in the walk. */
+    const wall = Math.min(ATTEMPT_MS[Math.min(attempt, ATTEMPT_MS.length - 1)], left());
+    const spent0 = Date.now();
+    servedBy = id; servedWalk = tries - 1;
+    try { return await postOnce(body, wall); }
     catch (e){
       last = e;
-      if (i === ATTEMPT_MS.length - 1 || !isRetryable(e)) break;
-      await sleep(RETRY_WAIT_MS[i]);
+      i++;
+      /* A try that came back in under a second cost nothing but a round trip —
+         a retired model, or a busy one. Move to the next model without moving
+         the clock. `tries` still went up, so this cannot spin. */
+      const quick = Date.now() - spent0 < 1000;
+      /* Retired, or not allowed through our own proxy: never worth asking twice,
+         whatever it cost. */
+      if (isGoneModel(e)){
+        if (i >= chain.length && quick) break;   // every model in the chain is gone
+        continue;
+      }
+      if (!isRetryable(e)) break;       // a key or config problem: the next model won't help
+      /* It timed out or never answered. Do not start with it again this visit. */
+      if (/timed out|could not reach/i.test(String(e.message || ''))) noteHang(id);
+      /* A quick failure (a 503 from a model that is simply busy) moves to the
+         next model for free — but once the whole chain has answered that way,
+         everything is busy at once and going round again immediately just adds
+         to the pile. Wait before the next lap, the same pause the retries
+         always used. */
+      if (quick){
+        if (i % chain.length !== 0) continue;
+        await sleep(RETRY_WAIT_MS[Math.min(attempt, RETRY_WAIT_MS.length - 1)]);
+        continue;
+      }
+      attempt++;
+      await sleep(RETRY_WAIT_MS[Math.min(attempt, RETRY_WAIT_MS.length) - 1]);
     }
   }
   throw last;
@@ -1929,11 +2511,45 @@ function parseReply(mode, reply){
   return cardsFromJson(parseJsonArray(reply));
 }
 
-/* Enough room for a 6k-character batch's worth of cards, including the long
-   extended-response ones, without inviting a reply so long it can't finish
-   inside the proxy's 60s ceiling. Generation time tracks output tokens more
-   than input, so this is the main lever on whether a request beats the clock. */
-const GEN_MAX_TOKENS = 1700;
+/* WHAT THE ENDPOINT CAN ACTUALLY WRITE IN THE TIME IT IS GIVEN.
+
+   Generation time tracks OUTPUT tokens almost exactly — the prompt is read in
+   one go, the reply is written a token at a time — so the ceiling here and the
+   card counts in `mixTargets` are one lever wearing two hats, and the number
+   that decides whether a generate beats the clock is not a preference. It is
+   arithmetic, against a rate the vendor keeps moving underneath us.
+
+   MEASURED THROUGH THE LIVE PROXY, 17 Sep 2026: marking wrote 243 tokens in
+   8.4s. That is 29 tokens a second. At 29 tok/s a 1700-token reply needs 59
+   seconds and the proxy gives up at 55 — so every mixed generate was losing on
+   the clock, while marking, which asks for a quarter as much, went through
+   fine. That is what "none of the AI generation is working" turned out to be:
+   not a broken model, an impossible ask. In August the same endpoint wrote at
+   91 tok/s and 1700 tokens took nineteen seconds.
+
+   So the ceiling is DERIVED from the rate rather than chosen, and the two
+   numbers it comes from are both things somebody can re-measure when it moves
+   again — `node tools/models.mjs --bake` prints tokens and seconds per call.
+   A third of the budget is left for the queue, the prompt read and the network,
+   because the endpoint is shared and the first token is never instant.
+
+   TWO HONEST FOOTNOTES, because a derived number invites more trust than this
+   one has earned.
+
+   The rate is not stable. Across eleven real generates that evening it ran
+   between 12 and 46 tokens a second, median around 19. 29 is a middling figure
+   from the middle of that, not a floor — re-measure before relying on it.
+
+   And the ceiling is a CAP, not the target. `mixTargets` is what decides how
+   long the reply actually is, and at the default slider it comes back at about
+   570 tokens, well inside 950. The headroom is deliberate: a model that decides
+   to be generous should be truncated by its own good sense rather than by the
+   ceiling, because a truncated JSON array parses to nothing at all. What the
+   arithmetic below really buys is the guarantee that the WORST case the ceiling
+   permits still fits the wall. */
+const WRITE_RATE = 29;        // tokens/second, measured 17 Sep 2026 (range 12-46)
+const WRITE_BUDGET_S = 33;    // of the proxy's 55; the rest is queue and network
+const GEN_MAX_TOKENS = Math.round(WRITE_RATE * WRITE_BUDGET_S / 50) * 50;   // 950
 
 /* Cut a chunk at the paragraph break nearest the middle, so a half still reads
    as continuous notes rather than stopping mid-sentence. */
@@ -2255,6 +2871,63 @@ function paperLosses(results, headline){
 }
 
 const paperKey = (q, p) => q.n + p.label;
+
+/* WHAT TO DO WITH A BAD PAPER.
+
+   The diagnostic already ends this way: it names what is missing and then
+   offers one button that turns the findings into study material. The paper
+   ended by naming where the marks went and then stopping — which leaves the
+   most motivated moment in the app, the minute after a student sees a grade
+   they did not want, with nothing to press. They have just written for an
+   hour and been told exactly which parts cost them; asking them to go to
+   Create and retype the topic is where that hour quietly ends.
+
+   The notes are built from the parts that came in under the headline grade,
+   biggest marks first, because that is the order worth revising in and it is
+   already the order the report shows. Each one carries the question's own
+   topic, what the next rung actually required, and the marker's single line
+   on what was missing from THEIR answer — so the cards that come back are
+   about their gap rather than about the subject in general.
+
+   Nothing is saved by this. It lands in Create as drafts, exactly as the
+   diagnostic's does, so the student still looks at every card before it is
+   kept. */
+function paperToSource(paper, results, headline){
+  const rank = (g) => GRADES.indexOf(g);
+  let lost = paperLosses(results, headline);
+  /* A paper that came in at Not yet has nothing "below the headline", and a
+     paper of straight Excellences has nothing to revise. Between those, fall
+     back to everything short of the top rung — someone who asks for cards
+     after a weak paper should not be told there is nothing to work on. */
+  if (!lost.length){
+    lost = results.filter(r => r.blank || rank(r.grade) < rank('Excellence'))
+      .sort((a, b) => b.marks - a.marks);
+  }
+  const partOf = (r) => {
+    const q = paper.questions.find(x => x.n === r.q);
+    return q ? { q: q, p: q.parts.find(x => x.label === r.label) } : null;
+  };
+  const lines = ['Revision notes for the parts of this practice paper that cost marks.',
+    'Each one names the question, what a better answer needed, and what was actually missing.', ''];
+  for (const r of lost.slice(0, 6)){
+    const found = partOf(r);
+    if (!found || !found.p) continue;
+    const q = found.q, part = found.p;
+    lines.push('- ' + (q.focus ? q.focus.charAt(0).toUpperCase() + q.focus.slice(1) : 'Question ' + q.n) +
+      ' (' + part.marks + ' marks, came in at ' + (r.blank ? 'not attempted' : (r.grade || 'not marked')) + ').');
+    lines.push('  The question: ' + part.prompt);
+    /* The rung ABOVE what they got is the one worth teaching. A student who
+       reached Achieved does not need the Achieved descriptor explained. */
+    const next = r.blank ? part.achieved
+      : r.grade === 'Achieved' ? part.merit
+      : r.grade === 'Merit' ? part.excellence
+      : part.achieved;
+    if (next) lines.push('  What the next grade up needs: ' + next);
+    if (r.r && r.r.lift) lines.push('  What was missing from this answer: ' + r.r.lift);
+    lines.push('');
+  }
+  return lines.join('\n');
+}
 
 /* ---- locating the marker's notes in the student's own text ---------------
    The model is asked to quote the answer word for word, and mostly does. It
@@ -2937,20 +3610,71 @@ function Progress({ label, value, valueText, right, colour, height = 12, reduceM
 
 /* Full loading state — rings plus the two lines of copy. Used while cards are
    being generated, which is the app's one genuinely slow wait. */
-function Loading({ title, subtitle, size }){
+/* A SPINNER THAT NEVER CHANGES IS A SPINNER THAT READS AS FROZEN.
+
+   The comment on the marking loader said "a 10-20 second wait against the
+   model". Measured 8 Sep 2026 against the live endpoint on the app's own
+   cards, marking takes 23 to 55 seconds — and when it hits the proxy's ceiling
+   the client retries twice more, so a student can watch one unchanging sentence
+   for close to three minutes before being told it failed. At that point every
+   reasonable person has decided the app is broken and pressed something.
+
+   `stages` fixes the honesty rather than the speed: an array of
+   { after, title, subtitle } in seconds, and the last one whose `after` has
+   passed wins. Nothing about the wait changes; what changes is that the screen
+   keeps saying something true about it. Passing no stages leaves every other
+   loader in the app exactly as it was. */
+function Loading({ title, subtitle, size, stages }){
+  const [secs, setSecs] = useState(0);
+  const staged = stages && stages.length;
+  useEffect(() => {
+    if (!staged) return undefined;
+    const t = setInterval(() => setSecs(s => s + 1), 1000);
+    return () => clearInterval(t);
+  }, [staged]);
+
+  let shownTitle = title, shownSub = subtitle;
+  if (staged){
+    for (const s of stages){
+      if (secs < s.after) break;
+      if (s.title) shownTitle = s.title;
+      if (s.subtitle) shownSub = s.subtitle;
+    }
+  }
+
   return (
     <div className="flex flex-col items-center justify-center" style={{ gap: 22, padding: '26px 8px' }}>
       <Rings size={size || 92} />
       <div style={{ textAlign: 'center', maxWidth: 260 }}>
         <div style={{ fontFamily: SANS, fontSize: 15.5, fontWeight: 600, color: T.ink,
-          letterSpacing: '-0.02em', animation: 'sf-pulse 3s ease-in-out infinite' }}>{title}</div>
-        {subtitle && (
-          <Sub style={{ marginTop: 7, fontSize: 13.5, animation: 'sf-pulse 4s ease-in-out infinite' }}>{subtitle}</Sub>
+          letterSpacing: '-0.02em', animation: 'sf-pulse 3s ease-in-out infinite' }}>{shownTitle}</div>
+        {shownSub && (
+          <Sub style={{ marginTop: 7, fontSize: 13.5, animation: 'sf-pulse 4s ease-in-out infinite' }}>{shownSub}</Sub>
         )}
       </div>
     </div>
   );
 }
+
+/* The stages the marking screens use. Written from the measured distribution
+   rather than invented, and the two later ones are pinned to ATTEMPT_MS above
+   rather than chosen to sound right:
+
+     25s  the ordinary case has usually landed by here; past it, say so
+     60s  the first attempt aborts at 58s and RETRY_WAIT_MS pauses 1.2s, so by
+          60 the client really is on its second try. Saying so is better than
+          the alternative reading, which is that nothing is happening.
+    130s  attempt two ran 56-111s, then a 4s wait; by 130 this is the last one.
+
+   If ATTEMPT_MS changes, these change with it — a loader that says "having
+   another go" while the client has already given up is worse than silence.
+   Nothing here promises a finish time; a promise the endpoint cannot keep is
+   what got us here. */
+const MARK_STAGES = [
+  { after: 25, subtitle: 'Still going. A long answer takes longer to mark than a short one.' },
+  { after: 60, title: 'Still marking…', subtitle: 'The first attempt ran out of time, so it is having another go. Your answer is safe.' },
+  { after: 130, subtitle: 'The AI is busy this evening. One more attempt, then it will tell you rather than leave you waiting.' },
+];
 
 /* The model replies in light markdown — **bold**, "- " bullets, blank lines.
    Render exactly that much, so replies read as prose instead of raw asterisks
@@ -3057,8 +3781,13 @@ function MixSlider({ value, onChange, compact }){
         <div style={{ fontFamily: SANS, fontSize: 12.5, fontWeight: 600, color: T.muted }}>{labelFor(pct)}</div>
         <Chip colour={T.accentInk}>{pct}% long</Chip>
       </div>
+      {/* The number on this slider means nothing on its own — "30" is not a
+          setting, "balanced, leaning quick" is. That reading is already
+          computed above for the sighted label, so `aria-valuetext` hands a
+          screen reader the same sentence instead of a bare percentage. */}
       <input className="sf-range" type="range" min={0} max={100} step={5} value={pct}
         onChange={e => onChange(Number(e.target.value))}
+        aria-label="How many long answers to make" aria-valuetext={`${pct}% long — ${labelFor(pct)}`}
         style={{ background: `linear-gradient(to right, ${T.green}, ${T.accent})` }} />
       {!compact && (
         <div className="flex items-center justify-between" style={{ marginTop: 7 }}>
@@ -3933,12 +4662,12 @@ function ExtendedFace({ card, phase, deck, onReveal, onBack, demo }){
            analytics. Measured at 17% of marks before the token ceiling was
            raised, and still the residual failure when the model answers in
            prose instead of JSON. A fixed word, like every other reason. */
-        if (!demo) track('mark_failed', { reason: 'unparseable' });
+        if (!demo) track('mark_failed', { reason: 'unparseable', ...servedTags() });
         setErr('Could not read the marking. Try again.');
       }
     } catch (e){
-      if (!demo) track('mark_failed', { reason: failureKind(e) });
-      setErr(friendlyApiError(e) + ' Your answer is safe.');
+      if (!demo) track('mark_failed', { reason: failureKind(e), ...servedTags() });
+      setErr(friendlyApiError(e, 'mark') + ' Your answer is safe.');
     }
     finally { setBusy(false); }
   };
@@ -4015,12 +4744,16 @@ function ExtendedFace({ card, phase, deck, onReveal, onBack, demo }){
           <div className="flex items-center justify-between" style={{ marginTop: 7, marginBottom: 11 }}>
             <Sub style={{ fontSize: 12 }}>{words > 0 ? `${words} words` : 'Even a rough attempt beats reading the answer'}</Sub>
           </div>
-          {/* Marking is a 10-20 second wait against the model. Without this the
-              screen just sits there and reads as frozen. */}
+          {/* Marking is a 25-to-55-second wait against the model, and longer
+              when the first attempt times out and the client retries. Without
+              this the screen just sits there and reads as frozen; without
+              MARK_STAGES it reads as frozen anyway, because one unchanging
+              sentence for three minutes is not a sign of life. */}
           {busy ? (
             <div style={{ ...PANEL, padding: '8px 12px' }}>
               <Loading size={70} title="Marking your answer…"
-                subtitle="Checking it against what Achieved, Merit and Excellence need." />
+                subtitle="Checking it against what Achieved, Merit and Excellence need."
+                stages={MARK_STAGES} />
             </div>
           ) : (
             <div className="flex gap-2">
@@ -4569,7 +5302,7 @@ function WorkedFace({ card, phase, deck, onReveal, onBack }){
       }
     } catch (e){
       track('mark_failed', { reason: failureKind(e), kind: 'working' });
-      setErr(friendlyApiError(e) + ' Your working is safe.');
+      setErr(friendlyApiError(e, 'mark') + ' Your working is safe.');
     }
     finally { setBusy(false); }
   };
@@ -4636,7 +5369,7 @@ function WorkedFace({ card, phase, deck, onReveal, onBack }){
 
           {busy ? (
             <div style={{ ...PANEL, padding: '8px 12px' }}>
-              <Loading size={70} title="Marking your working…"
+              <Loading size={70} stages={MARK_STAGES} title="Marking your working…"
                 subtitle="Checking every step of the method, and finding where it first goes wrong." />
             </div>
           ) : (
@@ -4855,7 +5588,7 @@ function PaperPartResult({ res, part, level, open, onToggle }){
   );
 }
 
-function ExamPaper({ decks, defaultLevel, saved, onSave, onClose }){
+function ExamPaper({ decks, progress, defaultLevel, saved, onSave, onClose, onMakeCards }){
   /* setup | building | sitting | marking | report */
   const [phase, setPhase] = useState(saved && saved.phase ? saved.phase : 'setup');
   /* No deck unless one is actually chosen. This defaulted to decks[0], which
@@ -4865,6 +5598,17 @@ function ExamPaper({ decks, defaultLevel, saved, onSave, onClose }){
   const [deckId, setDeckId] = useState(saved ? saved.deckId : '');
   const [standard, setStandard] = useState(saved ? saved.standard : '');
   const [shapeKey, setShapeKey] = useState(saved ? saved.shapeKey : 'full');
+  /* What the student wants examined, in their words. The single most direct
+     relevance lever on the screen: someone a week out from an exam usually
+     knows exactly which three topics they are frightened of, and until now
+     there was nowhere to say so. Optional — blank means "the whole standard",
+     which is what the paper did before. */
+  const [cover, setCover] = useState(saved ? (saved.cover || '') : '');
+  /* Default ON where there is anything to target. The app has been recording
+     which cards keep tripping them up since the first review; a practice
+     paper that ignores that is worse than one that uses it, and a student who
+     wants a clean sweep of the standard can turn it off. */
+  const [targetWeak, setTargetWeak] = useState(saved ? saved.targetWeak !== false : true);
   const [paper, setPaper] = useState(saved ? saved.paper : null);
   const [answers, setAnswers] = useState(saved && saved.answers ? saved.answers : {});
   const [startedAt, setStartedAt] = useState(saved ? saved.startedAt : 0);
@@ -4886,6 +5630,13 @@ function ExamPaper({ decks, defaultLevel, saved, onSave, onClose }){
 
   const deck = decks.find(d => d.id === deckId) || null;
   const level = (deck && deck.standard) || defaultLevel || 'NCEA Level 1';
+
+  /* Only offer to target the weak spots when there are some. An empty toggle
+     promising to use a review history that does not exist yet is a worse
+     screen than no toggle at all. */
+  const weakCount = deck && progress
+    ? deck.cards.filter(c => { const p = progress[c.id]; return p && p.seen && (p.flagged || p.lapses > 0); }).length
+    : 0;
 
   /* Prefill from the deck's SUBJECT and TOPIC, not its level. `deck.standard`
      is usually "NCEA Level 1" — a level names no subject, and a paper written
@@ -4919,6 +5670,7 @@ function ExamPaper({ decks, defaultLevel, saved, onSave, onClose }){
     if (!onSave) return;
     onSave({
       deckId: deckId, standard: standard, shapeKey: shapeKey,
+      cover: cover, targetWeak: targetWeak,
       paper: paper, answers: answers, startedAt: startedAt,
       phase: phase, results: results,
       ...(over || {}),
@@ -4938,7 +5690,8 @@ function ExamPaper({ decks, defaultLevel, saved, onSave, onClose }){
     lastApiError = '';
     try {
       const built = await buildPaper(deck, level, standard.trim(), shapeKey,
-        (i, n) => setProg({ i, n }));
+        (i, n, kind) => setProg({ i, n, kind }),
+        { cover: cover, progress: progress, targetWeak: targetWeak });
       if (!built.questions.length){
         setPhase('setup');
         setErr(lastApiError
@@ -4952,7 +5705,8 @@ function ExamPaper({ decks, defaultLevel, saved, onSave, onClose }){
       setPhase('sitting');
       persist({ paper: built, startedAt: t, answers: {}, results: null, phase: 'sitting' });
       track('paper_started', { questions: built.questions.length, asked: built.asked,
-        marks: built.totalMarks, shape: shapeKey });
+        marks: built.totalMarks, shape: shapeKey, planned: !!built.planned,
+        steered: !!cover.trim(), weak: !!(deck && targetWeak) });
     } catch (e){
       setPhase('setup');
       setErr(friendlyApiError(e));
@@ -4978,7 +5732,7 @@ function ExamPaper({ decks, defaultLevel, saved, onSave, onClose }){
       else play('ok');
     } catch (e){
       setPhase('sitting');
-      setErr(friendlyApiError(e) + ' Your answers are safe.');
+      setErr(friendlyApiError(e, 'paper') + ' Your answers are safe.');
     }
   };
 
@@ -5061,6 +5815,15 @@ function ExamPaper({ decks, defaultLevel, saved, onSave, onClose }){
                   </Sub>
                 )}
 
+                <div style={{ ...LBL, marginBottom: 8 }}>Anything in particular? <span style={{ textTransform: 'none', letterSpacing: 0, fontWeight: 600 }}>(optional)</span></div>
+                <input value={cover} onChange={e => setCover(e.target.value)}
+                  placeholder="e.g. rates of reaction and energy changes"
+                  style={{ ...INPUT, fontSize: 14.5, marginBottom: 6 }} />
+                <Sub style={{ fontSize: 12.5, marginBottom: 16 }}>
+                  Name the topics you want examined and the whole paper is built inside them.
+                  Leave it empty for a sweep of the standard.
+                </Sub>
+
                 <div style={{ ...LBL, marginBottom: 8 }}>Lean on a deck? <span style={{ textTransform: 'none', letterSpacing: 0, fontWeight: 600 }}>(optional)</span></div>
                 <div className="flex flex-col gap-2" style={{ marginBottom: 16 }}>
                   {/* Explicitly first, so "I have not made a deck for this yet"
@@ -5096,6 +5859,21 @@ function ExamPaper({ decks, defaultLevel, saved, onSave, onClose }){
                   })}
                 </div>
 
+                {weakCount > 0 && (
+                  <div style={{ background: T.surface, border: `1px solid ${T.border}`, borderRadius: R.well,
+                    padding: '11px 13px', marginBottom: 16 }}>
+                    <div className="flex items-center justify-between gap-3">
+                      <div style={{ minWidth: 0 }}>
+                        <div style={{ fontFamily: SANS, fontSize: 14.5, fontWeight: 700, color: T.ink }}>Aim it at what trips you up</div>
+                        <Sub style={{ fontSize: 12.5, marginTop: 2 }}>
+                          {weakCount} card{weakCount > 1 ? 's' : ''} in this deck keep going wrong. At least one question will make you do one of them properly.
+                        </Sub>
+                      </div>
+                      <Toggle on={targetWeak} onClick={() => setTargetWeak(v => !v)} label="Aim it at what trips you up" />
+                    </div>
+                  </div>
+                )}
+
                 <div style={{ ...LBL, marginBottom: 8 }}>How long</div>
                 <div className="flex gap-2" style={{ marginBottom: 18 }}>
                   {Object.keys(PAPER_SHAPES).map(k => {
@@ -5125,8 +5903,12 @@ function ExamPaper({ decks, defaultLevel, saved, onSave, onClose }){
         {phase === 'building' && (
           <Card style={{ padding: '10px 14px' }}>
             <Loading size={92}
-              title={prog ? `Writing question ${prog.i} of ${prog.n}…` : 'Writing your paper…'}
-              subtitle="A scenario, then parts that climb from naming it to justifying it." />
+              title={!prog ? 'Writing your paper…'
+                : prog.kind === 'plan' ? 'Working out what this paper should examine…'
+                : `Writing the questions… ${Math.max(0, prog.i - 1)} of ${prog.n - 1} done`}
+              subtitle={prog && prog.kind === 'plan'
+                ? 'Picking the ideas worth an hour, before writing a word of it.'
+                : 'A scenario, then parts that climb from naming it to justifying it.'} />
           </Card>
         )}
 
@@ -5237,6 +6019,10 @@ function ExamPaper({ decks, defaultLevel, saved, onSave, onClose }){
             const q = paper.questions.find(x => x.n === r.q);
             return q ? q.parts.find(p => p.label === r.label) : null;
           };
+          const focusOf = (n) => {
+            const q = paper.questions.find(x => x.n === n);
+            return (q && q.focus) || '';
+          };
           const mins = startedAt ? Math.max(1, Math.round((Date.now() - startedAt) / 60000)) : 0;
           return (
             <div style={{ animation: 'sf-in 260ms cubic-bezier(.2,.8,.3,1)' }}>
@@ -5285,10 +6071,21 @@ function ExamPaper({ decks, defaultLevel, saved, onSave, onClose }){
                           <span style={{ fontFamily: SANS, fontSize: 12.5, fontWeight: 800, color: T.red, lineHeight: '20px', flexShrink: 0 }}>
                             {r.q}({r.label})
                           </span>
-                          <span style={{ flex: 1, fontFamily: SANS, fontSize: 14, lineHeight: 1.5, color: T.ink }}>
-                            {r.blank
-                              ? `Left blank — ${r.marks} marks.`
-                              : (r.r && r.r.lift) ? r.r.lift : `${r.marks} marks at ${r.grade || 'not marked'}.`}
+                          <span style={{ flex: 1 }}>
+                            <span style={{ display: 'block', fontFamily: SANS, fontSize: 14, lineHeight: 1.5, color: T.ink }}>
+                              {r.blank
+                                ? `Left blank — ${r.marks} marks.`
+                                : (r.r && r.r.lift) ? r.r.lift : `${r.marks} marks at ${r.grade || 'not marked'}.`}
+                            </span>
+                            {/* What the question was FOR, from the blueprint. A
+                                revision list that names the topic is actionable;
+                                one that says "Question 2" sends them back to
+                                re-read the question to find out what they lost. */}
+                            {focusOf(r.q) && (
+                              <span style={{ display: 'block', fontFamily: SANS, fontSize: 12.5, color: T.faint, marginTop: 2 }}>
+                                on {focusOf(r.q)}
+                              </span>
+                            )}
                           </span>
                         </div>
                       );
@@ -5306,13 +6103,26 @@ function ExamPaper({ decks, defaultLevel, saved, onSave, onClose }){
                 ))}
               </Card>
 
+              {/* The minute after a grade they did not want is the most
+                  motivated minute in the app, and until now it was the one
+                  with nothing to press. The diagnostic has ended this way
+                  since it shipped; the paper, which costs an hour rather
+                  than ten minutes, ended by naming the losses and stopping. */}
+              {onMakeCards && losses.length > 0 && (
+                <Btn full kind="primary" style={{ marginTop: 16 }} onClick={() => {
+                  persist();
+                  onMakeCards(paperToSource(paper, results, g.grade), standard.trim(), level);
+                  track('paper_to_cards', { parts: Math.min(6, losses.length), grade: g.grade });
+                }}>Turn what this cost me into cards</Btn>
+              )}
+
               <div className="flex gap-2" style={{ marginTop: 16 }}>
                 <Btn full kind="soft" onClick={() => {
                   setPhase('setup'); setPaper(null); setAnswers({}); setResults(null);
                   setQi(0); setOpenPart(''); setStartedAt(0);
                   persist({ paper: null, answers: {}, results: null, startedAt: 0, phase: 'setup' });
                 }}>Another paper</Btn>
-                <Btn full kind="primary" onClick={() => { persist(); onClose(); }}>Done</Btn>
+                <Btn full kind="soft" onClick={() => { persist(); onClose(); }}>Done</Btn>
               </div>
             </div>
           );
@@ -5872,7 +6682,7 @@ function Create({ onSave, settings, onSettings, onPending, onStarter, seed, onSe
            run lands HERE with an empty stack rather than in the catch. Counting
            only the catch would have hidden exactly the thing worth watching on
            launch day. */
-        track('generate_failed', { reason: lastApiError ? failureKind({ message: lastApiError }) : 'empty' });
+        track('generate_failed', { reason: lastApiError ? failureKind({ message: lastApiError }) : 'empty', ...servedTags() });
         /* Working mode is told to return nothing rather than invent a
            calculation, so an empty stack there is usually the model obeying
            that instruction on descriptive notes — not a failure. Saying so
@@ -5894,9 +6704,9 @@ function Create({ onSave, settings, onSettings, onPending, onStarter, seed, onSe
       /* Generated, not yet saved — the gap between this and deck_created is the
          number that says whether the cards coming back are any good. */
       track('cards_generated', { cards: cards.length, images: images.length,
-        lost: genLost, mode: String(cardType) });
+        lost: genLost, mode: String(cardType), ...servedTags() });
     } catch (e){
-      track('generate_failed', { reason: failureKind(e) });
+      track('generate_failed', { reason: failureKind(e), ...servedTags() });
       setErr('Generation failed. Check your connection and try again.');
     }
     finally { setBusy(false); setProg(null); }
@@ -5954,7 +6764,7 @@ function Create({ onSave, settings, onSettings, onPending, onStarter, seed, onSe
               <div style={{ fontFamily: SANS, fontSize: 14, fontWeight: 700, color: T.ink }}>Only my material</div>
               <Sub style={{ fontSize: 12.5, marginTop: 2 }}>Sticks to what you paste or upload — nothing extra gets added.</Sub>
             </div>
-            <Toggle on={strictSource} onClick={() => setStrictSource(v => !v)} />
+            <Toggle on={strictSource} onClick={() => setStrictSource(v => !v)} label="Only my material" />
           </div>
           {strictSource && !hasMaterial && (
             <Sub style={{ fontSize: 12, marginTop: 9, color: T.amber, fontWeight: 600 }}>
@@ -6250,7 +7060,7 @@ function DeckEditor({ deck, progress, onBack, onEditCard, onDeleteCard, onDelete
               <div style={{ fontFamily: SANS, fontSize: 13.5, fontWeight: 600, color: T.ink }}>Include my review progress</div>
               <Sub style={{ fontSize: 12 }}>Leave off when sending it to someone else</Sub>
             </div>
-            <Toggle on={withProgress} onClick={() => setWithProgress(v => !v)} />
+            <Toggle on={withProgress} onClick={() => setWithProgress(v => !v)} label="Include my review progress" />
           </div>
           <div className="flex gap-2">
             <Btn full kind="soft" onClick={() => exportDeck('copy')} style={{ fontSize: 14 }}>Copy as text</Btn>
@@ -6492,9 +7302,21 @@ function Stat({ n, k, colour }){
 /* ==========================================================================
    SETTINGS
    ========================================================================== */
-function Toggle({ on, onClick }){
+/* A switch, and it has to say so. Rendered as a bare <button> with a sliding
+   dot inside, this was the least accessible control in the app: no text, no
+   label, and its ENTIRE meaning is the state it is in. A screen reader
+   announced "button" — not what it toggles, not whether it is on. There are a
+   dozen of them, and two of them ("Only my material", "aim at what keeps going
+   wrong") change what the AI is asked for.
+
+   `role="switch"` plus `aria-checked` is what makes the state readable;
+   `label` is what makes it identifiable. SettingRow passes its own title down,
+   so the common case needs nothing at the call site — but a bare <Toggle/>
+   somewhere else still wants one, and there is no sensible default to invent. */
+function Toggle({ on, onClick, label }){
   return (
     <button className="sf-tap" onClick={onClick}
+      role="switch" aria-checked={on ? 'true' : 'false'} aria-label={label || undefined}
       style={{ width: 50, height: 30, borderRadius: R.pill, border: 'none', flexShrink: 0, cursor: 'pointer',
         background: on ? T.green : 'var(--sf-track)', position: 'relative', transition: 'background 200ms' }}>
       <span style={{ position: 'absolute', top: 3, left: on ? 23 : 3, width: 24, height: 24, borderRadius: R.pill,
@@ -6677,7 +7499,11 @@ function Settings({ settings, onChange, library, progress, onImport, onTutorial 
         </div>
         <div>
           <div style={{ fontFamily: SANS, fontSize: 12.5, fontWeight: 700, color: T.muted, marginBottom: 5 }}>Exam date <span style={{ fontWeight: 500, color: T.faint }}>(optional)</span></div>
+          {/* The heading above it is a styled div, not a <label>, so nothing
+              connects the two — and a date field has no placeholder to fall
+              back on the way the name field does. */}
           <input type="date" value={settings.examDate || ''} onChange={e => set({ examDate: e.target.value })}
+            aria-label="Exam date (optional)"
             style={{ ...INPUT, fontSize: 14.5 }} />
         </div>
       </Card>
@@ -6693,11 +7519,11 @@ function Settings({ settings, onChange, library, progress, onImport, onTutorial 
       </Card>
 
       <SettingRow title="Sounds" note="A chime when you get one right, climbing as your streak builds">
-        <Toggle on={settings.sound !== false} onClick={() => { const on = settings.sound === false; set({ sound: on }); if (on) play('right', 1); }} />
+        <Toggle on={settings.sound !== false} onClick={() => { const on = settings.sound === false; set({ sound: on }); if (on) play('right', 1); }} label="Sounds" />
       </SettingRow>
 
       <SettingRow title="Mix subjects up" note="Rotates subjects so you don't do one topic in a block">
-        <Toggle on={settings.interleave} onClick={() => set({ interleave: !settings.interleave })} />
+        <Toggle on={settings.interleave} onClick={() => set({ interleave: !settings.interleave })} label="Mix subjects up" />
       </SettingRow>
 
       <Card style={{ padding: 15, boxShadow: SH.raised }}>
@@ -6706,7 +7532,7 @@ function Settings({ settings, onChange, library, progress, onImport, onTutorial 
             <div style={{ fontFamily: SANS, fontSize: 15, fontWeight: 700, color: T.ink }}>Limit new cards a day</div>
             <Sub style={{ fontSize: 12.5, marginTop: 2 }}>Off means every new card is ready straight away</Sub>
           </div>
-          <Toggle on={settings.capNew} onClick={() => set({ capNew: !settings.capNew })} />
+          <Toggle on={settings.capNew} onClick={() => set({ capNew: !settings.capNew })} label="Limit new cards a day" />
         </div>
         {settings.capNew && (
           <div className="flex items-center justify-center gap-4" style={{ marginTop: 14 }}>
@@ -9629,6 +10455,13 @@ export default function App(){
     setTab('create');
     track('diagnostic_to_cards', {});
   };
+  /* Same handoff as the diagnostic's, from the paper report. Drafts only —
+     Create is where they get looked at before anything is kept. */
+  const cardsFromPaper = (source, topic, level) => {
+    setPaperOpen(false);
+    setCreateSeed({ source: source, topic: topic, level: level });
+    setTab('create');
+  };
   /* Whatever they last said they were working to. Someone who set their real
      standard on a deck should not have to type it again to be tested on it. */
   const usualLevel = () => {
@@ -9925,7 +10758,8 @@ export default function App(){
     {quiz && <Quiz decks={library.decks} deckId={quiz.deckId} onClose={() => setQuiz(null)} onDone={recordQuiz} />}
     {learn && <LearnMode decks={library.decks} deckId={learn.deckId} session={settings.learnSession}
       onSaveSession={saveLearnSession} onClose={() => setLearn(null)} onDone={recordQuiz} />}
-    {paperOpen && <ExamPaper decks={library.decks} defaultLevel={usualLevel()} saved={settings.paper}
+    {paperOpen && <ExamPaper decks={library.decks} progress={progress} defaultLevel={usualLevel()} saved={settings.paper}
+      onMakeCards={cardsFromPaper}
       onSave={savePaper} onClose={() => setPaperOpen(false)} />}
     {diagOpen && <Diagnose decks={library.decks} defaultLevel={usualLevel()} report={settings.diagnosis}
       onSaveReport={saveDiagnosis} onClose={() => setDiagOpen(false)} onMakeCards={cardsFromGaps} />}

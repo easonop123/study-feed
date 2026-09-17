@@ -7,7 +7,11 @@
    avoids shell-quoting differences between Windows (cmd) and Vercel (Linux). */
 import * as esbuild from 'esbuild';
 
-await esbuild.build({
+/* Exported so `tools/offline.mjs` can rebuild to a scratch file and compare,
+   rather than restating these options. A staleness check written against a
+   COPY of the build settings would pass while shipping a differently-built
+   bundle, which is the one thing it exists to prevent. */
+export const BUILD = {
   entryPoints: ['web/main.jsx'],
   bundle: true,
   minify: true,
@@ -20,6 +24,10 @@ await esbuild.build({
     'process.env.REACT_APP_VERCEL_OBSERVABILITY_CLIENT_CONFIG': 'undefined',
   },
   outfile: 'docs/app.js',
-});
+};
 
-console.log('Built docs/app.js');
+/* Only when run directly — importing this must not write the bundle. */
+if (import.meta.url === `file://${process.argv[1]}`){
+  await esbuild.build(BUILD);
+  console.log('Built docs/app.js');
+}
