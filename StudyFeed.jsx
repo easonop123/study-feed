@@ -8200,6 +8200,20 @@ function Quiz({ decks, deckId, onClose, onDone }){
 
   const scopeDecks = scope === 'all' ? decks : decks.filter(d => d.id === scope);
   const scopeCards = useMemo(() => { const o = []; for (const d of scopeDecks) for (const c of d.cards) o.push(c); return o; }, [scope, decks]);
+  /* TWO COUNTS, because they answer two different questions and conflating them
+     broke the feature in one direction or lied about it in the other.
+
+     `eligibleCount` is how many cards are the right SHAPE — it is what the
+     "not enough to quiz yet" message describes in words ("at least 4 quick or
+     multiple-choice cards"), so it is what that gate has to be measured
+     against. Gating on capacity instead silently raised the bar: a deck with
+     four eligible cards, one of which has no plausible distractors, stopped
+     offering a quiz at all rather than offering a three-question one.
+
+     `askableCount` is how many fair questions can actually be built, and it is
+     what goes on the button, because that is the number the student is about to
+     be asked. */
+  const eligibleCount = useMemo(() => scopeCards.filter(quizUsable).length, [scopeCards]);
   const usableCount = useMemo(() => quizCapacity(scopeCards), [scopeCards]);
   const subject = scope === 'all' ? '' : ((scopeDecks[0] && scopeDecks[0].subject) || '');
 
@@ -8285,7 +8299,7 @@ function Quiz({ decks, deckId, onClose, onDone }){
 
             <ScopePicker decks={decks} value={scope} onChange={setScope} />
 
-            {usableCount < QUIZ_MIN ? (
+            {eligibleCount < QUIZ_MIN ? (
               <Card style={{ padding: '30px 22px', textAlign: 'center' }}>
                 <div style={{ display: 'flex', justifyContent: 'center', marginBottom: 12, color: T.faint }}><Ico name="puzzle" size={34} weight={1.5} /></div>
                 <Title style={{ fontSize: 18 }}>Not enough to quiz yet</Title>
