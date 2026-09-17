@@ -30,7 +30,11 @@
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
+import { modelNamed } from './app-source.mjs';
 import { CASES } from './mark-eval-cases.mjs';
+/* Static so Node's MODULE_TYPELESS_PACKAGE_JSON warning about this file prints
+   before the run rather than through the middle of the progress table. */
+import { STARTER_DECKS } from '../starter-decks.js';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const SRC = readFileSync(join(HERE, '..', 'StudyFeed.jsx'), 'utf8');
@@ -103,8 +107,8 @@ const { markPrompt, rescueObjects, locateNotes, placeNotes, quoteToRegex, trimQu
 /* Exactly what markAnswer sends: callModel(prompt, 1700, MODEL_SMART) with no
    reasoning_effort — MODEL_SMART deliberately keeps its full thinking. Read
    from the source rather than retyped, so a model swap is picked up here too. */
-const ENDPOINT = 'https://studyfeed.app/api/nvidia';
-const MODEL = (SRC.match(/const MODEL_SMART = '([^']+)'/) || [])[1];
+const ENDPOINT = process.env.SF_ENDPOINT || 'https://studyfeed.app/api/nvidia';
+const MODEL = modelNamed(SRC, 'MODEL_SMART');
 if (!MODEL) throw new Error('grab: MODEL_SMART not found in StudyFeed.jsx');
 /* Read from the source so this tracks the app, but overridable with
    --max-tokens to answer "what ceiling would stop the truncation". */
@@ -131,6 +135,39 @@ function promptFor(card, answer, level){
    be making — it has never seen the standard. */
 const STANDARD_CITATION = /\bAS\s?9\d{4}\b|\b9[0-2]\d{3}\b|\bNZQA\b|\bthe standard (?:requires|says|wants|asks)\b|\bmarking schedule\b/gi;
 
+/* --effort low|medium|high — THE FLAG THE README ASKS FOR BEFORE ANYONE
+   TOUCHES THIS SETTING.
+
+   Marking is the one feature deliberately left at full reasoning: everything
+   else that could take `reasoning_effort` was turned down, and this was not,
+   because grades are the product's claim and nobody had measured what turning
+   it down does to them. "Re-run the eval both ways first, not a guess" is the
+   standing instruction — and until now there was no way to run the other way,
+   so the instruction could not be followed by anyone who wanted to.
+
+   It matters more than it did. The endpoint writes at about 27 tokens a second
+   and the proxy gives up at 55, so roughly 1500 tokens is the whole budget. The
+   marking replies measured on this corpus came in at median 1256, p90 1749 and
+   max 2497 — which puts the median call at about 46 seconds and everything
+   past the median over the wall. Cutting the reasoning is the cheapest lever
+   available; whether it costs any accuracy is what this flag exists to answer.
+
+   Run it both ways over the same corpus and compare `in band`, not vibes:
+     node tools/mark-eval.mjs                 > full.log
+     node tools/mark-eval.mjs --effort low    > low.log                        */
+const EFFORT = (() => {
+  const i = process.argv.indexOf('--effort');
+  const v = i > 0 ? process.argv[i + 1] : null;
+  return (v === 'low' || v === 'medium' || v === 'high') ? v : null;
+})();
+
+/* The same 90-second deadline `tools/health.mjs` and `tools/paper-eval.mjs`
+   carry, and for the same reason: the proxy gives up at 55s, so nothing still
+   open at 90 is coming, and undici will otherwise sit on a hung HTTP/2 stream
+   for as long as five minutes before throwing. A 42-case run that stalls twice
+   is an hour of nothing. */
+const DEADLINE_MS = 90000;
+
 async function mark(card, answer, level){
   const body = {
     model: MODEL,
@@ -140,12 +177,24 @@ async function mark(card, answer, level){
     max_tokens: MARK_MAX_TOKENS,
     stream: false,
   };
+  /* Guarded the way the app guards it — see takesReasoningEffort: an unknown
+     parameter is a 400 from NVIDIA, so this must never reach a model family
+     nobody has tried it on. */
+  if (EFFORT && /gpt-oss/i.test(MODEL)) body.reasoning_effort = EFFORT;
   const started = Date.now();
-  const res = await fetch(ENDPOINT, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(body),
-  });
+  let res;
+  try {
+    res = await fetch(ENDPOINT, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+      signal: AbortSignal.timeout(DEADLINE_MS),
+    });
+  } catch (e){
+    const ms = Date.now() - started;
+    const timedOut = e && (e.name === 'TimeoutError' || e.name === 'AbortError');
+    return { ok: false, ms, error: timedOut ? `no reply in ${DEADLINE_MS / 1000}s` : String(e && e.message || e) };
+  }
   const text = await res.text();
   const ms = Date.now() - started;
   if (!res.ok) return { ok: false, ms, error: `HTTP ${res.status}: ${text.slice(0, 200)}` };
@@ -241,7 +290,6 @@ async function main(){
   if (onlyKind) cases = cases.filter(c => c.kind === onlyKind);
   if (!cases.length){ console.error('No cases matched.'); process.exit(1); }
 
-  const { STARTER_DECKS } = await import('../starter-decks.js');
   const cardFor = (kase) => {
     const deck = STARTER_DECKS.find(d => d.slug === kase.deck);
     if (!deck) throw new Error(`unknown deck ${kase.deck}`);
@@ -256,7 +304,7 @@ async function main(){
 
   const total = cases.length * repeat;
   console.log(`Marking eval — ${total} calls against ${ENDPOINT}`);
-  console.log(`Model: ${MODEL}, max_tokens ${MARK_MAX_TOKENS}${NO_NCEA ? ', NCEA rules OFF' : ''}${arg('level', null) ? ', level "' + arg('level', '') + '"' : ''}\n`);
+  console.log(`Model: ${MODEL}, max_tokens ${MARK_MAX_TOKENS}, reasoning ${EFFORT || 'full'}${NO_NCEA ? ', NCEA rules OFF' : ''}${arg('level', null) ? ', level "' + arg('level', '') + '"' : ''}\n`);
 
   const rows = [];
   let n = 0;

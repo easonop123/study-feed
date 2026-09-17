@@ -22,10 +22,11 @@ import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import * as esbuild from 'esbuild';
+import { modelNamed } from './app-source.mjs';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const OUT = path.join(ROOT, 'tools', '.diagnose-eval-bundle.mjs');
-const ENDPOINT = 'https://studyfeed.app/api/nvidia';
+const ENDPOINT = process.env.SF_ENDPOINT || 'https://studyfeed.app/api/nvidia';
 
 const EXPORTS = ['blueprintPrompt', 'diagnosePrompt', 'cleanBlueprint', 'rungSplit',
   'parseJsonArray', 'rescueObjects', 'RUNGS'];
@@ -42,7 +43,7 @@ async function loadApp(){
     });
   } finally { fs.unlinkSync(shim); }
   const src2 = fs.readFileSync(path.join(ROOT, 'StudyFeed.jsx'), 'utf8');
-  const model = (src2.match(/const MODEL_SMART = '([^']+)'/) || [])[1];
+  const model = modelNamed(src2, 'MODEL_SMART');
   if (!model) throw new Error('MODEL_SMART not found in StudyFeed.jsx');
   const mod = await import('file://' + OUT.replace(/\\/g, '/') + '?t=' + Date.now());
   return { app: mod, model };

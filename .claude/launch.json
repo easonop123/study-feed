@@ -1,10 +1,11 @@
 {
+  "//": "npx rather than `node node_modules/esbuild/bin/esbuild`, which only works where npm installed esbuild as a JS shim. On macOS it installs the platform BINARY at that path, so node tried to parse a Mach-O executable and the preview never started. npx resolves the right one on every platform.",
   "version": "0.0.1",
   "configurations": [
     {
       "name": "studyfeed-web",
-      "runtimeExecutable": "node",
-      "runtimeArgs": ["node_modules/esbuild/bin/esbuild", "--servedir=docs", "--serve=8123"],
+      "runtimeExecutable": "npx",
+      "runtimeArgs": ["esbuild", "--servedir=docs", "--serve=8123"],
       "port": 8123
     }
   ]

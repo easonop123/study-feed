@@ -27,8 +27,110 @@
   <link rel="stylesheet"
     href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&family=Inter:wght@400;500;600;700;800&display=swap" />
 
-  <!-- the app uses Tailwind core utilities for layout only -->
-  <script src="https://cdn.tailwindcss.com"></script>
+  <!-- ================================================================
+       LAYOUT UTILITIES AND THE RESET, INLINE.
+
+       This used to be a script tag pointing at cdn.tailwindcss.com — the
+       Tailwind PLAY CDN, which ships a CSS compiler to the browser and builds
+       the stylesheet on every page load. Measured against it, the entire
+       contribution to this app was under 5KB: the reset below, and EIGHTEEN
+       layout utilities. The app styles itself with inline `style={{...}}`
+       everywhere else, so Tailwind was never doing more than flex and gap.
+
+       Four reasons that was the wrong trade, in the order they bite a student:
+
+       1. IT IS A COMPILER, AND IT RUNS AFTER THE FIRST PAINT. The play build
+          generates only the classes it has already seen in the DOM, then
+          watches for more. This is a single-page app: `grid-cols-3`,
+          `items-baseline` and `justify-center` do not exist in the first
+          screen, so they were compiled the moment a student first opened the
+          screen that used them — an unstyled frame, on the cheapest device,
+          every time.
+       2. IT IS A THIRD PARTY ON THE CRITICAL PATH. A school network that
+          blocks an unknown CDN does not break a stylesheet, it breaks the
+          layout of the whole app, and there is no fallback because there is
+          nothing to fall back to.
+       3. IT CANNOT BE CACHED FOR OFFLINE USE. Reviewing cards, Learn, Quiz and
+          the notes need no network at all — the pitch is revising on a bus —
+          and a runtime dependency on a CDN is the thing standing in the way.
+       4. It is a few hundred KB of JavaScript to deliver 3KB of CSS.
+
+       THE TRADE: the utility set is now FIXED. A Tailwind class that is not
+       listed at the bottom of this block will silently do nothing. That is not
+       left to memory — `npm test` reads every class out of StudyFeed.jsx and
+       fails if one has no rule here. Add the class, add the rule, and the test
+       says so if you forget.
+
+       The Artifact build is untouched: claude.ai supplies its own Tailwind, and
+       StudyFeed.jsx is the same file in both places.
+       ================================================================ -->
+  <style>
+    /* Reset — Tailwind v3.4.17 Preflight, MIT License, https://tailwindcss.com
+       Copied verbatim rather than trimmed. It is what the app has been styled
+       against since it was written, and the parts that look removable are the
+       ones that turn out to be load-bearing: `input::placeholder` beats the
+       app's own `::placeholder` on specificity, so dropping it would silently
+       recolour every placeholder in the app. */
+    *,::after,::before{box-sizing:border-box;border-width:0;border-style:solid;border-color:#e5e7eb}
+    ::after,::before{--tw-content:''}
+    :host,html{line-height:1.5;-webkit-text-size-adjust:100%;-moz-tab-size:4;tab-size:4;font-family:ui-sans-serif, system-ui, sans-serif, "Apple Color Emoji", "Segoe UI Emoji", "Segoe UI Symbol", "Noto Color Emoji";font-feature-settings:normal;font-variation-settings:normal;-webkit-tap-highlight-color:transparent}
+    body{margin:0;line-height:inherit}
+    hr{height:0;color:inherit;border-top-width:1px}
+    abbr:where([title]){-webkit-text-decoration:underline dotted;text-decoration:underline dotted}
+    h1,h2,h3,h4,h5,h6{font-size:inherit;font-weight:inherit}
+    a{color:inherit;text-decoration:inherit}
+    b,strong{font-weight:bolder}
+    code,kbd,pre,samp{font-family:ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;font-feature-settings:normal;font-variation-settings:normal;font-size:1em}
+    small{font-size:80%}
+    sub,sup{font-size:75%;line-height:0;position:relative;vertical-align:baseline}
+    sub{bottom:-.25em}
+    sup{top:-.5em}
+    table{text-indent:0;border-color:inherit;border-collapse:collapse}
+    button,input,optgroup,select,textarea{font-family:inherit;font-feature-settings:inherit;font-variation-settings:inherit;font-size:100%;font-weight:inherit;line-height:inherit;letter-spacing:inherit;color:inherit;margin:0;padding:0}
+    button,select{text-transform:none}
+    button,input:where([type=button]),input:where([type=reset]),input:where([type=submit]){-webkit-appearance:button;background-color:transparent;background-image:none}
+    :-moz-focusring{outline:auto}
+    :-moz-ui-invalid{box-shadow:none}
+    progress{vertical-align:baseline}
+    ::-webkit-inner-spin-button,::-webkit-outer-spin-button{height:auto}
+    [type=search]{-webkit-appearance:textfield;outline-offset:-2px}
+    ::-webkit-search-decoration{-webkit-appearance:none}
+    ::-webkit-file-upload-button{-webkit-appearance:button;font:inherit}
+    summary{display:list-item}
+    blockquote,dd,dl,figure,h1,h2,h3,h4,h5,h6,hr,p,pre{margin:0}
+    fieldset{margin:0;padding:0}
+    legend{padding:0}
+    menu,ol,ul{list-style:none;margin:0;padding:0}
+    dialog{padding:0}
+    textarea{resize:vertical}
+    input::placeholder,textarea::placeholder{opacity:1;color:#9ca3af}
+    [role=button],button{cursor:pointer}
+    :disabled{cursor:default}
+    audio,canvas,embed,iframe,img,object,svg,video{display:block;vertical-align:middle}
+    img,video{max-width:100%;height:auto}
+    [hidden]:where(:not([hidden=until-found])){display:none}
+
+    /* The eighteen. Every Tailwind class StudyFeed.jsx uses, and no others —
+       `npm test` asserts both halves of that sentence. */
+    .flex{display:flex}
+    .grid{display:grid}
+    .flex-col{flex-direction:column}
+    .items-start{align-items:flex-start}
+    .items-center{align-items:center}
+    .items-end{align-items:flex-end}
+    .items-baseline{align-items:baseline}
+    .justify-center{justify-content:center}
+    .justify-between{justify-content:space-between}
+    .grid-cols-2{grid-template-columns:repeat(2, minmax(0, 1fr))}
+    .grid-cols-3{grid-template-columns:repeat(3, minmax(0, 1fr))}
+    .grid-cols-4{grid-template-columns:repeat(4, minmax(0, 1fr))}
+    .gap-1{gap:0.25rem}
+    .gap-1\.5{gap:0.375rem}
+    .gap-2{gap:0.5rem}
+    .gap-2\.5{gap:0.625rem}
+    .gap-3{gap:0.75rem}
+    .gap-4{gap:1rem}
+  </style>
   <style>
     /* Pre-hydration only — StudyFeed.jsx paints the real theme a moment later.
        It follows the OS so a dark-mode user doesn't get a white flash first,

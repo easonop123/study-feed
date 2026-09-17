@@ -29,6 +29,7 @@
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
+import { modelNamed } from './app-source.mjs';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const SRC = readFileSync(join(HERE, '..', 'StudyFeed.jsx'), 'utf8');
@@ -91,8 +92,8 @@ function grab(fns, consts){
 const { markWorkingPrompt, firstBadStep, rescueObjects } =
   grab(['markWorkingPrompt', 'firstBadStep', 'rescueObjects'], ['NCEA_RULES', 'isNcea', 'nceaRules']);
 
-const ENDPOINT = 'https://studyfeed.app/api/nvidia';
-const MODEL = (SRC.match(/const MODEL_SMART = '([^']+)'/) || [])[1];
+const ENDPOINT = process.env.SF_ENDPOINT || 'https://studyfeed.app/api/nvidia';
+const MODEL = modelNamed(SRC, 'MODEL_SMART');
 if (!MODEL) throw new Error('grab: MODEL_SMART not found in StudyFeed.jsx');
 /* Read the ceiling off the call site, so a change there is picked up here. */
 const SRC_MAX = Number((SRC.match(/markWorkingPrompt\(card, working, level\), (\d+)/) || [])[1]);
