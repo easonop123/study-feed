@@ -565,6 +565,23 @@ the clock.
 first and the preview deployment's green check is the proof that the plan permits
 it. A red check costs nothing; a bad guess in production costs the app.
 
+**Measured after, and the third row is the whole argument.** Four generates
+through the live proxy at the app's real batch size:
+
+| | tokens | cards |
+|---|---|---|
+| 18.8s | 593 | 6 |
+| 24.6s | 624 | 6 |
+| **82.5s** | **572** | **6** |
+| 20.2s | 611 | 6 |
+
+**4/4.** That 82.5-second call wrote 572 tokens at 6.9 tokens a second and
+returned six cards a student could use. Under the old budget it was a `504` —
+not a failed request, a finished one that nobody was listening for. It is the
+clearest evidence available that the wall was throwing away work, and it is
+also a reminder of how far the rate now swings: the same prompt, the same model,
+four times in a row, at 6.9, 25, 30 and 31 tokens a second.
+
 ### `node tools/models.mjs` — is there anything to move to?
 
 ```bash
