@@ -1,0 +1,7 @@
+{
+  "buildCommand": "npm test && npm run build",
+  "outputDirectory": "docs",
+  "crons": [
+    { "path": "/api/guard", "schedule": "17 18 * * *" }
+  ]
+}

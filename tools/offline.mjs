@@ -30,7 +30,7 @@
    ========================================================================== */
 
 import { spawn } from 'node:child_process';
-import { readFileSync, rmSync } from 'node:fs';
+import { readFileSync, rmSync, existsSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
 import { tmpdir } from 'node:os';
@@ -340,6 +340,48 @@ for (const s of SUITES){
   results.push({ name: 'docs/app.js is current', ok, out: detail, ms });
   console.log(`${(ok ? 'ok  ' : 'FAIL').padEnd(6)} ${'docs/app.js is current'.padEnd(24)} ${''.padEnd(8)} ${(ms / 1000).toFixed(1)}s`);
   console.log('       the bundle the deployed site serves matches the source');
+  if (!ok) console.log('       │ ' + detail);
+}
+
+/* --- the deploy config still points at things that exist ------------------
+   `vercel.json` carries two jobs that used to need a person: it runs these
+   checks as part of the build, and it schedules the daily model-retirement
+   guard. Both are strings naming things elsewhere in the repo, which is the
+   kind of link that rots in silence — a renamed endpoint turns the alarm off
+   and nothing anywhere says so, which is the exact failure the alarm exists to
+   prevent. */
+{
+  const t0 = Date.now();
+  const problems = [];
+  let crons = 0;
+  try {
+    const cfg = JSON.parse(readFileSync(join(ROOT, 'vercel.json'), 'utf8'));
+
+    /* The build has to run these checks, or the one thing that cannot be
+       enforced by a checker — that somebody ran the checker — goes back to
+       being a matter of memory. */
+    if (!/\bnpm test\b/.test(String(cfg.buildCommand || '')))
+      problems.push('vercel.json buildCommand does not run `npm test`, so a deploy can ship a change these checks would have caught');
+    if (!/\bnpm run build\b/.test(String(cfg.buildCommand || '')))
+      problems.push('vercel.json buildCommand does not run `npm run build`');
+    if (cfg.outputDirectory !== 'docs')
+      problems.push(`vercel.json outputDirectory is ${JSON.stringify(cfg.outputDirectory)}, and the site is served from docs/`);
+
+    for (const c of cfg.crons || []){
+      crons++;
+      const path = String(c.path || '');
+      const file = join(ROOT, path.replace(/^\//, '') + '.js');
+      if (!existsSync(file)) problems.push(`vercel.json schedules ${path}, which has no handler at ${path.replace(/^\//, '')}.js — the job would 404 every day, quietly`);
+      if (!/^[-\d,*/ ]+$/.test(String(c.schedule || ''))) problems.push(`cron schedule ${JSON.stringify(c.schedule)} is not a cron expression`);
+    }
+  } catch (e){ problems.push('could not read vercel.json: ' + String(e && e.message || e)); }
+
+  const ok = !problems.length;
+  const detail = problems.join('; ');
+  const ms = Date.now() - t0;
+  results.push({ name: 'the deploy config holds', ok, out: detail, ms });
+  console.log(`${(ok ? 'ok  ' : 'FAIL').padEnd(6)} ${'the deploy config holds'.padEnd(24)} ${`${crons} cron`.padEnd(8)} ${(ms / 1000).toFixed(1)}s`);
+  console.log('       the build runs these checks, and every scheduled job has a handler');
   if (!ok) console.log('       │ ' + detail);
 }
 
