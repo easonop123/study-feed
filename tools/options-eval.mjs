@@ -25,7 +25,7 @@ const OUT = path.join(ROOT, 'tools', '.options-eval-bundle.mjs');
    harness quietly stops testing the app (it has happened twice on this repo). */
 const EXPORTS = ['buildOptions', 'buildQuiz', 'rankDistractors', 'answerShape',
   'distractorFit', 'numericDistractors', 'ownOptions', 'quizAnswerText',
-  'buildLearnQuestion', 'normaliseAnswer'];
+  'buildLearnQuestion', 'normaliseAnswer', 'quizCapacity', 'quizUsable'];
 
 async function loadApp(){
   const src = fs.readFileSync(path.join(ROOT, 'StudyFeed.jsx'), 'utf8');
@@ -297,6 +297,32 @@ const must = (label, ok, detail) => {
     made.length === 3 && made.every(m => /^1[789]\d\d$/.test(m)), made.join(', '));
   const mass = app.numericDistractors('44.0 g', 3);
   must('a value keeps its unit', mass.length === 3 && mass.every(m => / g$/.test(m)), mass.join(', '));
+}
+
+/* THE NUMBER ON THE BUTTON IS THE NUMBER OF QUESTIONS.
+
+   `quizUsable` says a card is the right SHAPE for multiple choice. Whether it
+   can be ASKED is stricter — the distractors have to come from somewhere, and
+   `buildQuiz` drops a card whose answer has nothing in the deck that could
+   plausibly hide beside it. Counting the first and promising it as the second
+   is how a six-card deck came to offer "All 5" and then count "1 / 3". */
+/* DECKS holds [question, answer] pairs, because that is all `buildOptions`
+   needs. `buildQuiz` works on real cards, so make them — a fixture in the wrong
+   shape passes every assertion by having nothing to assert on, which is how a
+   check goes quiet without going red. */
+const asCards = (pairs) => pairs.map((qa, i) => ({ id: 'q' + i, type: 'flip', front: qa[0], back: qa[1] }));
+
+for (const [name, pairs] of Object.entries(DECKS)){
+  const cards = asCards(pairs);
+  const cap = app.quizCapacity(cards);
+  const eligible = cards.filter(app.quizUsable).length;
+  const asked = app.buildQuiz(cards, cap).length;
+  must(`${name}: the offered count is the count asked`, asked === cap,
+    `offers ${cap}, asks ${asked} (${eligible} eligible)`);
+  must(`${name}: asking for more than it can make does not inflate it`,
+    app.buildQuiz(cards, 999).length === cap, `999 → ${app.buildQuiz(cards, 999).length}, capacity ${cap}`);
+  must(`${name}: asking for fewer is honoured exactly`,
+    cap < 2 || app.buildQuiz(cards, cap - 1).length === cap - 1, `wanted ${cap - 1}`);
 }
 
 console.log('');

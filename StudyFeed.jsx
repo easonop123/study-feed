@@ -8168,6 +8168,25 @@ function buildQuiz(cards, count){
   return out;
 }
 
+/* HOW MANY FAIR QUESTIONS THIS SCOPE CAN ACTUALLY MAKE, which is not the same
+   number as how many cards are eligible.
+
+   `quizUsable` says a card is the right SHAPE for multiple choice. Whether it
+   can be asked is a second question and a stricter one: the distractors have to
+   come from somewhere, and a card whose answer has nothing in the deck that
+   could plausibly hide beside it is dropped by `buildQuiz` rather than asked
+   badly. That is the right call — the note inside `buildQuiz` argues it — and
+   it used to happen silently after the student had already been told what to
+   expect. A six-card deck offered "All 5" and then counted "1 / 3".
+
+   Promising five and asking three is a small lie, and it is the kind that
+   teaches someone the app is careless. So the number on the button is the
+   number of questions there will be. Counting costs a pass of the same option
+   builder the quiz uses, all of it local, no API call. */
+function quizCapacity(cards){
+  return buildQuiz(cards, Infinity).length;
+}
+
 function Quiz({ decks, deckId, onClose, onDone }){
   const [scope, setScope] = useState(deckId && deckId !== 'all' && decks.some(d => d.id === deckId) ? deckId : 'all');
   const [phase, setPhase] = useState('setup');
@@ -8181,7 +8200,7 @@ function Quiz({ decks, deckId, onClose, onDone }){
 
   const scopeDecks = scope === 'all' ? decks : decks.filter(d => d.id === scope);
   const scopeCards = useMemo(() => { const o = []; for (const d of scopeDecks) for (const c of d.cards) o.push(c); return o; }, [scope, decks]);
-  const usableCount = useMemo(() => scopeCards.filter(quizUsable).length, [scopeCards]);
+  const usableCount = useMemo(() => quizCapacity(scopeCards), [scopeCards]);
   const subject = scope === 'all' ? '' : ((scopeDecks[0] && scopeDecks[0].subject) || '');
 
   const lenOpts = [];
