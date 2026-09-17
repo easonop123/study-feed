@@ -184,7 +184,7 @@ On this machine neither is on the default shell PATH — they live at
 npm run build     # node build.mjs → esbuild bundles web/main.jsx into docs/app.js
 ```
 
-The deployed site serves `docs/app.js`, so **always rebuild after editing `StudyFeed.jsx`** or the change won't ship. Vercel settings: Output Directory `docs`, Build Command `npm run build`. `web/main.jsx` is the website-only entry — it renders `<App/>` plus Vercel `<Analytics/>`, which stays out of `StudyFeed.jsx` because that file also runs as an Artifact.
+The deployed site serves `docs/app.js`, so **always rebuild after editing `StudyFeed.jsx`** or the change won't ship. Vercel's settings now come from `vercel.json` rather than the dashboard: Output Directory `docs`, Build Command **`npm test && npm run build`** so a deployment cannot ship a change these checks would have caught, and a daily cron on `/api/guard`. `web/main.jsx` is the website-only entry — it renders `<App/>` plus Vercel `<Analytics/>`, which stays out of `StudyFeed.jsx` because that file also runs as an Artifact.
 
 Local render check: `npm run serve`, or `.claude/launch.json`'s `studyfeed-web`, both of which are `npx esbuild --servedir=docs --serve=8123`. `/api/nvidia` only exists on Vercel, so AI features can't be exercised in a local static serve.
 
@@ -196,7 +196,7 @@ Local render check: `npm run serve`, or `.claude/launch.json`'s `studyfeed-web`,
 npm test          # every check that needs no endpoint and no key, in about half a second
 ```
 
-`tools/offline.mjs` runs the ten things that can be established without a model call. It exists because the repo already had good offline checks and no way to run them: they were spread across four tools behind four different flags, so knowing whether a change had broken something meant knowing which of eight scripts to reach for and which of them needed a network. In practice that means they get run when someone remembers, which is not when they are needed.
+`tools/offline.mjs` runs the twelve things that can be established without a model call. It exists because the repo already had good offline checks and no way to run them: they were spread across four tools behind four different flags, so knowing whether a change had broken something meant knowing which of eight scripts to reach for and which of them needed a network. In practice that means they get run when someone remembers, which is not when they are needed.
 
 | Check | What it holds |
 |---|---|
@@ -209,6 +209,7 @@ npm test          # every check that needs no endpoint and no key, in about half
 | syntax | `StudyFeed.jsx` bundles — no `??` / `?.` / `||=`, which the Artifact rejects |
 | classes | every Tailwind class used has a rule in the shell, and no rule is dead |
 | freshness | `docs/app.js` is byte-identical to a fresh build |
+| deploy config | the build runs these checks, and every scheduled job has a handler |
 
 Six of these are new, and the freshness one matters most. **`docs/app.js` is what the deployed site serves, and it only matches `StudyFeed.jsx` because a human remembered to run the build.** "Always rebuild or the change won't ship" was a rule enforced by memory, and a change that did not ship looks exactly like a change that did not work — you go back and edit the thing that was already right. The check rebuilds to a scratch file and compares, importing the real options from `build.mjs` rather than a copy of them, because a staleness check written against a copy of the build settings would pass while shipping a differently-built bundle.
 
@@ -630,47 +631,49 @@ the app really sends.
 The app breaking was not the problem. NVIDIA retires a model, every AI feature
 stops in the same second, and the first report comes from a person trying to use
 it days later — that gap is the failure, and it is the one thing here that
-falling back does not fix. Worse, falling back makes it cheaper to ignore: the
-chain gets shorter every time this happens and nothing says a word.
+falling back does not fix. It makes it worse, in fact: the chain gets shorter
+every time this happens and nothing says a word until the last model goes.
 
-So there is a guard:
+So something has to ask. `api/guard.js` runs once a morning, scheduled by
+`vercel.json`, and emails only when the answer is yes:
 
 ```bash
-node tools/models.mjs --guard   # exit 1 if an id the app ships answers 404 or 410
+node tools/models.mjs --guard        # the same question, by hand, exit 1 if so
+curl https://studyfeed.app/api/guard?check=1   # or ask the deployed one
 ```
 
-**It fails on retirement and on nothing else.** A timeout is not a failure here
-and neither is a 503 — those are the free tier having a bad minute, they happen
-most days, and an alarm that fires on them is an alarm nobody reads. A 404 or a
-410 is different in kind: permanent, unambiguous, and it will not heal. That is
-the only thing it fails on. `node tools/health.mjs` stays the command for "is it
-answering *well* today", which is a judgement and belongs to a person. The guard
-needs no key — it asks through the app's own public proxy, which is where the
-key lives — so it runs anywhere, including from a scheduler.
+**It wakes somebody for a 404 or a 410 and for nothing else.** Those are
+permanent, unambiguous and will not heal. A timeout is not a failure here and
+neither is a 503 or a 429: the free tier has a bad minute most days, and an
+alarm that fires on those gets filtered to a folder and then missed on the
+morning that matters. `node tools/health.mjs` stays the command for "is it
+answering *well* today", which is a judgement and belongs to a person.
 
-**Two GitHub Actions are written and are NOT committed**, because the token this
-was built with has no `workflow` scope and GitHub refuses the push. They sit in
-`.github/workflows/` in the working tree, ready:
+**Why it is not a GitHub Action.** The obvious home for a daily check is a
+scheduled workflow, and one was written first. It could not be committed:
+anything under `.github/workflows/` needs a token carrying the `workflow` scope,
+and this project's does not — so installing the alarm would have started by
+asking a human to re-authorise a GitHub token. **An alarm that needs a favour to
+install is an alarm that does not get installed.** Everything it needs was
+already here instead: the key is in this project's environment, the scheduler is
+part of the platform it already deploys to, and `api/feedback.js` had already
+proved the mail path works. It reads its model list from `ALLOWED_MODELS`, which
+`npm test` already forces to equal the app's two chains exactly, so the guard
+cannot drift from the app without the test saying so first.
 
-| Workflow | What |
-|---|---|
-| `test.yml` | `npm test` on every push to main and every pull request |
-| `models.yml` | the guard, daily at 07:17 NZST, opening an issue on a retirement |
-
-`test.yml` is aimed squarely at 17 Sep: one change to the *shape* of a constant
-in `StudyFeed.jsx` broke six tools at once, and nothing would have said so until
+**And the build runs the checks.** `vercel.json` sets the build command to
+`npm test && npm run build`, which is the other half of the same idea: the one
+thing a checker cannot enforce is that somebody ran the checker. It is aimed
+squarely at 17 Sep, when one change to the *shape* of a constant in
+`StudyFeed.jsx` broke six tools at once and nothing would have said so until
 somebody next reached for one of them. It also carries the bundle-freshness
 check, so a commit that edits `StudyFeed.jsx` without rebuilding `docs/app.js`
-fails before it merges — a change that does not ship looks exactly like a change
-that did not work. `models.yml` comments on the open issue rather than opening a
-new one each morning.
+now fails the deployment rather than shipping a change that is not there.
 
-To land them, from a session whose GitHub token has the `workflow` scope
-(`gh auth refresh -s workflow`):
-
-```bash
-git add .github/workflows && git commit -m "Find out about a retirement in hours" && git push
-```
+`npm test` checks `vercel.json` back: that the build still runs the checks, that
+the output directory is still the one the site is served from, and that every
+scheduled path has a handler. A renamed endpoint would otherwise turn the alarm
+off silently, which is precisely the failure the alarm exists to prevent.
 
 ## Usage counts
 

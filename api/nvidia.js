@@ -95,7 +95,12 @@ const UPSTREAM_ABORT_MS = (maxDuration - 5) * 1000;
    id through this endpoint; `--bake` then puts the survivors through the app's
    real prompts. On 17 Sep 2026 that found 27 of 34 ids retired, most of them
    inside the previous three weeks, which is the pace to expect. */
-const ALLOWED_MODELS = [
+/* Exported so `api/guard.js` can check these same ids against NVIDIA every
+   morning. It is the right list to check precisely because `npm test` already
+   forces it to equal TEXT_MODELS + VISION_MODELS in StudyFeed.jsx exactly, in
+   both directions — so a guard written against it cannot drift from the app
+   without the test saying so first. */
+export const ALLOWED_MODELS = [
   'google/gemma-4-31b-it',                  // TEXT_MODELS[0]
   'nvidia/nemotron-3.5-lightning-30b-a3b',  // TEXT_MODELS[1]
   'openai/gpt-oss-20b',                     // TEXT_MODELS[2] — the old head, kept as a floor
