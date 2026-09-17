@@ -582,11 +582,59 @@ clearest evidence available that the wall was throwing away work, and it is
 also a reminder of how far the rate now swings: the same prompt, the same model,
 four times in a row, at 6.9, 25, 30 and 31 tokens a second.
 
+### Nobody knew, and that was the actual failure
+
+The app breaking was not the problem. NVIDIA retires a model, every AI feature
+stops in the same second, and the first report comes from a person trying to use
+it days later — that gap is the failure, and it is the one thing here that
+falling back does not fix. Worse, falling back makes it cheaper to ignore: the
+chain gets shorter every time this happens and nothing says a word.
+
+So there is a guard:
+
+```bash
+node tools/models.mjs --guard   # exit 1 if an id the app ships answers 404 or 410
+```
+
+**It fails on retirement and on nothing else.** A timeout is not a failure here
+and neither is a 503 — those are the free tier having a bad minute, they happen
+most days, and an alarm that fires on them is an alarm nobody reads. A 404 or a
+410 is different in kind: permanent, unambiguous, and it will not heal. That is
+the only thing it fails on. `node tools/health.mjs` stays the command for "is it
+answering *well* today", which is a judgement and belongs to a person. The guard
+needs no key — it asks through the app's own public proxy, which is where the
+key lives — so it runs anywhere, including from a scheduler.
+
+**Two GitHub Actions are written and are NOT committed**, because the token this
+was built with has no `workflow` scope and GitHub refuses the push. They sit in
+`.github/workflows/` in the working tree, ready:
+
+| Workflow | What |
+|---|---|
+| `test.yml` | `npm test` on every push to main and every pull request |
+| `models.yml` | the guard, daily at 07:17 NZST, opening an issue on a retirement |
+
+`test.yml` is aimed squarely at 17 Sep: one change to the *shape* of a constant
+in `StudyFeed.jsx` broke six tools at once, and nothing would have said so until
+somebody next reached for one of them. It also carries the bundle-freshness
+check, so a commit that edits `StudyFeed.jsx` without rebuilding `docs/app.js`
+fails before it merges — a change that does not ship looks exactly like a change
+that did not work. `models.yml` comments on the open issue rather than opening a
+new one each morning.
+
+To land them, from a session whose GitHub token has the `workflow` scope
+(`gh auth refresh -s workflow`):
+
+```bash
+git add .github/workflows && git commit -m "Find out about a retirement in hours" && git push
+```
+
 ### `node tools/models.mjs` — is there anything to move to?
 
 ```bash
 node tools/models.mjs          # alive scan: the catalogue, one cheap call each
 node tools/models.mjs --bake   # the survivors, on the app's REAL generate and mark prompts
+node tools/models.mjs --guard  # has anything the app SHIPS been retired? (exit 1 if so)
 ```
 
 The alive scan answers *is there anything alive*. The bake-off answers the only
