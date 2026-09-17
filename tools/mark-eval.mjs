@@ -10,6 +10,8 @@
      node tools/mark-eval.mjs --deck genetics # one deck
      node tools/mark-eval.mjs --case waffle   # one case kind, across decks
      node tools/mark-eval.mjs --repeat 3      # same case N times (drift check)
+     node tools/mark-eval.mjs --model <id>    # a CANDIDATE, without editing the app
+     node tools/mark-eval.mjs --out after.json   # then: mark-compare.mjs before.json after.json
 
    Nothing here re-implements the app. markPrompt, rescueObjects, locateNotes
    and quoteToRegex are lifted out of StudyFeed.jsx at run time by `grab()`, so
@@ -30,7 +32,7 @@
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
-import { modelNamed, checkerDeadlineMs } from './app-source.mjs';
+import { modelFromArgs, checkerDeadlineMs } from './app-source.mjs';
 import { CASES } from './mark-eval-cases.mjs';
 /* Static so Node's MODULE_TYPELESS_PACKAGE_JSON warning about this file prints
    before the run rather than through the middle of the progress table. */
@@ -108,7 +110,16 @@ const { markPrompt, rescueObjects, locateNotes, placeNotes, quoteToRegex, trimQu
    reasoning_effort — MODEL_SMART deliberately keeps its full thinking. Read
    from the source rather than retyped, so a model swap is picked up here too. */
 const ENDPOINT = process.env.SF_ENDPOINT || 'https://studyfeed.app/api/nvidia';
-const MODEL = modelNamed(SRC, 'MODEL_SMART');
+/* The chain head by default, so an ordinary run measures what students get.
+
+   `--model <id>` points the whole corpus at a candidate INSTEAD, which is the
+   move this file was missing when it mattered most. Choosing a replacement used
+   to mean editing StudyFeed.jsx, running the corpus, and remembering to put the
+   old id back — three steps, one of which is "remember", and the one that gets
+   forgotten leaves an unmeasured model shipping. The candidate still has to be
+   in ALLOWED_MODELS or our own proxy turns it away, which is the right place
+   for that gate: a model nobody has allowed is a model nobody can ship. */
+const MODEL = modelFromArgs(SRC, process.argv);
 if (!MODEL) throw new Error('grab: MODEL_SMART not found in StudyFeed.jsx');
 /* Read from the source so this tracks the app, but overridable with
    --max-tokens to answer "what ceiling would stop the truncation". */

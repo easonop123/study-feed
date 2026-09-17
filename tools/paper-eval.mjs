@@ -29,7 +29,7 @@
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
-import { modelNamed, checkerDeadlineMs } from './app-source.mjs';
+import { modelNamed, modelFromArgs, checkerDeadlineMs } from './app-source.mjs';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const SRC = readFileSync(join(HERE, '..', 'StudyFeed.jsx'), 'utf8');
@@ -95,7 +95,8 @@ const { sameSetup, paperSource, weakSpots, paperToSource } =
         'paperLosses', 'paperToSource'], ['SETUP_NOISE', 'GRADES']);
 
 const ENDPOINT = process.env.SF_ENDPOINT || 'https://studyfeed.app/api/nvidia';
-const MODEL = modelNamed(SRC, 'MODEL_SMART');
+/* `--model <id>` to point the whole run at a candidate — see modelFromArgs. */
+const MODEL = modelFromArgs(SRC, process.argv);
 if (!MODEL) throw new Error('grab: MODEL_SMART not found in StudyFeed.jsx');
 const MAX_TOKENS = Number((SRC.match(/const PAPER_MAX_TOKENS = (\d+)/) || [])[1]) || 2000;
 const PLAN_TOKENS = Number((SRC.match(/const PLAN_MAX_TOKENS = (\d+)/) || [])[1]) || 700;

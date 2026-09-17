@@ -95,3 +95,23 @@ export function checkerDeadlineMs(proxySrc){
   if (!abortMs) throw new Error('could not read the proxy time budget from api/nvidia.js');
   return abortMs + 35000;
 }
+
+/* The model a checker should use: the app's, unless `--model <id>` says
+   otherwise.
+
+   Every eval here reads the chain head so that an ordinary run measures what
+   students actually get. But the moment that matters most is the one where you
+   are choosing a REPLACEMENT, and then the default is the wrong thing entirely.
+   Without a flag, trying a candidate means editing StudyFeed.jsx, running the
+   corpus and remembering to put the old id back — three steps, one of which is
+   "remember", and the one that gets forgotten leaves an unmeasured model
+   shipping. That is not hypothetical: it is what happened on 18 Sep 2026.
+
+   The candidate still has to be in ALLOWED_MODELS or the proxy turns it away,
+   which is the right gate. A model nobody has allowed is a model nobody can
+   ship, so there is no point measuring it. */
+export function modelFromArgs(src, argv, name){
+  const i = (argv || []).indexOf('--model');
+  if (i > 0 && argv[i + 1]) return argv[i + 1];
+  return modelNamed(src, name || 'MODEL_SMART');
+}
