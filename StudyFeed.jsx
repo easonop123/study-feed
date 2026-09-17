@@ -6758,7 +6758,7 @@ function Create({ onSave, settings, onSettings, onPending, onStarter, seed, onSe
       {mode === 'generate' && (
         <div style={{ marginTop: 10 }}>
           <Tip id="create-time" settings={settings} onSettings={onSettings} icon="clock">
-            Generating can take 15–30 seconds while the AI writes each card. Nothing saves until you've looked them over.
+            Generating usually takes 20–40 seconds while the AI writes each card, and longer if it is busy. Nothing saves until you've looked them over.
           </Tip>
         </div>
       )}

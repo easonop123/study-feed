@@ -28,14 +28,13 @@
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
-import { modelNamed, numberNamed } from './app-source.mjs';
+import { modelNamed, numberNamed, checkerDeadlineMs } from './app-source.mjs';
 import { imageOfText } from './test-image.mjs';
 /* Static, not `await import` further down, purely so Node's
    MODULE_TYPELESS_PACKAGE_JSON warning about starter-decks.js lands before the
    results table instead of through the middle of it. */
 import { STARTER_DECKS } from '../starter-decks.js';
 import { CASES } from './mark-eval-cases.mjs';
-import { checkerDeadlineMs } from './app-source.mjs';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const SRC = readFileSync(join(HERE, '..', 'StudyFeed.jsx'), 'utf8');

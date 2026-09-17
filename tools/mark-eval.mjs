@@ -30,12 +30,11 @@
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
-import { modelNamed } from './app-source.mjs';
+import { modelNamed, checkerDeadlineMs } from './app-source.mjs';
 import { CASES } from './mark-eval-cases.mjs';
 /* Static so Node's MODULE_TYPELESS_PACKAGE_JSON warning about this file prints
    before the run rather than through the middle of the progress table. */
 import { STARTER_DECKS } from '../starter-decks.js';
-import { checkerDeadlineMs } from './app-source.mjs';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const SRC = readFileSync(join(HERE, '..', 'StudyFeed.jsx'), 'utf8');
