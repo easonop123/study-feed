@@ -127,7 +127,14 @@ const row = (label, b, a, goodIsUp, fmt) => {
 
 console.log(`${''.padEnd(28)} ${'BEFORE'.padStart(10)}  ${'AFTER'.padStart(10)}`);
 console.log('─'.repeat(58));
-row('grade in band', B.ok, A.ok, true, n => `${n}/${B.answered} ${pct(n, B.answered)}`);
+/* EACH SIDE AGAINST ITS OWN DENOMINATOR. Printing both over the before run's
+   count made two genuinely different runs look identical: gpt-oss got 38 of the
+   39 it answered and never answered 3, gemma got 38 of 42 and answered all of
+   them. Same 38 correct grades out of the same 42 cases, reached two different
+   ways, and the first version of this table hid that behind "38/39 97%" twice.
+   A comparison tool that flattens the difference is worse than no tool. */
+console.log(`${'grade in band'.padEnd(28)} ${(B.ok + '/' + B.answered + ' ' + pct(B.ok, B.answered)).padStart(10)}  ${(A.ok + '/' + A.answered + ' ' + pct(A.ok, A.answered)).padStart(10)}  ${verdict(B.ok / (B.answered || 1), A.ok / (A.answered || 1), true)}`);
+row('  correct grades in all', B.ok, A.ok, true, n => `${n}/${B.total}`);
 row('  of the misses, HARSHER', B.harsher, A.harsher, false);
 row('  of the misses, kinder', B.kinder, A.kinder, false);
 row('never answered', B.lost, A.lost, false);
@@ -141,12 +148,26 @@ row('median tokens written', B.tokens, A.tokens, null);
 
 /* --- the case that is allowed to veto the totals -------------------------- */
 const terse = shared.filter(k => bMap.get(k).kind === 'terse-correct');
+/* The DIRECTION decides whether this is the failure the case was written for.
+   terse-correct exists to catch a marker that mistakes brevity for ignorance —
+   a short right answer read DOWN. A terse answer read UP is a different
+   mistake, and a milder one: the first tells a student their correct work is
+   wrong, the second flatters them. Calling both a "regression" on this case,
+   which the first version of this file did, would have condemned a marker for
+   the opposite of the thing being guarded against. */
+const tooHarsh = (k) => {
+  const r = aMap.get(k);
+  return !r.gradeOk && rank(r.grade) < Math.max(...(r.expected || []).map(rank));
+};
+let terseHarsh = 0;
 if (terse.length){
   const bOk = terse.filter(k => bMap.get(k).gradeOk).length;
   const aOk = terse.filter(k => aMap.get(k).gradeOk).length;
+  terseHarsh = terse.filter(tooHarsh).length;
   console.log('\nterse-correct — a short right answer read as ignorance');
-  console.log(`  before ${bOk}/${terse.length}   after ${aOk}/${terse.length}`);
-  if (aOk < bOk) console.log('  REGRESSION. This is the feedback most likely to make a student stop writing.');
+  console.log(`  before ${bOk}/${terse.length}   after ${aOk}/${terse.length}` + (terseHarsh ? `   ${terseHarsh} read DOWN` : ''));
+  if (terseHarsh) console.log('  REGRESSION. This is the feedback most likely to make a student stop writing.');
+  else if (aOk < bOk) console.log('  Misses here are all the generous way, which is the milder mistake.');
 }
 
 /* --- every case whose grade moved ----------------------------------------- */
@@ -163,12 +184,13 @@ if (moved.length){
 /* --- the verdict, stated rather than left to the reader ------------------- */
 console.log('\n' + '─'.repeat(58));
 const worse = [];
-if (A.ok < B.ok) worse.push(`${B.ok - A.ok} fewer grades in band`);
+if (A.ok < B.ok) worse.push(`${B.ok - A.ok} fewer correct grades across the corpus`);
 if (A.harsher > B.harsher) worse.push(`${A.harsher - B.harsher} more answers marked harsher than they deserve`);
 if (A.balance > B.balance) worse.push(`${A.balance - B.balance} more all-praise note sets`);
 if (A.truncated > B.truncated) worse.push(`${A.truncated - B.truncated} more replies cut off`);
-if (terse.length && terse.filter(k => aMap.get(k).gradeOk).length < terse.filter(k => bMap.get(k).gradeOk).length)
-  worse.push('a terse-correct regression');
+if (terseHarsh) worse.push('a terse-correct answer read DOWN');
+if (A.ok / (A.answered || 1) < B.ok / (B.answered || 1) - 0.02)
+  worse.push('a lower share of grades in band');
 
 if (!worse.length) console.log('No regression on any measure that matters.');
 else {
