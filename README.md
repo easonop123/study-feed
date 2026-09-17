@@ -582,6 +582,49 @@ clearest evidence available that the wall was throwing away work, and it is
 also a reminder of how far the rate now swings: the same prompt, the same model,
 four times in a row, at 6.9, 25, 30 and 31 tokens a second.
 
+**And the whole app, end to end.** `node tools/health.mjs`, all sixteen
+model-backed features, after the budget change:
+
+```
+15/16 working
+1 call never came back (diagnostic: plan) — HTTP 529 "Service temporarily overloaded"
+median 11.0s · slowest 72.5s
+```
+
+The one failure is a 529, which is the free tier being busy for two seconds, not
+a timeout and not a retirement — the app counts it as retryable and tries the
+next model. For comparison, the same command against the same endpoint that
+morning, before any of this, reported **one row in eight**.
+
+**Four of those fifteen landed past the old wall** and would have been thrown
+away by it:
+
+| Feature | |
+|---|---|
+| explain this further | 72.5s |
+| upgrade path | 65.4s |
+| generate (long) | 57.0s |
+| generate (mixed) | 49.5s, and 82.5s in the bake-off above |
+
+That is what the change bought: not a faster endpoint, which is not ours to fix,
+but an end to discarding finished work five seconds before it arrives.
+
+### `node tools/models.mjs` — is there anything to move to?
+
+```bash
+node tools/models.mjs          # alive scan: the catalogue, one cheap call each
+node tools/models.mjs --bake   # the survivors, on the app's REAL generate and mark prompts
+node tools/models.mjs --guard  # has anything the app SHIPS been retired? (exit 1 if so)
+```
+
+The alive scan answers *is there anything alive*. The bake-off answers the only
+question that matters after that: whether the reply is **usable by the app's own
+parsers**, which is a different question from whether the model is good. A model
+that writes beautiful prose where `cardsFromJson` wants an array is worth nothing
+here. Both read the app's current ids and ceilings out of `StudyFeed.jsx`, so the
+control row is always what is actually shipping and the request is always the one
+the app really sends.
+
 ### Nobody knew, and that was the actual failure
 
 The app breaking was not the problem. NVIDIA retires a model, every AI feature
@@ -628,22 +671,6 @@ To land them, from a session whose GitHub token has the `workflow` scope
 ```bash
 git add .github/workflows && git commit -m "Find out about a retirement in hours" && git push
 ```
-
-### `node tools/models.mjs` — is there anything to move to?
-
-```bash
-node tools/models.mjs          # alive scan: the catalogue, one cheap call each
-node tools/models.mjs --bake   # the survivors, on the app's REAL generate and mark prompts
-node tools/models.mjs --guard  # has anything the app SHIPS been retired? (exit 1 if so)
-```
-
-The alive scan answers *is there anything alive*. The bake-off answers the only
-question that matters after that: whether the reply is **usable by the app's own
-parsers**, which is a different question from whether the model is good. A model
-that writes beautiful prose where `cardsFromJson` wants an array is worth nothing
-here. Both read the app's current ids and ceilings out of `StudyFeed.jsx`, so the
-control row is always what is actually shipping and the request is always the one
-the app really sends.
 
 ## Usage counts
 
