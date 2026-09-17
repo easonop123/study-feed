@@ -35,6 +35,7 @@ import { imageOfText } from './test-image.mjs';
    results table instead of through the middle of it. */
 import { STARTER_DECKS } from '../starter-decks.js';
 import { CASES } from './mark-eval-cases.mjs';
+import { checkerDeadlineMs } from './app-source.mjs';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const SRC = readFileSync(join(HERE, '..', 'StudyFeed.jsx'), 'utf8');
@@ -377,7 +378,12 @@ const CHECKS = [
    ASLEEP rather than blamed on the endpoint. `caffeinate -dimsu node
    tools/health.mjs` helps on macOS, but nothing beats a closed lid — a full run
    is minutes long, so start it and leave the machine awake. */
-const DEADLINE_MS = 90000;
+/* Derived from the proxy's own budget rather than written down: it has to sit
+   comfortably PAST the point where the proxy gives up and returns its 504, or
+   this starts reporting a timeout for an answer that was about to arrive. That
+   number moved from 55s to 85s on 18 Sep 2026 and three files had it hardcoded
+   at 90000 with a comment explaining why 90 was safely past 55. */
+const DEADLINE_MS = checkerDeadlineMs(readFileSync(join(HERE, '..', 'api', 'nvidia.js'), 'utf8'));
 /* Past this the timer did not merely run late, it stopped: nothing in a
    90-second budget legitimately takes two and a half minutes to abort. */
 const SLEPT_MS = DEADLINE_MS * 1.5;

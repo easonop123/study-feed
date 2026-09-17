@@ -35,6 +35,7 @@ import { CASES } from './mark-eval-cases.mjs';
 /* Static so Node's MODULE_TYPELESS_PACKAGE_JSON warning about this file prints
    before the run rather than through the middle of the progress table. */
 import { STARTER_DECKS } from '../starter-decks.js';
+import { checkerDeadlineMs } from './app-source.mjs';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const SRC = readFileSync(join(HERE, '..', 'StudyFeed.jsx'), 'utf8');
@@ -166,7 +167,12 @@ const EFFORT = (() => {
    open at 90 is coming, and undici will otherwise sit on a hung HTTP/2 stream
    for as long as five minutes before throwing. A 42-case run that stalls twice
    is an hour of nothing. */
-const DEADLINE_MS = 90000;
+/* Derived from the proxy's own budget rather than written down: it has to sit
+   comfortably PAST the point where the proxy gives up and returns its 504, or
+   this starts reporting a timeout for an answer that was about to arrive. That
+   number moved from 55s to 85s on 18 Sep 2026 and three files had it hardcoded
+   at 90000 with a comment explaining why 90 was safely past 55. */
+const DEADLINE_MS = checkerDeadlineMs(readFileSync(join(HERE, '..', 'api', 'nvidia.js'), 'utf8'));
 
 async function mark(card, answer, level){
   const body = {

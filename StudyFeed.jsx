@@ -358,8 +358,12 @@ function failureKind(e){
    1.x numbers sitting above the new 1.0.0 cannot cause a mis-fire. They are not
    shown next to the pre-launch entries either — those were dev builds and the
    numbers mean nothing to a student. */
-const APP_VERSION = '1.8.1';
+const APP_VERSION = '1.8.2';
 const PATCH_NOTES = [
+  { v: '1.8.2', date: '2026-09-18', title: 'It waits long enough to hear the answer', items: [
+    'The AI is given ninety seconds instead of sixty. Every failure we could measure was the same one: the answer was still being written when the app stopped listening. Eighteen real requests, five failures, and all five were the clock — nothing came back malformed, or empty, or cut short. The replies that did arrive took anywhere from six seconds to forty-nine, right up against the limit, which is what it looks like when good answers are being thrown away by a stopwatch.',
+    'It does not make you wait any longer. It used to try three times; it now tries twice, for the same total. Two tries that can finish beat three that cannot.',
+  ] },
   { v: '1.8.1', date: '2026-09-17', title: 'Making cards works again', items: [
     'Fixed: making cards had stopped working almost every time. The AI service behind the app has got about three times slower over the past few weeks, and the app was still asking each request to write as much as it did when the service was quick — so most attempts ran out of time before they finished, and you got "the AI ran out of time" over and over. It now asks for a smaller batch at a time and gets through. The same notes still make the same number of cards, they just arrive in more, shorter goes, and the progress bar actually moves while it happens.',
     'One model being retired no longer takes the whole app down. NVIDIA, who provide the free models this runs on, retire them constantly — of the thirty-four the app has used or considered, twenty-seven are now gone, most of them in the last three weeks — and until now that meant every AI feature stopped at the same moment and stayed stopped until somebody noticed and updated the app by hand. It now keeps a short list and moves down it. Falling past a retired model takes about a third of a second and you never see it happen.',
@@ -2291,21 +2295,29 @@ async function postOnce(body, timeoutMs){
    waiting it out. Later attempts sit just past the proxy's own 60s ceiling
    (api/nvidia.js maxDuration) so the server's real error has time to arrive
    instead of the browser hanging up first and hiding it. */
-/* The first attempt used to give up at 40s while the proxy does not give up
-   until 55s (api/nvidia.js aborts upstream at 55000 and returns its own 504).
-   The client was therefore killing requests the server was still happily
-   working on: measured across a full health-check run, calls routinely land
-   between 25 and 55 seconds, so a reply that would have arrived at 45s was
-   aborted at 40, retried from scratch, and turned a 45-second wait into an
-   86-second one — or into a failure if the retry was slow too.
+/* Each attempt's wall clock. The FIRST one has to outlast the proxy's own abort
+   (api/nvidia.js aborts upstream at maxDuration - 5 and returns its own 504) so
+   the client receives the server's real error instead of hanging up on an answer
+   that was coming. That mistake has been made here once already: the first
+   attempt gave up at 40s against a 55s abort, turning a 45-second reply into an
+   86-second wait, or into a failure if the retry was slow too. `npm test` now
+   checks the three numbers against each other.
 
-   58s is just past the proxy's own abort, so the first attempt now runs to the
-   end of the server's budget and receives the proxy's structured 504 rather
-   than pre-empting it. The cost is that a genuinely dead connection takes 58s
-   to notice instead of 40; that is the right trade when the common case is a
-   slow answer rather than no answer. If NVIDIA's tier ever gets fast again,
-   this and the proxy's 55000 move together or not at all. */
-const ATTEMPT_MS = [58000, 62000, 62000];
+   THREE ATTEMPTS BECAME TWO ON 18 SEP 2026, and the total is deliberately
+   unchanged: 58+62+62 was 182 seconds and 88+92 is 180. The reason is that every
+   single failure measured that day was the wall and nothing else — eighteen real
+   calls across three models, five failures, all of them a 504 at 55.3-55.5s, no
+   malformed JSON, no empty reply, no truncation. The successes ran from 5.8s to
+   48.6s, right up to the edge, which is what a distribution looks like when it is
+   being clipped rather than failing. So the same budget buys more when it is
+   spent on two tries that can finish than on three that cannot.
+
+   The chain of three is still walked in full whenever the failures are cheap: a
+   retired or busy model answers in well under a second and does not spend the
+   clock. It is only when models HANG that the budget, rather than the chain
+   length, is what ends the walk — which is the correct priority, because at that
+   point the student has already been waiting three minutes. */
+const ATTEMPT_MS = [88000, 92000];
 const RETRY_WAIT_MS = [1200, 4000];
 const sleep = (ms) => new Promise(r => setTimeout(r, ms));
 /* Worth another go: a timeout, a dropped connection, rate limiting, or a 5xx.
