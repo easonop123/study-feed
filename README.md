@@ -675,6 +675,45 @@ the output directory is still the one the site is served from, and that every
 scheduled path has a handler. A renamed endpoint would otherwise turn the alarm
 off silently, which is precisely the failure the alarm exists to prevent.
 
+### Everything in `tools/`, and which question each one answers
+
+Seventeen files, and the reason there are so many is that each answers a
+question somebody actually asked out loud once. The two to reach for first are
+the two at the top: `npm test` says *did I break it*, `npm run health` says *is
+it working*, and almost every other file here is a deeper version of one of
+those two.
+
+| | |
+|---|---|
+| **`offline.mjs`** (`npm test`) | everything checkable with no endpoint and no key, in about a second |
+| **`health.mjs`** (`npm run health`) | every model-backed feature, through its real prompt, ceiling and model |
+| `models.mjs` (`npm run models`) | what is alive in NVIDIA's catalogue; `--bake` scores candidates on the app's real prompts; `--guard` fails on a retirement |
+| `mark-eval.mjs` | 42 student answers written to sit in known grade bands, against the live marker |
+| `mark-compare.mjs` | two of those runs side by side — is the new marker *worse* than the old one |
+| `mark-eval-cases.mjs` | the corpus itself, seven kinds per card, each probing a different way a marker goes wrong |
+| `paper-eval.mjs` | is a generated paper exam-shaped, on-subject, and silent about standard numbers; `--dedup` is its offline half |
+| `diagnose-eval.mjs` | does "Find my gaps" name the gap, measured on answers written with a designed flaw |
+| `worked-eval.mjs` | does the method marker credit work carried forward past the first mistake |
+| `upgrade-eval.mjs` | the "how do I get to Merit" panel, which is a different call from the mark |
+| `options-eval.mjs` | can a guesser reading only option lengths score free marks |
+| `chain-test.mjs` | the model chain's decisions, over a fake transport |
+| `sw-test.mjs` | the service worker's routing, without a browser |
+| `place-notes-test.mjs` | a quoted phrase highlights where the student actually wrote it |
+| `app-source.mjs` | the shared "read it out of `StudyFeed.jsx`" helpers every checker uses |
+| `test-image.mjs` | draws a picture of some words in pure Node, so the vision features have something to read |
+| `unit-costs.mjs` | what one active student costs in inference per month |
+
+Three of them are libraries rather than checks — `app-source.mjs`,
+`mark-eval-cases.mjs` and `test-image.mjs` are what the others are built from.
+Six run inside `npm test`, two of those (`health.mjs --dry`,
+`paper-eval.mjs --dedup`) being the offline halves of tools that also have a
+live mode. **Every tool that calls the endpoint reads `SF_ENDPOINT` first**, so
+any of them can be pointed at a preview deployment before it is promoted:
+
+```bash
+SF_ENDPOINT=https://study-feed-git-mybranch.vercel.app/api/nvidia node tools/mark-eval.mjs
+```
+
 ## Usage counts
 
 PostHog for custom events, Vercel Web Analytics for page views. Both live ONLY in
