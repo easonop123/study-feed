@@ -15,6 +15,7 @@
 
      node tools/models.mjs            # alive scan: one cheap call per candidate
      node tools/models.mjs --bake     # the survivors, on the app's REAL prompts
+     node tools/models.mjs --guard    # has anything the app SHIPS been retired?
 
    The alive scan answers "is there anything to move to". The bake-off answers
    the only question that matters after that — whether the thing that came back
@@ -291,10 +292,60 @@ async function bake(models){
     console.log(`${(r.ok + '/' + r.ran).padEnd(8)}${(r.med === Infinity ? '-' : (r.med / 1000).toFixed(1) + 's').padEnd(8)}${r.m}`);
 }
 
+/* ------------------------------- the guard -------------------------------- */
+/* HAS ANYTHING THE APP SHIPS BEEN RETIRED? — the one question worth asking on a
+   timer, and the only one that can be asked without crying wolf.
+
+     node tools/models.mjs --guard      # exit 1 if a shipping id is 404 or 410
+
+   The outage this whole file exists because of was not that the app broke. It
+   was that nobody KNEW: NVIDIA retired a model, every AI feature stopped at the
+   same moment, and the first report came from a person using the app days
+   later. A daily check closes that gap to hours.
+
+   It is deliberately narrow. A timeout is not a failure here and neither is a
+   503 — those are the free tier having a bad minute, they happen most days, and
+   an alarm that fires on them is an alarm nobody reads. A 404 or a 410 is
+   different in kind: it is permanent, it is unambiguous, and it will not heal.
+   That is the only thing this fails on. `node tools/health.mjs` remains the
+   command for "is it answering well today", which is a judgement and belongs to
+   a human. */
+async function guard(){
+  const ids = shippingIds();
+  console.log(`guard — ${ids.length} shipping model ids, through ${ENDPOINT}\n`);
+  const retired = [];
+  for (const model of ids){
+    const row = await probe(model, 'Reply with the single word: ready', 300, DEADLINE_MS);
+    if (row.status === 404 || row.status === 410){
+      retired.push({ model, why: why(row) });
+      console.log(`RETIRED  ${model}\n         ${why(row)}`);
+    } else if (row.status === 200){
+      console.log(`alive    ${model}  ${secs(row)}`);
+    } else {
+      /* Anything else is weather. Reported so a run is readable, never fatal. */
+      console.log(`(busy)   ${model}  ${row.status ? 'HTTP ' + row.status : row.why}  — not a retirement, not failing on it`);
+    }
+    await sleep(400);
+  }
+  console.log('\n' + '─'.repeat(76));
+  if (!retired.length){
+    console.log(`all ${ids.length} models the app ships are still in the catalogue`);
+    return 0;
+  }
+  console.log(`${retired.length} of ${ids.length} RETIRED — the app will fall past them, but the chain is shorter than it looks:`);
+  for (const r of retired) console.log(`  ${r.model}`);
+  console.log('\nFind replacements:  node tools/models.mjs        (alive scan)');
+  console.log('Then check they work: node tools/models.mjs --bake <id>');
+  console.log('Then update TEXT_MODELS / VISION_MODELS in StudyFeed.jsx AND ALLOWED_MODELS in api/nvidia.js.');
+  return 1;
+}
+
 /* ---------------------------------- run ----------------------------------- */
 const args = process.argv.slice(2);
 const named = args.filter(a => a[0] !== '-');
-if (args.includes('--bake')){
+if (args.includes('--guard')){
+  process.exit(await guard());
+} else if (args.includes('--bake')){
   const models = named.length ? named : await aliveScan().then(a => { console.log(''); return a; });
   await bake(models);
 } else {
