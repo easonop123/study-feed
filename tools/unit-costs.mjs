@@ -5,22 +5,48 @@
    measured prompt templates plus typical card/answer content, and the output
    estimates assume replies land below their cap, which they usually do.
 
+   The caps are READ from StudyFeed.jsx rather than copied into this file, which
+   it used to promise and did not do — see the note above CALLS.
+
    Run: node tools/unit-costs.mjs
    The numbers worth arguing about are in PROFILES, not in CALLS. Inference
    prices move ~2x between providers; how often a student marks an answer moves
    the total by 10x. Tune the profiles first. */
 
+import { readFileSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
+import { dirname, join } from 'node:path';
+import { numberNamed } from './app-source.mjs';
+
+const SRC = readFileSync(join(dirname(fileURLToPath(import.meta.url)), '..', 'StudyFeed.jsx'), 'utf8');
+
 const CHARS_PER_TOKEN = 4;
 const tok = (chars) => Math.round(chars / CHARS_PER_TOKEN);
 
-/* One row per API call the app can make. `cap` is the literal max_tokens in
-   the source, kept here so drift is obvious if someone changes it. */
+/* THE CAPS ARE READ, NOT COPIED, and that is a correction rather than a
+   refinement. This file's own header promised they were "exact (grepped from
+   the source)... kept here so drift is obvious if someone changes it", and
+   nothing enforced it. By 18 Sep 2026 generation's cap said 2400 against a real
+   950, its batch said 6000 characters against a real 2400, and marking said
+   1000 against a real 3000 — so every figure below was wrong, generation by
+   about two and a half times, in the expensive direction. Obvious drift is not
+   a mechanism; reading it is. */
+const capOf = (name, fallback) => numberNamed(SRC, name) || fallback;
+const callCap = (call, fallback) => {
+  const m = SRC.match(new RegExp('callModel\\(' + call + '[^,]*,\\s*(\\d+)\\s*,'));
+  return m ? Number(m[1]) : fallback;
+};
+const batchChars = Number((SRC.match(/function batchText\(text, size = (\d+)\)/) || [])[1]) || 2400;
+
+/* One row per API call the app can make. `cap` comes from the source. The input
+   and output SIZES are still estimates, and that is the honest split: what the
+   app is allowed to spend is a fact, what it typically spends is a judgement. */
 const CALLS = {
   generate: {
     label: 'Generation chunk',
-    cap: 2400,                    // GEN_MAX_TOKENS
-    inTokens: tok(6000 + 1800),   // 6k batch (batchText) + measured prompt overhead
-    outTokens: 1600,              // a full mixed batch; extended cards push toward the cap
+    cap: capOf('GEN_MAX_TOKENS', 950),
+    inTokens: tok(batchChars + 1800),   // one batchText chunk + measured prompt overhead
+    outTokens: 570,               // measured over eleven real generates, 17-18 Sep 2026
     vision: false,
   },
   vision: {
@@ -32,35 +58,35 @@ const CALLS = {
   },
   mark: {
     label: 'Mark a long answer',
-    cap: 1000,                    // markAnswer
+    cap: callCap('markPrompt\\(card, answer, level\\)', 3000),
     inTokens: tok(2200),          // template + card criteria + student answer
-    outTokens: 350,
+    outTokens: 330,               // measured median across the 42-case corpus
     vision: false,
   },
   hint: {
     label: 'Writing points',
-    cap: 600,                     // getHints
+    cap: callCap('hintPrompt\\(card, level\\)', 900),
     inTokens: tok(950),
     outTokens: 180,
     vision: false,
   },
   bigHint: {
     label: 'Sentence starters',
-    cap: 700,                     // getBigHint
+    cap: callCap('bigHintPrompt\\(card, level\\)', 1100),
     inTokens: tok(1150),
     outTokens: 220,
     vision: false,
   },
   explain: {
     label: 'Explain this further',
-    cap: 900,                     // explainFurther
+    cap: callCap('explainPrompt\\(card, level, depth\\)', 1200),
     inTokens: tok(1000),
     outTokens: 400,
     vision: false,
   },
   upgrade: {
     label: 'How do I get to <grade>',
-    cap: 1100,                    // upgradePath — card + answer + mark result
+    cap: callCap('upgradePrompt\\(card, answer, result, level\\)', 1600),
     inTokens: tok(2800),
     outTokens: 600,
     vision: false,
@@ -100,9 +126,16 @@ const PROFILES = {
    Claude rows are a different question — better marking and much better slide
    reading, at 15-50x the token price. Claude bills images at the text input
    rate, so one rate covers both columns. */
+/* The two open rows are priced as a CLASS, not as one id. The app runs on
+   NVIDIA's free tier and the specific model has changed three times in three
+   months — gpt-oss-20b is still the last link in the chain, and a 20-to-31B
+   open model is what any of its replacements will be. Pricing the class is the
+   honest thing here: the question this file answers is "what would it cost to
+   stop depending on a free tier", and the answer does not turn on which of them
+   is at the front this week. */
 const PRICES = {
-  ossCheap: { label: 'gpt-oss-20b, cheapest host',  textIn: 0.04,  textOut: 0.15, visIn: 0.16, visOut: 0.20 },
-  ossGroq:  { label: 'gpt-oss-20b on Groq',         textIn: 0.075, textOut: 0.30, visIn: 0.24, visOut: 0.24 },
+  ossCheap: { label: 'small open model, cheapest host',  textIn: 0.04,  textOut: 0.15, visIn: 0.16, visOut: 0.20 },
+  ossGroq:  { label: 'small open model on Groq',         textIn: 0.075, textOut: 0.30, visIn: 0.24, visOut: 0.24 },
   haiku:    { label: 'Claude Haiku 4.5',            textIn: 1.00,  textOut: 5.00, visIn: 1.00, visOut: 5.00 },
   sonnet:   { label: 'Claude Sonnet 5',             textIn: 3.00,  textOut: 15.00, visIn: 3.00, visOut: 15.00 },
 };
@@ -142,7 +175,7 @@ console.table(Object.entries(PROFILES).map(([pk, profile]) => {
   return row;
 }));
 
-console.log('\n=== Where the money goes (typical student, gpt-oss on Groq) ===\n');
+console.log('\n=== Where the money goes (typical student, a small open model on Groq) ===\n');
 const detail = monthlyCost(PROFILES.typical, PRICES.ossGroq);
 console.table(detail.rows.map(r => ({
   call: r.call,
