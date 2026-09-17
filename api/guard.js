@@ -11,6 +11,12 @@
    So something has to ask. Vercel's scheduler calls this once a day (see
    `vercel.json`) and it emails only when the answer is yes.
 
+   `vercel.json` is what schedules it, and that file carries no comments of its
+   own on purpose: Vercel validates it against a strict schema and rejects any
+   key it does not recognise, so the usual `"//"` trick fails the BUILD — which
+   is a loud way to find out, but only if somebody is watching a preview. The
+   reasoning lives here and in the README instead.
+
    WHY THIS RUNS HERE RATHER THAN IN GITHUB ACTIONS. The obvious home for a
    daily check is a scheduled workflow, and one was written. It could not be
    committed: pushing anything under `.github/workflows/` needs a token with the

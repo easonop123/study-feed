@@ -1,13 +1,6 @@
 {
-  "//": "Two things that used to live in a human's memory or in a GitHub workflow this project's token cannot push. See the README section 'Nobody knew, and that was the actual failure'.",
-
-  "//buildCommand": "npm test BEFORE npm run build, so a deployment cannot ship a change that fails the offline checks — and, most of all, cannot ship a stale docs/app.js. The bundle is what the site actually serves and it only matches StudyFeed.jsx because somebody remembered to rebuild; a change that does not ship looks exactly like a change that did not work. Eleven checks, about a second, no network and no key, so this can never fail for a reason that is not yours.",
   "buildCommand": "npm test && npm run build",
-
-  "//outputDirectory": "Unchanged, and stated here only because naming buildCommand in this file overrides the dashboard for both.",
   "outputDirectory": "docs",
-
-  "//crons": "Ask NVIDIA every morning whether it has retired a model this app ships, and email only if it has. 18:17 UTC is 06:17 NZST, before a school day. Hobby allows one run a day, which is the right frequency anyway: the thing being watched changes on the scale of weeks and an alarm that fires more often than it has news is one nobody reads.",
   "crons": [
     { "path": "/api/guard", "schedule": "17 18 * * *" }
   ]
