@@ -358,8 +358,12 @@ function failureKind(e){
    1.x numbers sitting above the new 1.0.0 cannot cause a mis-fire. They are not
    shown next to the pre-launch entries either — those were dev builds and the
    numbers mean nothing to a student. */
-const APP_VERSION = '1.8.2';
+const APP_VERSION = '1.8.3';
 const PATCH_NOTES = [
+  { v: '1.8.3', date: '2026-09-18', title: 'It stops blaming your wifi', items: [
+    'When making cards runs out of time, the app used to tell you your connection had dropped. It almost never had. Every failure we measured over two days was the AI service itself, on connections that were loading everything else perfectly — so the app was sending people off to fix something that was not broken. It now says which end the problem is at.',
+    'And it says how long generating actually takes. The tip promised 15 to 30 seconds; it really runs 20 to 40, and longer when the service is busy. A promise the app misses every other time teaches you it is broken when it is working.',
+  ] },
   { v: '1.8.2', date: '2026-09-18', title: 'It waits long enough to hear the answer', items: [
     'The AI is given ninety seconds instead of sixty. Every failure we could measure was the same one: the answer was still being written when the app stopped listening. Eighteen real requests, five failures, and all five were the clock — nothing came back malformed, or empty, or cut short. The replies that did arrive took anywhere from six seconds to forty-nine, right up against the limit, which is what it looks like when good answers are being thrown away by a stopwatch.',
     'It does not make you wait any longer. It used to try three times; it now tries twice, for the same total. Two tries that can finish beat three that cannot.',
@@ -2236,7 +2240,13 @@ function friendlyApiError(e, what){
        protesting. */
     if (what === 'mark') return 'The AI ran out of time. It has been slow lately, and a long answer is the most it gets asked to do — pressing Mark again usually gets it through.';
     if (what === 'paper') return 'The AI ran out of time on part of this paper. It has been slow lately; marking it again usually gets through.';
-    return 'The AI ran out of time, even after retrying and splitting the notes up. It\'s usually a slow connection — try again, or paste a smaller section.';
+    /* Not "it's usually a slow connection". Measured 17-18 Sep 2026, it is
+       usually the AI service: every generate failure that day was a 504 after
+       the full budget, on connections that were fetching everything else
+       perfectly. Sending a student to check their wifi is sending them to fix
+       something that works. The advice that IS still theirs to take — a smaller
+       section — is kept, because a shorter reply really does get through. */
+    return 'The AI ran out of time, even after retrying and splitting the notes up. It has been slow lately and that is at their end, not yours — try again, or paste a smaller section.';
   }
   if (/no images/i.test(m)) return m;
   // Reached only after the retries gave up, so don't suggest trying immediately.
@@ -6707,9 +6717,17 @@ function Create({ onSave, settings, onSettings, onPending, onStarter, seed, onSe
       }
       // Some material made cards and some didn't — say so, rather than handing
       // over a short stack that looks like everything the notes had in them.
+      /* Say who failed, and it was not them. This used to read "Your connection
+         dropped N sections", which is the one explanation we have evidence
+         AGAINST: measured 17-18 Sep 2026, every generate that failed failed
+         identically, a 504 from the AI service after it had been given its full
+         budget, on connections that were fetching everything else fine. Telling
+         a student their wifi is bad sends them off to fix something that is not
+         broken, and the app has made that mistake before — it is the same defect
+         the marking timeout copy was fixed for. */
       if (genLost > 0){
-        setShortfall('Your connection dropped ' + genLost + (genLost === 1 ? ' section' : ' sections')
-          + ' of the material, so this is a shorter set than usual. Save these, then generate again from the parts that are missing.');
+        setShortfall('The AI ran out of time on ' + genLost + (genLost === 1 ? ' section' : ' sections')
+          + ' of your material, so this is a shorter set than usual. It is the AI being slow, not your connection. Save these, then generate again from the parts that are missing.');
       }
       setMeta({ subject: guessSubject(source), topic: guessTopic(source), standard: lvl });
       setDrafts(cards.map(c => ({ ...c, keep: true })));
