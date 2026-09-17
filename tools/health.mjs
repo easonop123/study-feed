@@ -32,7 +32,12 @@ import { modelNamed, numberNamed, checkerDeadlineMs } from './app-source.mjs';
 import { imageOfText } from './test-image.mjs';
 /* Static, not `await import` further down, purely so Node's
    MODULE_TYPELESS_PACKAGE_JSON warning about starter-decks.js lands before the
-   results table instead of through the middle of it. */
+   results table instead of through the middle of it.
+
+   The warning is noise and its own suggested fix is not available: adding
+   `"type": "module"` to package.json moves the shipped bundle, which was tried
+   and measured on 18 Sep 2026 — see the note above `format` in build.mjs. So
+   the noise stays, in the one place where it costs nothing. */
 import { STARTER_DECKS } from '../starter-decks.js';
 import { CASES } from './mark-eval-cases.mjs';
 
