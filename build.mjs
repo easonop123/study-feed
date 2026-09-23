@@ -6,6 +6,7 @@
    `define` here (rather than inline in package.json) keeps it readable and
    avoids shell-quoting differences between Windows (cmd) and Vercel (Linux). */
 import * as esbuild from 'esbuild';
+import { pathToFileURL } from 'node:url';
 
 /* Exported so `tools/offline.mjs` can rebuild to a scratch file and compare,
    rather than restating these options. A staleness check written against a
@@ -43,8 +44,19 @@ export const BUILD = {
   outfile: 'docs/app.js',
 };
 
-/* Only when run directly — importing this must not write the bundle. */
-if (import.meta.url === `file://${process.argv[1]}`){
+/* Only when run directly — importing this must not write the bundle.
+
+   pathToFileURL, NOT `file://${process.argv[1]}`. The template-string version
+   is right on Linux and silently wrong on Windows: argv[1] there is
+   C:\Users\...\build.mjs, which becomes file://C:\Users\... — two slashes and
+   backslashes — while import.meta.url is file:///C:/Users/.... They never
+   match, so `npm run build` exited 0, printed nothing and did not touch
+   docs/app.js. Vercel builds on Linux, so the deployed site was fine, which is
+   exactly why it went unnoticed: the damage was all local. Every Windows edit
+   since 17 Sep was "built" into a bundle that did not change, and every local
+   browser check afterwards was testing the old code. The offline suite's
+   "docs/app.js is current" check is what finally said so. */
+if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href){
   await esbuild.build(BUILD);
   console.log('Built docs/app.js');
 }

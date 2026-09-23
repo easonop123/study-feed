@@ -1226,8 +1226,18 @@ function mergeImport(payload, library, progress){
       cards.push({ ...c, id: fresh });
     }
     if (!cards.length) continue;
+    /* A deck id has to be unique across the library AND across this payload.
+       existingDeckIds used to be built once from the library and never
+       updated, so a file carrying two decks with the same id — two exports
+       pasted together, or a hand-edited one — landed both under that id. Two
+       decks on one id render on the same React key, and edit and delete
+       cannot tell them apart, so the student deletes one and loses the other.
+       A deck with no id at all used to arrive as id: undefined, which is the
+       same problem with fewer steps. Found by tools/transfer-test.mjs. */
+    const deckId = (deckClash || !d.id) ? uid() : d.id;
+    existingDeckIds.add(deckId);
     incoming.push({
-      id: deckClash ? uid() : d.id,
+      id: deckId,
       subject: String(d.subject || 'Untitled'),
       topic: String(d.topic || ''),
       standard: String(d.standard || 'NCEA Level 1'),

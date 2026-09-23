@@ -60,6 +60,10 @@ const SUITES = [
     note: 'the service worker never caches /api/ and never pins a stale build' },
   { name: 'the model chain', cmd: ['tools/chain-test.mjs'],
     note: 'a retired model is fallen past, a hung one is not asked twice' },
+  { name: 'the scheduler', cmd: ['tools/schedule-test.mjs'],
+    note: 'Again/Hard/Good/Easy each mean something, and flagged cards come back harder' },
+  { name: 'deck transfer', cmd: ['tools/transfer-test.mjs'],
+    note: 'an import only ever adds — nothing overwritten, no two decks on one id' },
 ];
 
 /* WAIT FOR THE PROCESS, NOT FOR ITS PIPES.
