@@ -2394,9 +2394,16 @@ function friendlyApiError(e, what){
 /* One try at the proxy, with its own wall clock. The abort signal covers the
    body read as well as the connection, because a congested network can hand
    back headers promptly and then dribble the body out for another minute. */
-async function postOnce(body, timeoutMs){
+async function postOnce(body, timeoutMs, cancel){
   const ctrl = new AbortController();
   const timer = setTimeout(() => ctrl.abort(), timeoutMs);
+  /* `cancel` lets a caller stop this attempt from outside — postHedged uses it
+     to drop whichever of its two requests lost the race, so the loser stops
+     holding a slot at the vendor. Its rejection is ignored by the caller. */
+  if (cancel){
+    if (cancel.aborted) ctrl.abort();
+    else cancel.addEventListener('abort', () => ctrl.abort());
+  }
   try {
     const res = await fetch('/api/nvidia', {
       method: 'POST',
@@ -2504,7 +2511,72 @@ function isGoneModel(e){
    that fails instantly forever; it is never what ends a normal call. */
 const TOTAL_BUDGET_MS = ATTEMPT_MS.reduce(function (a, b){ return a + b; }, 0);
 const HARD_TRIES = 8;
-async function postChat(messages, maxTokens, model, lowEffort){
+/* ---- hedged requests -----------------------------------------------------
+
+   Ask again if the first answer is slow, and keep whichever lands first.
+
+   The free tier's latency is not slow so much as BIMODAL. The same generate
+   prompt and the same ~530-token reply, sampled on 23 Sep 2026: 60% of the time
+   it lands in 12-19s, the rest of the time 44-84s — the model is fast when it
+   gets a slot and the difference is queue. The textbook answer to a fat tail
+   is a hedged request, and whether it pays depends on one thing: do two
+   requests sent at the same moment land in different parts of the queue? If
+   congestion is global, both are slow together and this just doubles the load.
+
+   Measured rather than assumed (tools/probe-hedge.mjs, 10 rounds of two
+   identical requests fired together): correlation between the pair r = 0.35,
+   so mostly independent. Hedging at 20s:
+
+                 single    hedge@20s
+     mean        30.2s     25.3s
+     p90         65.3s     46.7s
+     worst       83.7s     46.7s      second request sent on 40% of calls
+
+   20s is not arbitrary: it sits in the gap between the two modes, so a request
+   that was going to be fast never triggers a duplicate, and one that has
+   fallen into the slow mode gets a fresh roll of the dice. Lower thresholds
+   hedge requests that were about to finish; 15s fired 80% of the time for
+   almost no extra gain.
+
+   The duplicate shares the original's deadline, so a hedged call never runs
+   longer than an unhedged one would have been allowed to. The loser is
+   aborted the moment the winner lands. If the ORIGINAL fails before the
+   duplicate was sent, that failure goes straight back to postChat unchanged,
+   so the model chain, the hang memory and every retry decision work exactly
+   as they did. */
+const GEN_HEDGE_MS = 20000;
+
+function postHedged(body, wall, hedgeAfter){
+  if (!hedgeAfter || hedgeAfter >= wall - 1000) return postOnce(body, wall);
+  return new Promise((resolve, reject) => {
+    const cA = new AbortController(), cB = new AbortController();
+    let settled = false, sentB = false, failed = 0, firstErr = null, timer = null;
+    const win = (loser) => (value) => {
+      if (settled) return;
+      settled = true; clearTimeout(timer); loser.abort();
+      resolve(value);
+    };
+    const lose = (which) => (e) => {
+      if (settled) return;
+      if (!firstErr) firstErr = e;
+      /* The original failed before we ever asked twice: that is an ordinary
+         failure, not a race, and postChat is the thing that knows what to do
+         with it. Hand it straight back. */
+      if (which === 'A' && !sentB){ settled = true; clearTimeout(timer); reject(e); return; }
+      failed++;
+      if (failed >= 2){ settled = true; reject(firstErr); }
+    };
+    postOnce(body, wall, cA.signal).then(win(cB), lose('A'));
+    timer = setTimeout(() => {
+      if (settled) return;
+      sentB = true;
+      track('request_hedged', { model: body.model });
+      postOnce(body, wall - hedgeAfter, cB.signal).then(win(cA), lose('B'));
+    }, hedgeAfter);
+  });
+}
+
+async function postChat(messages, maxTokens, model, lowEffort, hedgeAfter){
   const chain = liveChain(model);
   const started = Date.now();
   const left = () => TOTAL_BUDGET_MS - (Date.now() - started);
@@ -2532,7 +2604,10 @@ async function postChat(messages, maxTokens, model, lowEffort){
     const wall = Math.min(ATTEMPT_MS[Math.min(attempt, ATTEMPT_MS.length - 1)], left());
     const spent0 = Date.now();
     servedBy = id; servedWalk = tries - 1;
-    try { return await postOnce(body, wall); }
+    /* Hedged on the FIRST attempt only. A retry is already a second roll of
+       the dice; hedging it too would stack duplicates onto a queue that has
+       just shown it is struggling. */
+    try { return await postHedged(body, wall, tries === 1 ? hedgeAfter : 0); }
     catch (e){
       last = e;
       i++;
@@ -2566,8 +2641,8 @@ async function postChat(messages, maxTokens, model, lowEffort){
   throw last;
 }
 /* Everything except the chat helper sends exactly one user turn. */
-const postMessages = (content, maxTokens, model, lowEffort) => postChat([{ role: 'user', content }], maxTokens, model, lowEffort);
-const callModel = (prompt, maxTokens = 1000, model = MODEL_GEN, lowEffort) => postMessages(prompt, maxTokens, model, lowEffort);
+const postMessages = (content, maxTokens, model, lowEffort, hedgeAfter) => postChat([{ role: 'user', content }], maxTokens, model, lowEffort, hedgeAfter);
+const callModel = (prompt, maxTokens = 1000, model = MODEL_GEN, lowEffort, hedgeAfter) => postMessages(prompt, maxTokens, model, lowEffort, hedgeAfter);
 /* Read ONE slide/photo with the vision model and return it as plain study text
    (all wording transcribed, diagrams/graphs/formulae described). `img` is a
    { media_type, data } object from resizeImage. */
@@ -2744,7 +2819,7 @@ let genLost = 0;
    below that the chunks are too small to be worth cards. */
 async function genChunk(chunk, mode, level, model, pctLong, strict, depth){
   try {
-    const reply = await callModel(promptFor(mode, chunk, level, pctLong, strict), GEN_MAX_TOKENS, model, true);
+    const reply = await callModel(promptFor(mode, chunk, level, pctLong, strict), GEN_MAX_TOKENS, model, true, GEN_HEDGE_MS);
     return parseReply(mode, reply);
   } catch (e){
     noteApiError(e);
@@ -6966,6 +7041,24 @@ function Create({ onSave, settings, onSettings, onPending, onStarter, seed, onSe
       <Segmented value={mode} onChange={setMode}
         options={[{ v: 'generate', label: 'Generate' }, { v: 'manual', label: 'Type them' }]} />
 
+      {/* Material first, then how to make it. The notes box — the one thing
+          every student has to use — used to sit under six blocks of options,
+          at y=744 on an 812px phone: behind the bottom nav, so a new user's
+          first screen of Create showed no box to type in. This is also the
+          order the tour already tells it in (upload, paste, type, level); the
+          page was the thing contradicting it. The timing tip moves down beside
+          the button, which is where the wait it describes happens. */}
+      {mode === 'generate' && (
+        <div data-tour="create-upload">
+          <DropZone onPicked={takeFiles} attaching={attaching} imageCount={images.length} />
+        </div>
+      )}
+
+      <textarea value={source} onChange={e => setSource(e.target.value)} data-tour="create-source"
+        placeholder={mode === 'manual' ? 'question | answer\nquestion | answer' : 'Paste your notes, or just type a topic like “rates of reaction”…'}
+        rows={7}
+        style={{ ...INPUT, marginTop: 14, fontSize: 15, resize: 'vertical' }} />
+
       {mode === 'generate' && (
         <div style={{ marginTop: 10 }} data-tour="create-type">
           <Segmented value={cardType} onChange={setCardType}
@@ -6978,42 +7071,6 @@ function Create({ onSave, settings, onSettings, onPending, onStarter, seed, onSe
           <MixSlider value={longMixOf(settings)} onChange={(v) => onSettings({ ...settings, longMix: v })} compact />
         </Card>
       )}
-
-      {mode === 'generate' && (
-        <div style={{ marginTop: 10 }}>
-          <Tip id="create-time" settings={settings} onSettings={onSettings} icon="clock">
-            Generating usually takes 20–40 seconds while the AI writes each card, and longer if it is busy. Nothing saves until you've looked them over.
-          </Tip>
-        </div>
-      )}
-
-      {mode === 'generate' && (
-        <div data-tour="create-upload">
-          <DropZone onPicked={takeFiles} attaching={attaching} imageCount={images.length} />
-        </div>
-      )}
-
-      {mode === 'generate' && (
-        <Card style={{ padding: '13px 15px', marginTop: 10, boxShadow: SH.raised }}>
-          <div className="flex items-center justify-between" style={{ gap: 12 }}>
-            <div style={{ paddingRight: 6 }}>
-              <div style={{ fontFamily: SANS, fontSize: 14, fontWeight: 700, color: T.ink }}>Only my material</div>
-              <Sub style={{ fontSize: 12.5, marginTop: 2 }}>Sticks to what you paste or upload — nothing extra gets added.</Sub>
-            </div>
-            <Toggle on={strictSource} onClick={() => setStrictSource(v => !v)} label="Only my material" />
-          </div>
-          {strictSource && !hasMaterial && (
-            <Sub style={{ fontSize: 12, marginTop: 9, color: T.amber, fontWeight: 600 }}>
-              Add some notes or a file for this — a bare topic has nothing to pull from.
-            </Sub>
-          )}
-        </Card>
-      )}
-
-      <textarea value={source} onChange={e => setSource(e.target.value)} data-tour="create-source"
-        placeholder={mode === 'manual' ? 'question | answer\nquestion | answer' : 'Paste your notes, or just type a topic like “rates of reaction”…'}
-        rows={7}
-        style={{ ...INPUT, marginTop: 14, fontSize: 15, resize: 'vertical' }} />
 
       {mode === 'generate' && (
         <div style={{ marginTop: 14 }} data-tour="create-level">
@@ -7037,6 +7094,31 @@ function Create({ onSave, settings, onSettings, onPending, onStarter, seed, onSe
               placeholder="e.g. IB Diploma, Year 12 Physics"
               style={{ ...INPUT, marginTop: 8, fontSize: 15 }} />
           )}
+        </div>
+      )}
+
+      {mode === 'generate' && (
+        <Card style={{ padding: '13px 15px', marginTop: 10, boxShadow: SH.raised }}>
+          <div className="flex items-center justify-between" style={{ gap: 12 }}>
+            <div style={{ paddingRight: 6 }}>
+              <div style={{ fontFamily: SANS, fontSize: 14, fontWeight: 700, color: T.ink }}>Only my material</div>
+              <Sub style={{ fontSize: 12.5, marginTop: 2 }}>Sticks to what you paste or upload — nothing extra gets added.</Sub>
+            </div>
+            <Toggle on={strictSource} onClick={() => setStrictSource(v => !v)} label="Only my material" />
+          </div>
+          {strictSource && !hasMaterial && (
+            <Sub style={{ fontSize: 12, marginTop: 9, color: T.amber, fontWeight: 600 }}>
+              Add some notes or a file for this — a bare topic has nothing to pull from.
+            </Sub>
+          )}
+        </Card>
+      )}
+
+      {mode === 'generate' && (
+        <div style={{ marginTop: 10 }}>
+          <Tip id="create-time" settings={settings} onSettings={onSettings} icon="clock">
+            Generating usually takes 20–40 seconds while the AI writes each card, and longer if it is busy. Nothing saves until you've looked them over.
+          </Tip>
         </div>
       )}
 
