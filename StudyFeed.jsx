@@ -5022,8 +5022,13 @@ function ExtendedFace({ card, phase, deck, onReveal, onBack, demo }){
         /* Clamped to the ladder rather than forwarded. This is model output, and
            a model that returns something unexpected should not be able to put
            arbitrary text into the analytics. */
+        /* served/walked: which model in the chain gave this grade. Failed marks
+           already carried it and successful ones did not, so the one thing
+           worth knowing about a good-looking mark — was it the head, or the
+           fallback that is measurably worse at this (see mark-eval on
+           nemotron) — could not be answered from the data. */
         if (!demo) track('answer_marked', {
-          grade: GRADES.indexOf(r.grade) >= 0 ? r.grade : 'other' });
+          grade: GRADES.indexOf(r.grade) >= 0 ? r.grade : 'other', ...servedTags() });
         /* a mark you waited 15 seconds for should announce itself */
         if (r.grade === 'Excellence'){ play('excellence'); buzz([14, 40, 14]); }
         else if (r.grade === 'Merit'){ play('milestone'); buzz(16); }
@@ -5713,7 +5718,7 @@ function WorkedFace({ card, phase, deck, onReveal, onBack }){
         setResult(r); onReveal && onReveal();
         track('working_marked', {
           grade: GRADES.indexOf(r.grade) >= 0 ? r.grade : 'other',
-          final: ['correct', 'wrong', 'missing'].indexOf(r.final) >= 0 ? r.final : 'other' });
+          final: ['correct', 'wrong', 'missing'].indexOf(r.final) >= 0 ? r.final : 'other', ...servedTags() });
         if (r.grade === 'Excellence'){ play('excellence'); buzz([14, 40, 14]); }
         else if (r.grade === 'Merit'){ play('milestone'); buzz(16); }
         else if (r.grade === 'Achieved'){ play('right', 1); buzz(10); }
