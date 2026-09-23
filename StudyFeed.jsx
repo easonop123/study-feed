@@ -483,6 +483,7 @@ const PATCH_NOTES = [
     'Making cards on a phone starts with the box you type in. It used to sit underneath all the options, below the bottom of the screen, so the first thing you saw had nowhere to type. Your notes come first now, then how you want them made.',
     'The Home screen fits on a phone. The "done today" circle used to take up a line of its own and push everything else down; it sits in the corner now, and the ways to test yourself are on the first screen.',
     'The buttons after a mark look like buttons. "How do I get to Merit?" and "Improve this answer and mark again" were the same colour as the box they sat in and read as plain text. The feedback lists have their bullet points back too.',
+    'On an iPhone, tapping into a box to type no longer zooms the whole page in. It happened on nearly every box in the app — including the one you write long answers in — and left the page zoomed after the keyboard went away until you pinched back out.',
     'Smaller things: the Stats page no longer says "4 due" at the top and "0 still due" underneath; the little "×" on tips and the other small controls are much easier to hit with a thumb; a photo of your working no longer adds empty lines to the end; and the card review shows your whole standard on a phone instead of cutting it off.',
   ] },
   { v: '1.8.3', date: '2026-09-18', title: 'It stops blaming your wifi', items: [
@@ -11003,7 +11004,7 @@ function AskPanel({ thread, setThread, onClose }){
               style={{ background: 'none', border: 'none', cursor: 'pointer', padding: '4px 8px',
                 fontFamily: SANS, fontSize: 12.5, fontWeight: 600, color: T.muted }}>Clear</button>
           )}
-          <button className="sf-tap" onClick={onClose} aria-label="Close"
+          <button className="sf-tap sf-hit" onClick={onClose} aria-label="Close"
             style={{ background: 'none', border: 'none', cursor: 'pointer', color: T.faint,
               padding: '4px 6px', display: 'flex' }}><Ico name="cross" size={17} /></button>
         </div>
@@ -11086,7 +11087,7 @@ function AskPanel({ thread, setThread, onClose }){
             <div className="flex items-center gap-1">
               <input ref={photoRef} type="file" accept="image/*" style={{ display: 'none' }}
                 onChange={(e) => { const f = (e.target.files || [])[0]; if (e.target) e.target.value = ''; if (f) attachPhoto(f); }} />
-              <button className="sf-tap" onClick={() => photoRef.current && photoRef.current.click()}
+              <button className="sf-tap sf-hit-sm" onClick={() => photoRef.current && photoRef.current.click()}
                 aria-label="Attach a photo of the question" title="Attach a photo"
                 style={{ background: 'none', border: 'none', cursor: 'pointer', padding: 7, borderRadius: 9,
                   color: T.faint, display: 'flex' }}>
@@ -11097,7 +11098,9 @@ function AskPanel({ thread, setThread, onClose }){
               </button>
               <Sub style={{ fontSize: 11, color: T.faint }}>Enter to send</Sub>
             </div>
-            <button className="sf-btn" onClick={() => send()} disabled={busy || !text.trim()} aria-label="Send"
+            {/* Send is the panel's main action and was 34px; -sm, not the full
+                12px, so its area does not reach over the attach button. */}
+            <button className="sf-btn sf-hit-sm" onClick={() => send()} disabled={busy || !text.trim()} aria-label="Send"
               style={{ width: 34, height: 34, borderRadius: R.pill, border: 'none', flexShrink: 0,
                 background: text.trim() && !busy ? T.accent : T.border,
                 color: text.trim() && !busy ? '#fff' : T.faint, display: 'flex', alignItems: 'center',
@@ -11533,6 +11536,18 @@ function Shell({ children, tab, setTab, due, pending }){
         * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
         body { overscroll-behavior-y: none; }
         textarea, input, select { font-size: 16px; font-family: ${SANS}; }
+        /* On a phone, 16px is not a style choice, it is the line iOS Safari
+           draws: focus a text field set smaller and it zooms the whole page in,
+           and leaves it zoomed after the keyboard goes until the student pinches
+           back out. The rule above was written for exactly that, and inline
+           styles quietly undid it — 20 of the app's 26 text fields ended up at
+           13-15px, including the long-answer box, the working box, every part of
+           an exam paper, the notes box in Create and the Ask composer. So on
+           touch screens the 16px is enforced over them. On a laptop the fields
+           keep the sizes they were designed at. (Not maximum-scale=1 in the
+           viewport tag, the other common fix: that also stops pinch-zoom, which
+           people with low vision rely on.) */
+        @media (pointer: coarse) { textarea, input, select { font-size: 16px !important; } }
         ::placeholder { color: ${T.faint}; }
         ::selection { background: ${rgba(T.accent, 0.18)}; }
 
