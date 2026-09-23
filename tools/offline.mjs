@@ -64,6 +64,8 @@ const SUITES = [
     note: 'Again/Hard/Good/Easy each mean something, and flagged cards come back harder' },
   { name: 'deck transfer', cmd: ['tools/transfer-test.mjs'],
     note: 'an import only ever adds — nothing overwritten, no two decks on one id' },
+  { name: 'answer drafts', cmd: ['tools/draft-store-test.mjs'],
+    note: 'a half-written answer survives a reload, including typing mid-load' },
 ];
 
 /* WAIT FOR THE PROCESS, NOT FOR ITS PIPES.

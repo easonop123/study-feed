@@ -211,6 +211,120 @@ async function save(key, value){
   } catch (e){ console.error('storage.set failed', key, e); return false; }
 }
 
+/* ---- answer drafts -------------------------------------------------------
+
+   A long answer is three hundred words the student typed, and until now it
+   lived in component state only: a reload, a closed tab or a stray tap on a
+   nav item destroyed it. That used to be a rare accident. It is not rare any
+   more — the free tier times out on roughly 1 call in 8, the marking screen
+   can sit there for over a minute, and the thing a person does to a screen
+   that looks stuck is reload it. The loading screen now asks them not to;
+   this is what makes that request unnecessary rather than merely polite.
+
+   A FIFTH storage key, which the app has avoided until now. It earns it:
+   drafts are written on a debounce while typing, and settings:main is held in
+   App state and saved whole, so routing draft writes through settings from a
+   component this deep would race with App's own writes and lose one or the
+   other. The Ask panel's "no fifth key" note is about a chat thread that is
+   meant to be transient; a half-written exam answer is not.
+
+   Drafts are deliberately NOT exported with a deck — they are work in
+   progress, not content.
+
+   Only a RECENT draft is offered back. Restoring an answer weeks later, when
+   the card has come round again in the feed, would hand the student their old
+   words at exactly the moment the point is to produce them from memory. */
+const DRAFT_KEY = 'drafts:main';
+const DRAFT_MAX_AGE_MS = 24 * 60 * 60 * 1000;   // a reload, not a revision cycle
+const DRAFT_MAX = 40;
+const DRAFT_DEBOUNCE_MS = 700;
+
+let draftCache = null;          // the store, once read; authoritative thereafter
+let draftPending = null;        // typed before the read landed — newer than disk
+let draftLoading = null;        // the single in-flight read, shared by all callers
+let draftTimer = null;
+
+function pruneDrafts(all){
+  const now = Date.now();
+  const fresh = {};
+  const keys = Object.keys(all || {})
+    .filter(k => all[k] && (now - (all[k].at || 0)) < DRAFT_MAX_AGE_MS)
+    .sort((a, b) => (all[b].at || 0) - (all[a].at || 0))
+    .slice(0, DRAFT_MAX);
+  for (const k of keys) fresh[k] = all[k];
+  return fresh;
+}
+
+/* ONE read of the store, shared by everyone who asks while it is in flight.
+
+   The read is genuinely async — in the Artifact it is a `window.storage.get`
+   round trip — and the student is typing into the box the whole time. The
+   window is small and the two things that can go wrong in it are not:
+   assigning the loaded store over the cache throws away whatever they typed
+   while it was loading, and letting the debounce fire before the load lands
+   persists a store containing ONLY the card in front of them, wiping every
+   other draft they had.
+
+   So the load merges rather than assigns, and anything typed meanwhile wins —
+   it is newer than what was on disk by definition. Everything that writes
+   waits on this same promise before it persists. */
+function ensureDrafts(){
+  if (draftCache) return Promise.resolve(draftCache);
+  if (!draftLoading){
+    draftLoading = load(DRAFT_KEY, {}).then((stored) => {
+      draftCache = pruneDrafts({ ...(stored || {}), ...(draftPending || {}) });
+      draftPending = null;
+      draftLoading = null;
+      return draftCache;
+    });
+  }
+  return draftLoading;
+}
+
+async function readDraft(cardId){
+  if (!cardId) return '';
+  const all = await ensureDrafts();
+  const d = all[cardId];
+  return (d && typeof d.text === 'string') ? d.text : '';
+}
+
+/* Debounced so a fast typist does not write the whole store on every
+   keystroke. The in-memory copy updates synchronously, so a component reading
+   it in the same tick sees the new value before it has been persisted — and
+   before the load has even finished, which is the case that matters. */
+function writeDraft(cardId, text){
+  if (!cardId) return;
+  if (!draftCache && !draftPending) draftPending = {};
+  const into = draftCache || draftPending;
+  if (String(text || '').trim()) into[cardId] = { text: text, at: Date.now() };
+  else delete into[cardId];
+  ensureDrafts();
+  if (draftTimer) clearTimeout(draftTimer);
+  draftTimer = setTimeout(() => {
+    draftTimer = null;
+    /* Work from the value the load resolved with, not from the module
+       variable — by the time this runs the variable may have been replaced,
+       and reading it is how a stale or missing store gets written back. */
+    ensureDrafts().then((all) => {
+      draftCache = pruneDrafts(all);
+      save(DRAFT_KEY, draftCache);
+    });
+  }, DRAFT_DEBOUNCE_MS);
+}
+
+/* Called when the card is done with — the answer has been marked and the
+   student has moved on, so keeping it would only risk handing it back. */
+function clearDraft(cardId){
+  if (!cardId) return;
+  if (draftPending) delete draftPending[cardId];
+  if (draftCache && !(cardId in draftCache) && !draftLoading) return;
+  if (draftTimer){ clearTimeout(draftTimer); draftTimer = null; }
+  ensureDrafts().then((all) => {
+    delete all[cardId];
+    save(DRAFT_KEY, all);
+  });
+}
+
 /* longMix = what % of your cards should be long (extended-response) answers.
    Drives both what gets generated and how the feed is blended. */
 const DEFAULT_SETTINGS = { interleave: true, newPerDay: 12, capNew: false, longMix: 30, theme: 'system', name: '', examDate: '', lastSeenVersion: '', onboarded: false, dismissedTips: {}, sound: true, font: 'inter', learnSession: null, diagnosis: null, paper: null };
@@ -620,6 +734,13 @@ function intervalWord(days){
 }
 
 const uid = () => Date.now().toString(36) + Math.random().toString(36).slice(2, 7);
+
+/* "1 cards" is the kind of thing that makes an app look auto-generated, and a
+   deck with one card in it is the FIRST thing a new student ever sees on Home.
+   One idiom for every count on screen: the hand-rolled `n > 1 ? 's' : ''`
+   spellings were each right where they stood and wrong the moment one was
+   copied somewhere a zero could reach it ("0 card"). */
+const plural = (n, word) => n + ' ' + word + (n === 1 ? '' : 's');
 
 /* ---- import / export -----------------------------------------------------
    Cards cost money to generate, so they should be movable: between the
@@ -3659,10 +3780,24 @@ function Progress({ label, value, valueText, right, colour, height = 12, reduceM
 function Loading({ title, subtitle, size, stages }){
   const [secs, setSecs] = useState(0);
   const staged = stages && stages.length;
+  /* Elapsed is read off the clock, not counted in ticks. A student waiting
+     a minute for a mark very often switches tab while they wait, and browsers
+     throttle a background tab's timers to about once a minute — so a tick
+     counter falls behind, and they come back to the 25-second message while
+     the client is already on its last attempt. These stages exist to be
+     honest about exactly that, so they have to be right on return. Reading
+     Date.now() means a late tick shows the correct stage, where a counted one
+     shows an old one. */
   useEffect(() => {
     if (!staged) return undefined;
-    const t = setInterval(() => setSecs(s => s + 1), 1000);
-    return () => clearInterval(t);
+    const t0 = Date.now();
+    const tick = () => setSecs(Math.floor((Date.now() - t0) / 1000));
+    const t = setInterval(tick, 1000);
+    /* And catch up the moment the tab is visible again, rather than on
+       whenever the throttled interval next gets round to it. */
+    const onShow = () => { if (!document.hidden) tick(); };
+    document.addEventListener('visibilitychange', onShow);
+    return () => { clearInterval(t); document.removeEventListener('visibilitychange', onShow); };
   }, [staged]);
 
   let shownTitle = title, shownSub = subtitle;
@@ -3914,7 +4049,12 @@ function StudyCard({ card, deck, onGrade, reduceMotion, prog, practice, onFeedba
     return { 0: forGrade(Q.AGAIN), 3: forGrade(Q.HARD), 4: forGrade(Q.GOOD), 5: forGrade(Q.EASY) };
   }, [prog, practice, committedWrong, card.id]);
 
-  const grade = (q) => onGrade(q, committedWrong);
+  /* Every card leaves the screen through here, whichever face it wore, so it
+     is the one place that knows an answer is finished with. Dropping the draft
+     now stops a long answer being handed back on a later review, when the
+     whole point is to produce it from memory again. Harmless for card types
+     that never had one. */
+  const grade = (q) => { clearDraft(card.id); return onGrade(q, committedWrong); };
   const anim = reduceMotion ? {} : { animation: 'sf-in 260ms cubic-bezier(.2,.8,.3,1)' };
 
   return (
@@ -4551,6 +4691,28 @@ const cannedAfter = (value, ms = 700) => new Promise(r => setTimeout(() => r(val
    markup, the states and the ordering are the ones a student meets later. */
 function ExtendedFace({ card, phase, deck, onReveal, onBack, demo }){
   const [answer, setAnswer] = useState('');
+  /* Bring back an unfinished answer from a reload or a closed tab. `demo` is
+     the tutorial, which has a canned answer and must never be restored into.
+     Guarded against landing after the student has started typing: this is
+     async, and an answer they are part-way through always wins. */
+  useEffect(() => {
+    if (demo || !card || !card.id) return undefined;
+    let live = true;
+    readDraft(card.id).then((text) => {
+      if (live && text) setAnswer((cur) => cur ? cur : text);
+    });
+    return () => { live = false; };
+  }, [card && card.id, demo]);
+  /* Every route by which the STUDENT changes the answer goes through here, so
+     the draft is saved on the edit rather than in an effect watching `answer`.
+     An effect would fire once on mount with the box still empty and delete the
+     very draft the restore above is in the middle of fetching. The tutorial is
+     excluded: its answer is canned, and persisting it would restore the demo's
+     words into a real card. */
+  const saveAnswer = (next) => {
+    setAnswer(next);
+    if (!demo && card && card.id) writeDraft(card.id, next);
+  };
   const [busy, setBusy] = useState(false);
   const [result, setResult] = useState(null);
   const [err, setErr] = useState('');
@@ -4591,7 +4753,7 @@ function ExtendedFace({ card, phase, deck, onReveal, onBack, demo }){
     selRef.current = { start: pos, end: pos };
     caretRef.current = pos;
     if (ta) ta.focus();
-    setAnswer(val.slice(0, start) + sym + val.slice(end));
+    saveAnswer(val.slice(0, start) + sym + val.slice(end));
   };
 
   useEffect(() => { setAnswer(''); setResult(null); setErr(''); setHints(null); setHintErr(''); setBig(null); setBigErr(''); setPhoto(null); setPhotoNote(''); selRef.current = { start: 0, end: 0 }; }, [card.id]);
@@ -4635,7 +4797,7 @@ function ExtendedFace({ card, phase, deck, onReveal, onBack, demo }){
         return;
       }
       const had = answer.trim();
-      setAnswer(had ? had + '\n\n' + read : read);
+      saveAnswer(had ? had + '\n\n' + read : read);
       setPhoto(null);
       setPhotoNote(had ? 'added' : 'read');
       track('photo_answer', { result: 'ok', words: read.split(/\s+/).length });
@@ -4745,7 +4907,7 @@ function ExtendedFace({ card, phase, deck, onReveal, onBack, demo }){
             )}
           </div>
           <textarea ref={taRef} value={answer}
-            onChange={e => { setAnswer(e.target.value); selRef.current = { start: e.target.selectionStart, end: e.target.selectionEnd }; }}
+            onChange={e => { saveAnswer(e.target.value); selRef.current = { start: e.target.selectionStart, end: e.target.selectionEnd }; }}
             onSelect={rememberSel} onClick={rememberSel} onKeyUp={rememberSel}
             placeholder={`Use the ${card.verb.toLowerCase()} command properly — ${card.marks} marks means ${card.marks >= 5 ? 'several linked points' : 'more than one point'}.`}
             rows={6}
@@ -4774,7 +4936,7 @@ function ExtendedFace({ card, phase, deck, onReveal, onBack, demo }){
           )}
           <SymbolBar onInsert={insertSymbol} />
           <div className="flex items-center justify-between" style={{ marginTop: 7, marginBottom: 11 }}>
-            <Sub style={{ fontSize: 12 }}>{words > 0 ? `${words} words` : 'Even a rough attempt beats reading the answer'}</Sub>
+            <Sub style={{ fontSize: 12 }}>{words > 0 ? plural(words, 'word') : 'Even a rough attempt beats reading the answer'}</Sub>
           </div>
           {/* Marking is a 25-to-55-second wait against the model, and longer
               when the first attempt times out and the client retries. Without
@@ -5020,7 +5182,7 @@ function AnnotatedAnswer({ answer, notes, defaultOpen = true }){
           <Chip colour={T.muted}>What you wrote</Chip>
           <Sub style={{ fontSize: 11.5 }}>
             {(located.length + orphans.length) > 0 ? `${located.length + orphans.length} note${(located.length + orphans.length) === 1 ? '' : 's'} · ` : ''}
-            {words} words · {open ? 'hide' : 'show'}
+            {plural(words, 'word')} · {open ? 'hide' : 'show'}
           </Sub>
         </div>
       </button>
@@ -5245,6 +5407,20 @@ function WorkedResult({ r, card, working, onEdit }){
 
 function WorkedFace({ card, phase, deck, onReveal, onBack }){
   const [working, setWorking] = useState('');
+  /* Same reasoning as ExtendedFace: a page of working is as expensive to lose
+     as a page of prose, and it is lost the same way. */
+  useEffect(() => {
+    if (!card || !card.id) return undefined;
+    let live = true;
+    readDraft(card.id).then((text) => {
+      if (live && text) setWorking((cur) => cur ? cur : text);
+    });
+    return () => { live = false; };
+  }, [card && card.id]);
+  const saveWorking = (next) => {
+    setWorking(next);
+    if (card && card.id) writeDraft(card.id, next);
+  };
   const [busy, setBusy] = useState(false);
   const [result, setResult] = useState(null);
   const [err, setErr] = useState('');
@@ -5279,7 +5455,7 @@ function WorkedFace({ card, phase, deck, onReveal, onBack }){
     selRef.current = { start: pos, end: pos };
     caretRef.current = pos;
     if (ta) ta.focus();
-    setWorking(val.slice(0, start) + sym + val.slice(end));
+    saveWorking(val.slice(0, start) + sym + val.slice(end));
   };
 
   useEffect(() => {
@@ -5303,7 +5479,7 @@ function WorkedFace({ card, phase, deck, onReveal, onBack }){
         return;
       }
       const had = working.trim();
-      setWorking(had ? had + '\n' + read : read);
+      saveWorking(had ? had + '\n' + read : read);
       setPhoto(null);
       setPhotoNote(had ? 'added' : 'read');
       track('photo_answer', { result: 'ok', kind: 'working', lines: read.split('\n').length });
@@ -5368,7 +5544,7 @@ function WorkedFace({ card, phase, deck, onReveal, onBack }){
             </>
           </div>
           <textarea ref={taRef} value={working}
-            onChange={e => { setWorking(e.target.value); selRef.current = { start: e.target.selectionStart, end: e.target.selectionEnd }; }}
+            onChange={e => { saveWorking(e.target.value); selRef.current = { start: e.target.selectionStart, end: e.target.selectionEnd }; }}
             onSelect={rememberSel} onClick={rememberSel} onKeyUp={rememberSel}
             placeholder={'One step per line — the marks are in the method, not in the number.'}
             rows={7}
@@ -5540,7 +5716,7 @@ function PaperPart({ q, part, value, onChange, onCommit }){
       </div>
 
       <div className="flex items-center justify-between gap-3" style={{ marginBottom: 6 }}>
-        <Sub style={{ fontSize: 12 }}>{words > 0 ? `${words} words` : ' '}</Sub>
+        <Sub style={{ fontSize: 12 }}>{words > 0 ? plural(words, 'word') : ' '}</Sub>
         <>
           <input ref={photoRef} type="file" accept="image/*" style={{ display: 'none' }}
             onChange={(e) => { const f = (e.target.files || [])[0]; if (e.target) e.target.value = ''; if (f) usePhoto(f); }} />
@@ -5883,7 +6059,7 @@ function ExamPaper({ decks, progress, defaultLevel, saved, onSave, onClose, onMa
                         <span style={{ minWidth: 0, flex: 1 }}>
                           <span style={{ display: 'block', fontFamily: SANS, fontSize: 14.5, fontWeight: 700, color: T.ink }}>{d.subject || 'Untitled'}</span>
                           <span style={{ display: 'block', fontFamily: SANS, fontSize: 12.5, color: T.faint }}>
-                            {d.topic || ''}{d.topic ? ' · ' : ''}{d.cards.length} cards
+                            {d.topic || ''}{d.topic ? ' · ' : ''}{plural(d.cards.length, 'card')}
                           </span>
                         </span>
                       </button>
@@ -6971,7 +7147,7 @@ function DraftReview({ drafts, setDrafts, meta, setMeta, onSave, onCancel, short
         })}
       </div>
 
-      <Btn full kind="primary" onClick={onSave} disabled={!kept}>Save {kept} cards</Btn>
+      <Btn full kind="primary" onClick={onSave} disabled={!kept}>Save {plural(kept, 'card')}</Btn>
     </div>
   );
 }
@@ -7017,7 +7193,7 @@ function Decks({ decks, progress, onEditCard, onDeleteCard, onDeleteDeck, onRena
               <div style={{ flex: 1, minWidth: 0 }}>
                 <div style={{ fontFamily: SANS, fontSize: 15.5, fontWeight: 700, color: T.ink,
                   overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{d.topic || d.subject || 'Untitled'}</div>
-                <Sub style={{ fontSize: 13 }}>{d.cards.length} cards · {d.subject || 'Untitled'}</Sub>
+                <Sub style={{ fontSize: 13 }}>{plural(d.cards.length, 'card')} · {d.subject || 'Untitled'}</Sub>
               </div>
               <div className="flex flex-col items-end gap-1">
                 {dueN > 0 && <Chip colour={T.red}>{dueN} due</Chip>}
@@ -7078,7 +7254,7 @@ function DeckEditor({ deck, progress, onBack, onEditCard, onDeleteCard, onDelete
             cursor: 'pointer', fontSize: 17, color: T.ink, boxShadow: SH.raised, flexShrink: 0 }}>‹</button>
         <div style={{ minWidth: 0, flex: 1 }}>
           <Title style={{ fontSize: 18, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{deck.topic || 'Deck'}</Title>
-          <Sub style={{ fontSize: 13 }}>{deck.subject} · {deck.cards.length} cards</Sub>
+          <Sub style={{ fontSize: 13 }}>{deck.subject} · {plural(deck.cards.length, 'card')}</Sub>
         </div>
         {!renaming && (
           <div className="flex gap-2" style={{ flexShrink: 0 }}>
@@ -7174,7 +7350,7 @@ function DeckEditor({ deck, progress, onBack, onEditCard, onDeleteCard, onDelete
         ) : (
           <div className="flex gap-2">
             <Btn full kind="danger" onClick={onDeleteDeck} style={{ background: T.red, color: '#fff' }}>
-              Delete {deck.cards.length} cards
+              Delete {plural(deck.cards.length, 'card')}
             </Btn>
             <Btn full kind="soft" onClick={() => setConfirmDeck(false)}>Keep</Btn>
           </div>
@@ -7326,7 +7502,7 @@ function Stats({ decks, progress, stats }){
           );
         })}
       </div>
-      <Sub style={{ marginTop: 18, textAlign: 'center' }}>{totalCards} cards across {decks.length} decks</Sub>
+      <Sub style={{ marginTop: 18, textAlign: 'center' }}>{plural(totalCards, 'card')} across {plural(decks.length, 'deck')}</Sub>
     </div>
   );
 }
@@ -7414,7 +7590,7 @@ function TransferCard({ library, progress, onImport }){
     try {
       const res = mergeImport(JSON.parse(raw), library, progress);
       onImport(res);
-      say(`Added ${res.deckCount} deck${res.deckCount > 1 ? 's' : ''} · ${res.cardCount} cards.`);
+      say(`Added ${plural(res.deckCount, 'deck')} · ${plural(res.cardCount, 'card')}.`);
       setText(''); setPasting(false);
     } catch (e){ say(e.message || 'That did not look like an export.', true); }
   };
@@ -7435,7 +7611,7 @@ function TransferCard({ library, progress, onImport }){
 
       <div className="flex items-center justify-between" style={{ marginBottom: 7 }}>
         <Sub style={{ fontSize: 12.5, fontWeight: 700, color: T.ink }}>
-          Export {chosenCards > 0 ? `(${chosen.length} deck${chosen.length > 1 ? 's' : ''} · ${chosenCards} card${chosenCards > 1 ? 's' : ''})` : ''}
+          Export {chosenCards > 0 ? `(${plural(chosen.length, 'deck')} · ${plural(chosenCards, 'card')})` : ''}
         </Sub>
         {library.decks.length > 1 && (
           <button className="sf-tap" onClick={() => picking ? setPicking(false) : startPicking()}
@@ -7724,10 +7900,10 @@ function Home({ library, progress, stats, settings, due, onStart, onCreate, onDe
             </Tip>
           </div>
           {/* hero — what to do now */}
-          <Card style={{ padding: '22px 24px', marginBottom: 16, display: 'flex', alignItems: 'center', gap: 22, flexWrap: 'wrap' }}>
-            <div style={{ flex: '1 1 260px' }}>
-              <div style={{ fontFamily: SANS, fontSize: 21, fontWeight: 750, letterSpacing: '-0.01em', color: T.ink }}>
-                {due > 0 ? `You've got ${due} card${due > 1 ? 's' : ''} ready` : 'You\'re all caught up'}
+          <Card className="sf-hero" style={{ padding: '22px 24px', marginBottom: 16, display: 'flex', alignItems: 'center', gap: 22, flexWrap: 'wrap' }}>
+            <div className="sf-hero-main" style={{ flex: '1 1 260px' }}>
+              <div style={{ fontFamily: SANS, fontSize: 21, fontWeight: 750, letterSpacing: '-0.01em', color: T.ink, textWrap: 'balance' }}>
+                {due > 0 ? `You've got ${plural(due, 'card')} ready` : 'You\'re all caught up'}
               </div>
               <Sub style={{ marginTop: 5, marginBottom: 18 }}>
                 {due > 0 ? `A mix of quick recall and long answers — about ${mins} min.` : 'Nothing due right now. Get ahead with some extra practice, or make more cards.'}
@@ -7737,12 +7913,21 @@ function Home({ library, progress, stats, settings, due, onStart, onCreate, onDe
                 <Sub style={{ fontSize: 12.5 }}>or pick a deck below</Sub>
               </div>
             </div>
-            <div style={{ position: 'relative', width: 116, height: 116, borderRadius: '50%', flexShrink: 0,
+            {/* Sizes and position live in .sf-hero-ring rather than inline,
+                because on a phone this ring used to wrap onto a line of its
+                own under the button: a 116px circle, usually reading 0, alone
+                on the left with the right half of the card empty, pushing
+                "Test yourself" below the fold on the one screen that exists to
+                answer "what should I do now". It now tucks into the corner. */}
+            <div className="sf-hero-ring" role="img" aria-label={reviewedToday + ' done today'}
+              style={{ borderRadius: '50%', flexShrink: 0,
               background: `conic-gradient(${T.accent} 0 ${sessionPct}%, ${T.well} 0)` }}>
-              <div style={{ position: 'absolute', inset: 11, borderRadius: '50%', background: T.surface }} />
+              <div className="sf-hero-ring-hole" style={{ position: 'absolute', borderRadius: '50%', background: T.surface }} />
               <div style={{ position: 'absolute', inset: 0, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center' }}>
-                <div style={{ fontFamily: SANS, fontSize: 24, fontWeight: 800, lineHeight: 1, color: T.ink }}>{reviewedToday}</div>
-                <div style={{ fontFamily: SANS, fontSize: 10.5, color: T.faint, marginTop: 3, textTransform: 'uppercase', letterSpacing: '0.05em' }}>done today</div>
+                <div className="sf-hero-ring-n" style={{ fontFamily: SANS, fontWeight: 800, lineHeight: 1, color: T.ink }}>{reviewedToday}</div>
+                <div className="sf-hero-ring-l" style={{ fontFamily: SANS, color: T.faint, marginTop: 3, textTransform: 'uppercase', letterSpacing: '0.05em' }}>
+                  <span className="sf-wide-only">done </span>today
+                </div>
               </div>
             </div>
           </Card>
@@ -7828,7 +8013,7 @@ function Home({ library, progress, stats, settings, due, onStart, onCreate, onDe
                     <Tile colour={c} glyph={(d.subject || '?').trim().charAt(0).toUpperCase()} size={38} />
                     <div style={{ flex: 1, minWidth: 0 }}>
                       <div style={{ fontFamily: SANS, fontSize: 14, fontWeight: 650, color: T.ink, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{d.topic || d.subject || 'Untitled'}</div>
-                      <div style={{ fontFamily: SANS, fontSize: 12, color: T.faint, marginTop: 1 }}>{d.subject || 'Untitled'} · {d.cards.length} cards</div>
+                      <div style={{ fontFamily: SANS, fontSize: 12, color: T.faint, marginTop: 1 }}>{d.subject || 'Untitled'} · {plural(d.cards.length, 'card')}</div>
                     </div>
                     <div style={{ width: 72, height: 6, background: T.well, borderRadius: R.pill, overflow: 'hidden', flexShrink: 0 }}>
                       <div style={{ height: '100%', width: pct + '%', background: T.green, borderRadius: R.pill }} />
@@ -7884,7 +8069,7 @@ function Home({ library, progress, stats, settings, due, onStart, onCreate, onDe
             {[
               { icon: 'plus', t: 'Make new cards', s: 'Paste notes, a file, or a topic', on: onCreate },
               flagged > 0
-                ? { icon: 'warn', t: 'Review your tricky ones', s: `${flagged} card${flagged > 1 ? 's' : ''} keep tripping you up`, on: onStart }
+                ? { icon: 'warn', t: 'Review your tricky ones', s: `${plural(flagged, 'card')} keep tripping you up`, on: onStart }
                 : { icon: 'stack', t: 'Study your feed', s: 'Review what\'s due today', on: onStart },
               { icon: 'folder', t: 'All my decks', s: 'Edit, rename, export or delete', on: onDecks },
             ].map((q, i) => (
@@ -8843,7 +9028,7 @@ function LearnMode({ decks, deckId, session, onSaveSession, onClose, onDone }){
           {enough ? (
             <>
               <Sub style={{ marginBottom: 14 }}>
-                {scopeCards.length} cards in this run. Long answers sit this one out — they belong in the feed, where they get marked.
+                {plural(scopeCards.length, 'card')} in this run. Long answers sit this one out — they belong in the feed, where they get marked.
               </Sub>
               {!saved && <Btn full kind="primary" onClick={start}>Start learning →</Btn>}
             </>
@@ -9683,9 +9868,9 @@ function StarterPicker({ onAdd, onClose }){
                   <Sub style={{ fontSize: 13, marginTop: 2 }}>{d.blurb}</Sub>
                   <div className="flex items-center gap-1.5" style={{ marginTop: 8, flexWrap: 'wrap' }}>
                     <Chip colour={T.muted}>{d.subject}</Chip>
-                    <Chip colour={T.muted}>{n.total} cards</Chip>
+                    <Chip colour={T.muted}>{plural(n.total, 'card')}</Chip>
                     {/* the long answers are the reason to pick one of these up */}
-                    <Chip colour={T.accentInk}>{n.long} long answer{n.long === 1 ? '' : 's'}</Chip>
+                    <Chip colour={T.accentInk}>{plural(n.long, 'long answer')}</Chip>
                   </div>
                 </div>
               </button>
@@ -10968,6 +11153,25 @@ function Shell({ children, tab, setTab, due, pending }){
             border: 1px solid ${T.border}; border-radius: 20px; box-shadow: ${SH.card}; overflow: hidden; }
         }
         @media (min-width: 1024px) { .sf-fab { right: 26px; bottom: 26px; } }
+
+        /* ---- Home hero ---------------------------------------------------
+           Beside the headline where there is room; tucked into the top-right
+           corner on a phone, instead of wrapping onto a line of its own and
+           stranding a 116px circle under the button. Same breakpoint as
+           .sf-act-sub, which is the same judgement about the same width. */
+        .sf-hero { position: relative; }
+        .sf-hero-ring { position: relative; width: 116px; height: 116px; }
+        .sf-hero-ring-hole { inset: 11px; }
+        .sf-hero-ring-n { font-size: 24px; }
+        .sf-hero-ring-l { font-size: 10.5px; }
+        @media (max-width: 459px) {
+          .sf-hero-main { padding-right: 76px; }
+          .sf-hero-ring { position: absolute; top: 18px; right: 18px; width: 64px; height: 64px; }
+          .sf-hero-ring-hole { inset: 6px; }
+          .sf-hero-ring-n { font-size: 18px; }
+          .sf-hero-ring-l { font-size: 9px; margin-top: 2px; }
+          .sf-wide-only { display: none; }
+        }
 
         /* one column on a phone, two once there's room */
         .sf-grid2 { display: grid; grid-template-columns: 1fr; gap: 10px; }
