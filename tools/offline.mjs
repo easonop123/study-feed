@@ -66,6 +66,8 @@ const SUITES = [
     note: 'an import only ever adds — nothing overwritten, no two decks on one id' },
   { name: 'answer drafts', cmd: ['tools/draft-store-test.mjs'],
     note: 'a half-written answer survives a reload, including typing mid-load' },
+  { name: 'photo transcripts', cmd: ['tools/transcript-test.mjs'],
+    note: 'invented [?] lines are dropped; a word it could not read is kept' },
 ];
 
 /* WAIT FOR THE PROCESS, NOT FOR ITS PIPES.

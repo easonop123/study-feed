@@ -2609,13 +2609,33 @@ const HANDWRITING_PROMPT = 'This is a photo of one page of a student\'s HANDWRIT
    alternative is the student marking the word "NO_ANSWER" as their essay. */
 const NO_ANSWER = 'NO_ANSWER';
 
+/* Drop trailing lines that say nothing but "[?]".
+
+   The vision model occasionally runs past the end of what is on the page and
+   pads with numbered placeholders — seen on 23 Sep 2026 on a four-line page of
+   working: "4. [?] 5. [?] 6. [?] 7. [?] 8. [?] 9. [?]", 128 tokens where a
+   clean read is ~38. Those lines are not illegible handwriting, they are lines
+   that do not exist, and they land in the student's answer box where they have
+   to be deleted by hand before marking — or, worse, are left in and marked as
+   six blank steps.
+
+   ONLY trailing ones, and only lines that are nothing but a placeholder. A
+   "[?]" inside a real line marks a word the model genuinely could not read,
+   which the student needs to see and fix, so it stays. */
+function trimPlaceholderTail(text){
+  const lines = String(text == null ? '' : text).split('\n');
+  const junk = /^\s*(\d+\s*[.)]\s*)?\[\?\]\s*$/;
+  while (lines.length && (junk.test(lines[lines.length - 1]) || !lines[lines.length - 1].trim())) lines.pop();
+  return lines.join('\n').trim();
+}
+
 async function transcribeAnswer(img){
   const content = [
     { type: 'text', text: HANDWRITING_PROMPT },
     { type: 'image_url', image_url: { url: 'data:' + img.media_type + ';base64,' + img.data } },
   ];
   const out = await postMessages(content, 1500, MODEL_VISION);
-  const clean = String(out == null ? '' : out).trim();
+  const clean = trimPlaceholderTail(out);
   if (!clean || clean.toUpperCase().indexOf(NO_ANSWER) === 0) return '';
   return clean;
 }
@@ -2638,7 +2658,7 @@ async function transcribeWorking(img){
     { type: 'image_url', image_url: { url: 'data:' + img.media_type + ';base64,' + img.data } },
   ];
   const out = await postMessages(content, 1200, MODEL_VISION);
-  const clean = String(out == null ? '' : out).trim();
+  const clean = trimPlaceholderTail(out);
   if (!clean || clean.toUpperCase().indexOf(NO_ANSWER) === 0) return '';
   return clean;
 }
