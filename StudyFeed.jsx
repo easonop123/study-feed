@@ -2553,7 +2553,24 @@ const HARD_TRIES = 8;
    aborted the moment the winner lands. If the ORIGINAL fails before the
    duplicate was sent, that failure goes straight back to postChat unchanged,
    so the model chain, the hang memory and every retry decision work exactly
-   as they did. */
+   as they did.
+
+   GENERATION ONLY, and marking was measured rather than left out by default
+   (tools/probe-hedge-mark.mjs, 24 Sep 2026: 12 pairs of identical marks fired
+   together, both allowed to finish). Two findings, both against it:
+     - the pairs finished together, r = 0.97 — 30.9s/30.8s, 61.3s/61.2s. A
+       duplicate lands in the same queue as the original, so racing moved the
+       worst case by a tenth of a second. It would double marking's load and
+       buy nothing.
+     - the faster of a pair ran slightly shorter (328 vs 341 tokens, 3.58 vs
+       3.67 notes). All 12 pairs agreed on the grade, so it is small — but it
+       is a bias in the direction of thinner feedback, on the call whose
+       feedback is the product.
+   Why generation and marking correlate so differently is not known; they were
+   measured on different afternoons, and the correlation may move with the
+   queue. Worth re-running tools/probe-hedge.mjs before assuming either figure
+   still holds — the generation hedge costs nothing when it does not help, but
+   it is only worth its extra requests while r stays low. */
 const GEN_HEDGE_MS = 25000;
 
 function postHedged(body, wall, hedgeAfter){
@@ -3963,7 +3980,7 @@ function RichText({ text, style }){
     const items = bullets;
     bullets = [];
     out.push(
-      <ul key={'u' + k} style={{ margin: '2px 0 8px', paddingLeft: 18 }}>
+      <ul key={'u' + k} style={{ margin: '2px 0 8px', paddingLeft: 18, listStyleType: 'disc' }}>
         {items.map((b, i) => <li key={i} style={{ marginBottom: 3 }}>{inlineBold(b, 'b' + k + i)}</li>)}
       </ul>
     );
@@ -5367,7 +5384,13 @@ function MarkResult({ r, card, answer, level, deck, demo, onEdit }){
       {Array.isArray(r.hit) && r.hit.length > 0 && (
         <div style={{ marginTop: 10 }}>
           <Sub style={{ fontWeight: 700, color: T.ink }}>What earned credit</Sub>
-          <ul style={{ margin: '6px 0 0', paddingLeft: 18, fontFamily: SANS, fontSize: 14.5, color: T.muted, lineHeight: 1.55 }}>
+          {/* listStyleType is stated, not left to the browser. The shell's reset
+              (docs/app/index.html: `menu,ol,ul{list-style:none}`, the same rule
+              Tailwind's Preflight carried before it) strips the markers, which
+              left these items indented under nothing — floating lines that read
+              as a layout fault rather than a list. The indent was always here
+              expecting bullets; this gives it them. */}
+          <ul style={{ margin: '6px 0 0', paddingLeft: 18, listStyleType: 'disc', fontFamily: SANS, fontSize: 14.5, color: T.muted, lineHeight: 1.55 }}>
             {r.hit.map((h, i) => <li key={i}>{h}</li>)}
           </ul>
         </div>
@@ -5375,7 +5398,7 @@ function MarkResult({ r, card, answer, level, deck, demo, onEdit }){
       {Array.isArray(r.missing) && r.missing.length > 0 && (
         <div style={{ marginTop: 10 }}>
           <Sub style={{ fontWeight: 700, color: T.ink }}>To reach the next grade</Sub>
-          <ul style={{ margin: '6px 0 0', paddingLeft: 18, fontFamily: SANS, fontSize: 14.5, color: T.muted, lineHeight: 1.55 }}>
+          <ul style={{ margin: '6px 0 0', paddingLeft: 18, listStyleType: 'disc', fontFamily: SANS, fontSize: 14.5, color: T.muted, lineHeight: 1.55 }}>
             {r.missing.map((m, i) => <li key={i}>{m}</li>)}
           </ul>
         </div>
