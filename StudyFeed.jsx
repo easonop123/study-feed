@@ -476,7 +476,7 @@ const APP_VERSION = '1.9.0';
 const PATCH_NOTES = [
   { v: '1.9.0', date: '2026-09-24', title: 'Less waiting, and it tells you the truth', items: [
     'Cards show up as they are made. Long notes and PDFs are worked through a few sections at a time, and the app used to wait for the slowest section before showing you anything. Now the first cards appear as soon as they exist and the rest fill in underneath while you look through them. Save waits until the last ones arrive, so nothing still on its way gets lost.',
-    'When the AI is being slow, it asks a second one. The free service this runs on is usually quick and sometimes stuck, and the same request can take fifteen seconds or ninety. If making cards is still going after twenty-five seconds, the app now asks the next model on its list at the same time and takes whichever answers first. On a day when the main model had stopped answering altogether, that cut the wait from nearly two minutes to under one.',
+    'When the AI is being slow, it asks a second one. The free service this runs on is usually quick and sometimes stuck, and the same request can take fifteen seconds or ninety. If making cards is still going after twenty-five seconds, the app now asks the next model on its list at the same time and takes whichever answers first. On a day when the main model had stopped answering altogether, that cut the wait from nearly two minutes to under one. The "Stuck?" hints and "explain this further" do the same after twelve seconds, so a hint no longer takes a minute and a half when the main model is stuck.',
     '"How do I get to Excellence?" is usually ready before you press it. It can only start once your mark is back, and it is one of the slower things the app does — but you read your mark first, so it now gets going while you read.',
     'Your writing survives a reload. A long answer or a page of working used to live only on the screen, so reloading because it looked stuck, closing the tab or knocking the back button lost the lot. It is kept as you type and comes straight back. It is cleared once you grade the card, and after a day, so a card that comes round again is never handed your old attempt.',
     'If the main marker is too busy and a backup marks your answer, it says so. We tested the backup properly and it is not as good: it almost never gives Excellence and it is too kind to answers that say very little. Rather than hand you a grade like that without a word, the app tells you where it came from and suggests marking it again in a few minutes.',
@@ -2603,6 +2603,21 @@ const HARD_TRIES = 8;
    it is only worth its extra requests while r stays low. */
 const GEN_HEDGE_MS = 25000;
 
+/* The small helpers — "Stuck? writing points", sentence starters, "explain this
+   further" — hedge too, and much earlier. They normally answer in 2-10s (health
+   check, 23 Sep: 7.9s, 1.9s, 4.2s). But on a hung head a student waited the
+   FULL 88s attempt before the chain moved on, for a hint of three bullet
+   points: measured the next day with gemma-4 stuck, writing points timed out at
+   85s and the other two took 45-49s. 12s clears their normal range with room to
+   spare, so a healthy call never sends a duplicate, and a stuck one reaches the
+   next model in about a fifth of the time.
+
+   Why these and not the marking: these are help, not a grade, and every one of
+   them already falls back to the chain's second model — the hedge only gets
+   there sooner. The marker was measured, and its fallback is not good enough to
+   reach for early (see markerNote). */
+const HELPER_HEDGE_MS = 12000;
+
 /* One model's request. Decided per model rather than once per call, because a
    chain walks several families and each takes its own switches — and because
    a hedge now sends the SAME prompt to a DIFFERENT model, which needs that
@@ -3521,7 +3536,7 @@ ${isNcea(level) ? 'Never name or cite an achievement standard number or title, a
 Return ONLY a JSON array of short strings. No prose outside it.`;
 }
 async function getHints(card, level){
-  const reply = await callModel(hintPrompt(card, level), 900, MODEL_SMART, true);
+  const reply = await callModel(hintPrompt(card, level), 900, MODEL_SMART, true, HELPER_HEDGE_MS);
   const arr = parseJsonArray(reply);
   return Array.isArray(arr) ? arr.map(String).filter(Boolean).slice(0, 6) : [];
 }
@@ -3544,7 +3559,7 @@ Do NOT fill in the blanks. Do NOT give the finished answer, the actual terms, or
 Return ONLY a JSON array of short strings. No prose outside it.`;
 }
 async function getBigHint(card, level){
-  const reply = await callModel(bigHintPrompt(card, level), 1100, MODEL_SMART, true);
+  const reply = await callModel(bigHintPrompt(card, level), 1100, MODEL_SMART, true, HELPER_HEDGE_MS);
   const arr = parseJsonArray(reply);
   return Array.isArray(arr) ? arr.map(String).filter(Boolean).slice(0, 5) : [];
 }
@@ -3600,7 +3615,7 @@ Return ONLY JSON:
 Explain the card's own answer — don't contradict it, and don't invent facts, values or NZQA codes that aren't implied by it.`;
 }
 async function getExplain(card, level, depth){
-  const reply = await callModel(explainPrompt(card, level, depth), 1200, MODEL_SMART, true);
+  const reply = await callModel(explainPrompt(card, level, depth), 1200, MODEL_SMART, true, HELPER_HEDGE_MS);
   const objs = rescueObjects(reply);
   return objs[0] || null;
 }
