@@ -5299,19 +5299,70 @@ function UpgradePath({ card, answer, r, level, demo }){
   const target = nextGradeUp(r.grade);
   const atTop = r.grade === 'Excellence';
 
+  /* START IT WHILE THEY READ.
+
+     The upgrade path cannot begin until the mark has landed — it is written
+     from the mark — and then it is one of the slower calls in the app (35.6s
+     in the 23 Sep health check). But a student does not press this the moment
+     the mark appears: they read their grade, the two lists and the notes
+     first. That reading time is free. So the request is started when the
+     button actually scrolls into view, and pressing it collects the answer —
+     instantly if it has arrived, after a shorter wait if it has not.
+
+     Only once it is VISIBLE, not on every mark: a student who never scrolls
+     down to it is a student who was not going to press it, and costs nothing.
+     A prefetch that failed is simply asked again on the press, so this can
+     only ever make the button faster, never make it fail where it would have
+     worked. `upgrade_prefetched` against `upgrade_opened` is how to tell
+     whether it pays for its calls. None of this happens in the tour, whose
+     answer is canned. */
+  const pre = useRef(null);            // { promise, state: 'pending' | 'ready' | 'failed' }
+  const seenRef = useRef(null);
+  const prefetch = () => {
+    if (demo || pre.current) return;
+    const promise = getUpgrade(card, answer, r, level);
+    const entry = { promise: promise, state: 'pending' };
+    pre.current = entry;
+    promise.then(() => { entry.state = 'ready'; }, () => { entry.state = 'failed'; });
+  };
+  useEffect(() => {
+    if (demo || got) return undefined;
+    const el = seenRef.current;
+    if (!el || typeof IntersectionObserver === 'undefined') return undefined;
+    const io = new IntersectionObserver((entries) => {
+      for (const e of entries) if (e.isIntersecting){
+        io.disconnect();
+        if (!pre.current){ prefetch(); track('upgrade_prefetched', {}); }
+        return;
+      }
+    }, { threshold: 0.6 });
+    io.observe(el);
+    return () => io.disconnect();
+  }, [demo, got]);
+
   const run = async () => {
     setBusy(true); setErr('');
+    const had = pre.current ? pre.current.state : 'none';
+    if (!demo) track('upgrade_opened', { grade: GRADES.indexOf(r.grade) >= 0 ? r.grade : 'other', prefetch: had });
     try {
-      const u = demo ? await cannedAfter(demo.upgrade, 900) : await getUpgrade(card, answer, r, level);
+      let u;
+      if (demo) u = await cannedAfter(demo.upgrade, 900);
+      else if (pre.current && pre.current.state !== 'failed'){
+        /* Arrived, or on its way: collect it. If it fails now, ask once more
+           rather than showing an error for a request the student never made. */
+        try { u = await pre.current.promise; }
+        catch (e){ pre.current = null; u = await getUpgrade(card, answer, r, level); }
+      }
+      else { pre.current = null; u = await getUpgrade(card, answer, r, level); }
       if (u && (Array.isArray(u.steps) || u.habit)) setGot(u);
-      else setErr('Could not read that. Try again.');
-    } catch (e){ setErr(friendlyApiError(e)); }
+      else { pre.current = null; setErr('Could not read that. Try again.'); }
+    } catch (e){ pre.current = null; setErr(friendlyApiError(e)); }
     finally { setBusy(false); }
   };
 
   if (!got){
     return (
-      <div style={{ marginTop: 12 }}>
+      <div ref={seenRef} style={{ marginTop: 12 }}>
         {/* Default, not soft: this sits in MarkResult's PANEL, whose ground is
             T.well — the same colour as a soft button. It rendered as bare
             centred bold text, a heading rather than a thing to press, on the

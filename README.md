@@ -736,6 +736,8 @@ endpoint, and there it stays a silent no-op.
 | `generate_failed` | reason, **served**, **walked** |
 | `request_hedged` | model, **to** — a generate was still out at 25s and a duplicate was sent to the NEXT model in the chain (see `postHedged`). Read it against `cards_generated`: the share of generates that fall into the free tier's slow mode, measured in the wild rather than from a probe. `to` is where it went; a spike in hedges with `served` shifting to the second model is what a hung head looks like from the outside |
 | `answer_marked` | grade, **served**, **walked** |
+| `upgrade_prefetched` | — the "How do I get to …?" button came into view and its answer started loading while the student read their mark |
+| `upgrade_opened` | grade, **prefetch** (`ready` / `pending` / `failed` / `none`) — the button was pressed, and what the prefetch had done by then. `opened ÷ prefetched` is the tap rate, which is what says whether prefetching pays for its calls; the share that were `ready` is how often the student got it instantly. Until this there was no event at all for the upgrade path, so nothing said how often the app's flagship feature is used |
 | `working_marked` | grade, final, **served**, **walked** |
 | `paper_started` / `paper_marked` / `paper_failed` | questions, asked, marks, grade, minutes, blank, shape, planned, steered, weak, reason |
 | `paper_to_cards` | parts, grade |
