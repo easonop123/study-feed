@@ -472,8 +472,19 @@ function failureKind(e){
    1.x numbers sitting above the new 1.0.0 cannot cause a mis-fire. They are not
    shown next to the pre-launch entries either — those were dev builds and the
    numbers mean nothing to a student. */
-const APP_VERSION = '1.8.3';
+const APP_VERSION = '1.9.0';
 const PATCH_NOTES = [
+  { v: '1.9.0', date: '2026-09-24', title: 'Less waiting, and it tells you the truth', items: [
+    'Cards show up as they are made. Long notes and PDFs are worked through a few sections at a time, and the app used to wait for the slowest section before showing you anything. Now the first cards appear as soon as they exist and the rest fill in underneath while you look through them. Save waits until the last ones arrive, so nothing still on its way gets lost.',
+    'When the AI is being slow, it asks a second one. The free service this runs on is usually quick and sometimes stuck, and the same request can take fifteen seconds or ninety. If making cards is still going after twenty-five seconds, the app now asks the next model on its list at the same time and takes whichever answers first. On a day when the main model had stopped answering altogether, that cut the wait from nearly two minutes to under one.',
+    '"How do I get to Excellence?" is usually ready before you press it. It can only start once your mark is back, and it is one of the slower things the app does — but you read your mark first, so it now gets going while you read.',
+    'Your writing survives a reload. A long answer or a page of working used to live only on the screen, so reloading because it looked stuck, closing the tab or knocking the back button lost the lot. It is kept as you type and comes straight back. It is cleared once you grade the card, and after a day, so a card that comes round again is never handed your old attempt.',
+    'If the main marker is too busy and a backup marks your answer, it says so. We tested the backup properly and it is not as good: it almost never gives Excellence and it is too kind to answers that say very little. Rather than hand you a grade like that without a word, the app tells you where it came from and suggests marking it again in a few minutes.',
+    'Making cards on a phone starts with the box you type in. It used to sit underneath all the options, below the bottom of the screen, so the first thing you saw had nowhere to type. Your notes come first now, then how you want them made.',
+    'The Home screen fits on a phone. The "done today" circle used to take up a line of its own and push everything else down; it sits in the corner now, and the ways to test yourself are on the first screen.',
+    'The buttons after a mark look like buttons. "How do I get to Merit?" and "Improve this answer and mark again" were the same colour as the box they sat in and read as plain text. The feedback lists have their bullet points back too.',
+    'Smaller things: the Stats page no longer says "4 due" at the top and "0 still due" underneath; the little "×" on tips and the other small controls are much easier to hit with a thumb; a photo of your working no longer adds empty lines to the end; and the card review shows your whole standard on a phone instead of cutting it off.',
+  ] },
   { v: '1.8.3', date: '2026-09-18', title: 'It stops blaming your wifi', items: [
     'When making cards runs out of time, the app used to tell you your connection had dropped. It almost never had. Every failure we measured over two days was the AI service itself, on connections that were loading everything else perfectly — so the app was sending people off to fix something that was not broken. It now says which end the problem is at.',
     'And it says how long generating actually takes. The tip promised 15 to 30 seconds; it really runs 20 to 40, and longer when the service is busy. A promise the app misses every other time teaches you it is broken when it is working.',
