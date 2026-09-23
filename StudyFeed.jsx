@@ -7609,13 +7609,22 @@ function CardEditRow({ card, onSave, onCancel }){
 /* ==========================================================================
    STATS  —  kept light on purpose. No badges, no notifications.
    ========================================================================== */
-function Stats({ decks, progress, stats }){
+function Stats({ decks, progress, stats, due }){
   const today = TODAY();
-  const dueTotal = useMemo(() => {
+  /* The header's number, not a second calculation of it. This counted reviews
+     only, while the masthead chip right above it counts what the feed will
+     actually hand over today — reviews due plus today's allowance of new
+     cards. So a student with a fresh deck saw "4 due" in red at the top of
+     the screen and "0 still due" two inches below it. "Still due" is asking
+     how much is left to do today, and the chip is the answer to that; the
+     reviews-only count is kept as the fallback for anywhere Stats is
+     rendered without it. */
+  const reviewsDue = useMemo(() => {
     let n = 0;
     for (const d of decks) for (const c of d.cards){ const p = progress[c.id]; if (p && p.seen && p.due <= today) n++; }
     return n;
   }, [decks, progress]);
+  const dueTotal = typeof due === 'number' ? due : reviewsDue;
   const totalCards = decks.reduce((s, d) => s + d.cards.length, 0);
   const reviewedToday = (stats.reviewsByDate && stats.reviewsByDate[today]) || 0;
   const practiceToday = (stats.practiceByDate && stats.practiceByDate[today]) || 0;
@@ -11167,7 +11176,7 @@ export default function App(){
         {tab === 'decks' && <Decks decks={library.decks} progress={progress} onEditCard={editCard}
           onDeleteCard={deleteCard} onDeleteDeck={deleteDeck} onRenameDeck={renameDeck}
           onStudyDeck={startDeck} onQuiz={openQuiz} onLearn={openLearn} onStarter={() => setStarterOpen(true)} />}
-        {tab === 'stats' && <Stats decks={library.decks} progress={progress} stats={stats} />}
+        {tab === 'stats' && <Stats decks={library.decks} progress={progress} stats={stats} due={dueCount} />}
         {tab === 'changelog' && <Changelog />}
         {tab === 'feedback' && <FeatureRequest />}
         {tab === 'settings' && <Settings settings={settings} onChange={persistSettings}
