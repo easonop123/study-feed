@@ -31,7 +31,7 @@
 
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
-import { dirname, join, resolve } from 'node:path';
+import { dirname, join, resolve, isAbsolute } from 'node:path';
 import { modelFromArgs, checkerDeadlineMs } from './app-source.mjs';
 import { CASES } from './mark-eval-cases.mjs';
 /* Static so Node's MODULE_TYPELESS_PACKAGE_JSON warning about this file prints
@@ -365,7 +365,10 @@ async function main(){
      42-case nemotron run on 24 Sep). Resolve a typed path against the cwd;
      keep the old behaviour for a bare name. */
   const outArg = arg('out', 'mark-eval-results.json');
-  const outPath = /[\/]/.test(outArg) ? resolve(outArg) : join(HERE, outArg);
+  /* isAbsolute OR any separator, either kind: the first version of this was
+     written as a regex whose backslash got eaten on the way into the file, so
+     it matched "/" only and a Windows `--out tools\x.json` still doubled. */
+  const outPath = (isAbsolute(outArg) || /[\\/]/.test(outArg)) ? resolve(outArg) : join(HERE, outArg);
   const { writeFileSync } = await import('node:fs');
   writeFileSync(outPath, JSON.stringify(rows, null, 2));
   console.log(`\nFull rows: ${outPath}`);

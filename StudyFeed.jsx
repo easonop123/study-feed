@@ -2618,7 +2618,14 @@ function postHedged(body, wall, hedgeAfter, alt){
   const crossModel = altBody !== body;
   return new Promise((resolve, reject) => {
     const cA = new AbortController(), cB = new AbortController();
-    let settled = false, sentB = false, bWon = false, failed = 0, firstErr = null, timer = null;
+    /* When both fail, the error handed back is the HEAD's, whichever failed
+       first. postChat reasons about the model it asked: a head that TIMED OUT
+       has to reach it as a timeout, so the hang is remembered and retried as
+       one. Handing back a fast 503 or 400 from the alternate instead meant a
+       hung head was never learned, and a non-retryable alternate error ended
+       the whole call when only the head had timed out. */
+    let settled = false, sentB = false, bWon = false, failed = 0, errA = null, errB = null, timer = null;
+    const bothFailed = () => { settled = true; reject(errA || errB); };
     postOnce(body, wall, cA.signal).then((value) => {
       if (settled) return;
       settled = true; clearTimeout(timer); cB.abort();
@@ -2630,13 +2637,13 @@ function postHedged(body, wall, hedgeAfter, alt){
         if (bWon && crossModel && alt && alt.onHeadFailedLate) alt.onHeadFailedLate(e);
         return;
       }
-      if (!firstErr) firstErr = e;
+      errA = e;
       /* The original failed before we ever asked twice: that is an ordinary
          failure, not a race, and postChat is the thing that knows what to do
          with it. Hand it straight back. */
       if (!sentB){ settled = true; clearTimeout(timer); reject(e); return; }
       failed++;
-      if (failed >= 2){ settled = true; reject(firstErr); }
+      if (failed >= 2) bothFailed();
     });
     timer = setTimeout(() => {
       if (settled) return;
@@ -2652,15 +2659,23 @@ function postHedged(body, wall, hedgeAfter, alt){
         resolve(value);
       }, (e) => {
         if (settled) return;
-        if (!firstErr) firstErr = e;
+        errB = e;
         failed++;
-        if (failed >= 2){ settled = true; reject(firstErr); }
+        if (failed >= 2) bothFailed();
       });
     }, hedgeAfter);
   });
 }
 
-async function postChat(messages, maxTokens, model, lowEffort, hedgeAfter){
+/* `meta`, when given, is filled with which model answered THIS call. The
+   servedBy / servedWalk globals are still set for the analytics that read them
+   straight after a call, but they are shared: a mark is 30-90s of awaiting, and
+   any request that starts in that window — a generate's hedge, the upgrade
+   prefetch, a hint — overwrites them. Reading the global after the await is how
+   the backup-marker note could have told a student a backup marked an answer
+   that the head had marked, or said nothing about one the backup had. A caller
+   that needs to KNOW asks through meta. */
+async function postChat(messages, maxTokens, model, lowEffort, hedgeAfter, meta){
   const chain = liveChain(model);
   const started = Date.now();
   const left = () => TOTAL_BUDGET_MS - (Date.now() - started);
@@ -2675,6 +2690,7 @@ async function postChat(messages, maxTokens, model, lowEffort, hedgeAfter){
     const wall = Math.min(ATTEMPT_MS[Math.min(attempt, ATTEMPT_MS.length - 1)], left());
     const spent0 = Date.now();
     servedBy = id; servedWalk = tries - 1;
+    let servedHere = id, walkedHere = tries - 1;
     /* Hedged on the FIRST attempt only. A retry is already a second roll of
        the dice; hedging it too would stack duplicates onto a queue that has
        just shown it is struggling. */
@@ -2684,14 +2700,22 @@ async function postChat(messages, maxTokens, model, lowEffort, hedgeAfter){
     const altId = (tries === 1 && hedgeAfter && chain.length > 1) ? chain[(i + 1) % chain.length] : null;
     const alt = altId && altId !== id ? {
       body: bodyFor(altId, messages, maxTokens, lowEffort),
-      onWin: () => { servedBy = altId; },
+      /* walked goes up too. servedTags documents walked 0 as "the head
+         answered", so leaving it at 0 on an alternate's win would hide every
+         hedge win from a dashboard filtering on walked > 0 to spot a hung head
+         — the very outage the hedge exists for. */
+      onWin: () => { servedBy = altId; servedWalk = tries; servedHere = altId; walkedHere = tries; },
       /* The head lost the race but was left running, precisely so this can
          happen: if it then times out it really was hung, and the hang memory
          skips it for the next ten minutes exactly as if it had been waited on.
          If it answers late it was merely slow and nothing is remembered. */
       onHeadFailedLate: (e) => { if (/timed out|could not reach/i.test(String(e && e.message || ''))) noteHang(id); },
     } : null;
-    try { return await postHedged(body, wall, tries === 1 ? hedgeAfter : 0, alt); }
+    try {
+      const text = await postHedged(body, wall, tries === 1 ? hedgeAfter : 0, alt);
+      if (meta){ meta.served = servedHere; meta.walked = walkedHere; }
+      return text;
+    }
     catch (e){
       last = e;
       i++;
@@ -2725,8 +2749,8 @@ async function postChat(messages, maxTokens, model, lowEffort, hedgeAfter){
   throw last;
 }
 /* Everything except the chat helper sends exactly one user turn. */
-const postMessages = (content, maxTokens, model, lowEffort, hedgeAfter) => postChat([{ role: 'user', content }], maxTokens, model, lowEffort, hedgeAfter);
-const callModel = (prompt, maxTokens = 1000, model = MODEL_GEN, lowEffort, hedgeAfter) => postMessages(prompt, maxTokens, model, lowEffort, hedgeAfter);
+const postMessages = (content, maxTokens, model, lowEffort, hedgeAfter, meta) => postChat([{ role: 'user', content }], maxTokens, model, lowEffort, hedgeAfter, meta);
+const callModel = (prompt, maxTokens = 1000, model = MODEL_GEN, lowEffort, hedgeAfter, meta) => postMessages(prompt, maxTokens, model, lowEffort, hedgeAfter, meta);
 /* Read ONE slide/photo with the vision model and return it as plain study text
    (all wording transcribed, diagrams/graphs/formulae described). `img` is a
    { media_type, data } object from resizeImage. */
@@ -3079,12 +3103,24 @@ function markerNote(by, kind){
   return base + ' Mark it again in a few minutes for a firmer grade.';
 }
 
+/* The note itself, once, for both result views. */
+function MarkerNote({ by, kind }){
+  const text = markerNote(by, kind);
+  if (!text) return null;
+  return (
+    <Sub style={{ fontSize: 12.5, marginTop: 9, display: 'flex', gap: 8, alignItems: 'flex-start' }}>
+      <InlineIco name="warn" size={15} style={{ marginTop: 2, color: T.amber }} />
+      <span>{text}</span>
+    </Sub>
+  );
+}
+
 async function markAnswer(card, answer, level){
-  const reply = await callModel(markPrompt(card, answer, level), 3000, MODEL_SMART);
-  /* Read at once, before anything else can start a request and move it. */
-  const by = servedBy;
+  /* Which model marked it, from THIS call — see postChat's meta. */
+  const meta = {};
+  const reply = await callModel(markPrompt(card, answer, level), 3000, MODEL_SMART, undefined, undefined, meta);
   const obj = rescueObjects(reply)[0] || null;
-  if (obj) obj.servedBy = by;
+  if (obj){ obj.servedBy = meta.served; obj.servedWalk = meta.walked; }
   return obj;
 }
 
@@ -3146,10 +3182,10 @@ RULES FOR "notes" — these are shown highlighted on top of the student's own wo
    make this the longest reply the app asks for, and a truncated one is a total
    loss of the mark rather than a degraded one. */
 async function markWorking(card, working, level){
-  const reply = await callModel(markWorkingPrompt(card, working, level), 3000, MODEL_SMART);
-  const by = servedBy;
+  const meta = {};
+  const reply = await callModel(markWorkingPrompt(card, working, level), 3000, MODEL_SMART, undefined, undefined, meta);
   const obj = rescueObjects(reply)[0] || null;
-  if (obj) obj.servedBy = by;
+  if (obj){ obj.servedBy = meta.served; obj.servedWalk = meta.walked; }
   return obj;
 }
 
@@ -4288,7 +4324,10 @@ function StudyCard({ card, deck, onGrade, reduceMotion, prog, practice, onFeedba
      now stops a long answer being handed back on a later review, when the
      whole point is to produce it from memory again. Harmless for card types
      that never had one. */
-  const grade = (q) => { clearDraft(card.id); return onGrade(q, committedWrong); };
+  /* Only the two faces that write drafts. Every other card type would load and
+     rewrite the whole store on its first grade for nothing — in the Artifact,
+     a storage round trip on the grade path. */
+  const grade = (q) => { if (isLongCard(card)) clearDraft(card.id); return onGrade(q, committedWrong); };
   const anim = reduceMotion ? {} : { animation: 'sf-in 260ms cubic-bezier(.2,.8,.3,1)' };
 
   return (
@@ -4923,30 +4962,34 @@ const cannedAfter = (value, ms = 700) => new Promise(r => setTimeout(() => r(val
 
 /* `demo` swaps the three model calls for fixed answers and nothing else — the
    markup, the states and the ordering are the ones a student meets later. */
-function ExtendedFace({ card, phase, deck, onReveal, onBack, demo }){
-  const [answer, setAnswer] = useState('');
-  /* Bring back an unfinished answer from a reload or a closed tab. `demo` is
-     the tutorial, which has a canned answer and must never be restored into.
-     Guarded against landing after the student has started typing: this is
-     async, and an answer they are part-way through always wins. */
+/* An answer box that survives a reload. Restores an unfinished draft when the
+   card mounts, and returns the setter every route that CHANGES the text goes
+   through — typing, the symbol bar, a photographed page — so the draft is
+   saved on the edit rather than in an effect watching the value. An effect
+   would fire once on mount with the box still empty and delete the very draft
+   the restore is in the middle of fetching. The restore is async and never
+   overwrites text the student has already started typing. Shared by the long
+   answer and the worked problem so a fix cannot reach only one of them. */
+function useDraft(cardId, enabled, setValue){
   useEffect(() => {
-    if (demo || !card || !card.id) return undefined;
+    if (!enabled || !cardId) return undefined;
     let live = true;
-    readDraft(card.id).then((text) => {
-      if (live && text) setAnswer((cur) => cur ? cur : text);
+    readDraft(cardId).then((text) => {
+      if (live && text) setValue((cur) => cur ? cur : text);
     });
     return () => { live = false; };
-  }, [card && card.id, demo]);
-  /* Every route by which the STUDENT changes the answer goes through here, so
-     the draft is saved on the edit rather than in an effect watching `answer`.
-     An effect would fire once on mount with the box still empty and delete the
-     very draft the restore above is in the middle of fetching. The tutorial is
-     excluded: its answer is canned, and persisting it would restore the demo's
-     words into a real card. */
-  const saveAnswer = (next) => {
-    setAnswer(next);
-    if (!demo && card && card.id) writeDraft(card.id, next);
+  }, [cardId, enabled]);
+  return (next) => {
+    setValue(next);
+    if (enabled && cardId) writeDraft(cardId, next);
   };
+}
+
+function ExtendedFace({ card, phase, deck, onReveal, onBack, demo }){
+  const [answer, setAnswer] = useState('');
+  /* The tutorial is excluded: its answer is canned, and persisting it would
+     restore the demo's words into a real card. */
+  const saveAnswer = useDraft(card && card.id, !demo, setAnswer);
   const [busy, setBusy] = useState(false);
   const [result, setResult] = useState(null);
   const [err, setErr] = useState('');
@@ -5080,7 +5123,7 @@ function ExtendedFace({ card, phase, deck, onReveal, onBack, demo }){
            fallback that is measurably worse at this (see mark-eval on
            nemotron) — could not be answered from the data. */
         if (!demo) track('answer_marked', {
-          grade: GRADES.indexOf(r.grade) >= 0 ? r.grade : 'other', ...servedTags() });
+          grade: GRADES.indexOf(r.grade) >= 0 ? r.grade : 'other', served: r.servedBy, walked: r.servedWalk });
         /* a mark you waited 15 seconds for should announce itself */
         if (r.grade === 'Excellence'){ play('excellence'); buzz([14, 40, 14]); }
         else if (r.grade === 'Merit'){ play('milestone'); buzz(16); }
@@ -5302,7 +5345,7 @@ function ExtendedFace({ card, phase, deck, onReveal, onBack, demo }){
 /* The marking says WHAT is missing; this says HOW. Asked for after you've read
    the mark, because the answer is already written — so it can quote your own
    sentences back and show the upgraded version of them. */
-function UpgradePath({ card, answer, r, level, demo }){
+function UpgradePath({ card, answer, r, level, demo, prefetch: allowPrefetch = true }){
   const [got, setGot] = useState(null);
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState('');
@@ -5336,7 +5379,11 @@ function UpgradePath({ card, answer, r, level, demo }){
     promise.then(() => { entry.state = 'ready'; }, () => { entry.state = 'failed'; });
   };
   useEffect(() => {
-    if (demo || got) return undefined;
+    /* Not in a results LIST (an exam paper's parts). "It came into view, so
+       they are about to press it" holds for the single card in the feed; in a
+       paper a student reads ten results top to bottom, and ten unrequested
+       35-second calls is not a prefetch, it is a flood. */
+    if (demo || got || !allowPrefetch) return undefined;
     const el = seenRef.current;
     if (!el || typeof IntersectionObserver === 'undefined') return undefined;
     const io = new IntersectionObserver((entries) => {
@@ -5562,7 +5609,7 @@ function AnnotatedAnswer({ answer, notes, defaultOpen = true }){
   );
 }
 
-function MarkResult({ r, card, answer, level, deck, demo, onEdit }){
+function MarkResult({ r, card, answer, level, deck, demo, onEdit, list }){
   const gc = r.grade === 'Excellence' ? T.green : r.grade === 'Merit' ? T.accent : r.grade === 'Achieved' ? T.muted : T.red;
   const [share, setShare] = useState(false);
   /* Excellence only. Merit is a good day and Achieved is most days; if the card
@@ -5573,12 +5620,7 @@ function MarkResult({ r, card, answer, level, deck, demo, onEdit }){
   return (
     <div style={{ ...PANEL, marginTop: 12, animation: 'sf-reveal 260ms cubic-bezier(.2,.8,.3,1)' }}>
       <Chip colour={gc} solid>{r.grade}</Chip>
-      {markerNote(r.servedBy, 'answer') && (
-        <Sub style={{ fontSize: 12.5, marginTop: 9, display: 'flex', gap: 8, alignItems: 'flex-start' }}>
-          <InlineIco name="warn" size={15} style={{ marginTop: 2, color: T.amber }} />
-          <span>{markerNote(r.servedBy, 'answer')}</span>
-        </Sub>
-      )}
+      <MarkerNote by={r.servedBy} kind="answer" />
       {Array.isArray(r.hit) && r.hit.length > 0 && (
         <div style={{ marginTop: 10 }}>
           <Sub style={{ fontWeight: 700, color: T.ink }}>What earned credit</Sub>
@@ -5603,7 +5645,7 @@ function MarkResult({ r, card, answer, level, deck, demo, onEdit }){
       )}
       {r.lift && <div style={{ marginTop: 10, fontFamily: SANS, fontSize: 15, fontWeight: 600, color: T.ink, lineHeight: 1.5 }}>{r.lift}</div>}
       {answer && <AnnotatedAnswer answer={answer} notes={r.notes} />}
-      {card && answer && <UpgradePath card={card} answer={answer} r={r} level={level} demo={demo} />}
+      {card && answer && <UpgradePath card={card} answer={answer} r={r} level={level} demo={demo} prefetch={!list} />}
       {/* Writing it again with the feedback still on screen is the whole loop —
           and the second attempt is where the grade actually moves. The answer is
           kept, not cleared: this is an edit, not a fresh start. */}
@@ -5656,12 +5698,7 @@ function WorkedResult({ r, card, working, onEdit }){
         <Chip colour={gc} solid>{r.grade}</Chip>
         <Chip colour={finalC}>{finalWord}</Chip>
       </div>
-      {markerNote(r.servedBy, 'working') && (
-        <Sub style={{ fontSize: 12.5, marginTop: 9, display: 'flex', gap: 8, alignItems: 'flex-start' }}>
-          <InlineIco name="warn" size={15} style={{ marginTop: 2, color: T.amber }} />
-          <span>{markerNote(r.servedBy, 'working')}</span>
-        </Sub>
-      )}
+      <MarkerNote by={r.servedBy} kind="working" />
 
       {/* The one fact worth pulling out of a page of marking. Everything after
           a slip in a calculation is contaminated by it, so where it STARTED is
@@ -5741,20 +5778,8 @@ function WorkedResult({ r, card, working, onEdit }){
 
 function WorkedFace({ card, phase, deck, onReveal, onBack }){
   const [working, setWorking] = useState('');
-  /* Same reasoning as ExtendedFace: a page of working is as expensive to lose
-     as a page of prose, and it is lost the same way. */
-  useEffect(() => {
-    if (!card || !card.id) return undefined;
-    let live = true;
-    readDraft(card.id).then((text) => {
-      if (live && text) setWorking((cur) => cur ? cur : text);
-    });
-    return () => { live = false; };
-  }, [card && card.id]);
-  const saveWorking = (next) => {
-    setWorking(next);
-    if (card && card.id) writeDraft(card.id, next);
-  };
+  /* A page of working is as expensive to lose as a page of prose. */
+  const saveWorking = useDraft(card && card.id, true, setWorking);
   const [busy, setBusy] = useState(false);
   const [result, setResult] = useState(null);
   const [err, setErr] = useState('');
@@ -5833,7 +5858,7 @@ function WorkedFace({ card, phase, deck, onReveal, onBack }){
         setResult(r); onReveal && onReveal();
         track('working_marked', {
           grade: GRADES.indexOf(r.grade) >= 0 ? r.grade : 'other',
-          final: ['correct', 'wrong', 'missing'].indexOf(r.final) >= 0 ? r.final : 'other', ...servedTags() });
+          final: ['correct', 'wrong', 'missing'].indexOf(r.final) >= 0 ? r.final : 'other', served: r.servedBy, walked: r.servedWalk });
         if (r.grade === 'Excellence'){ play('excellence'); buzz([14, 40, 14]); }
         else if (r.grade === 'Merit'){ play('milestone'); buzz(16); }
         else if (r.grade === 'Achieved'){ play('right', 1); buzz(10); }
@@ -6119,8 +6144,11 @@ function PaperPartResult({ res, part, level, open, onToggle }){
           {res.blank ? (
             <Sub>You left this one blank. {part ? part.marks : 0} marks, and the only certain way to score none.</Sub>
           ) : res.r ? (
+            /* `list`: one of up to ten results read one after another, so a
+               button scrolling into view is not a student reaching for it —
+               see UpgradePath's prefetch. */
             <MarkResult r={res.r} card={part ? partAsCard({ n: res.q, context: '' }, part) : null}
-              answer={res.answer} level={level} />
+              answer={res.answer} level={level} list />
           ) : (
             <Sub style={{ color: T.red }}>This part could not be marked — the connection dropped. Your answer is still here.</Sub>
           )}
@@ -7164,6 +7192,11 @@ function Create({ onSave, settings, onSettings, onPending, onStarter, seed, onSe
     setMode('generate');
     setSource(seed.source || '');
     if (seed.level) setLevel(seed.level);
+    /* A seed replaces the material, so a generate still out belongs to the
+       OLD material: end it, or its next section lands on top of the seed with
+       the old subject and topic and nothing to say it does not belong. Same
+       reason Discard does this. */
+    genRun.current++; setBusy(false); setProg(null);
     setDrafts(null); setErr(''); setImages([]); setStrictSource(true);
     if (onSeedUsed) onSeedUsed();
   }, [seed]);
@@ -7232,8 +7265,8 @@ function Create({ onSave, settings, onSettings, onPending, onStarter, seed, onSe
           // read each image into study text, then make cards from that text
           const imgText = await transcribeImages(shrunk, (i, n) => setProg({ i, n, phase: 'images' }));
           if (imgText.trim()) cards = cards.concat(await genText(imgText, cardType, lvl, (i, n, phase) => setProg({ i, n, phase }), model, pctLong, strict, land));
-          else if (!cards.length){ setErr('Could not read those images. Try a clearer photo.'); setBusy(false); setProg(null); return; }
-        } else if (!cards.length){ setErr('Could not read those images. Try a clearer photo.'); setBusy(false); setProg(null); return; }
+          else if (!cards.length){ if (genRun.current === token) setErr('Could not read those images. Try a clearer photo.'); return; }
+        } else if (!cards.length){ if (genRun.current === token) setErr('Could not read those images. Try a clearer photo.'); return; }
       }
       /* Thrown away mid-run: nothing below is the student's business now. */
       if (genRun.current !== token) return;
@@ -7276,15 +7309,19 @@ function Create({ onSave, settings, onSettings, onPending, onStarter, seed, onSe
         lost: genLost, mode: String(cardType), ...servedTags() });
     } catch (e){
       track('generate_failed', { reason: failureKind(e), ...servedTags() });
-      setErr('Generation failed. Check your connection and try again.');
+      if (genRun.current === token) setErr('Generation failed. Check your connection and try again.');
     }
-    finally { setBusy(false); setProg(null); }
+    /* Only if this is still the current run. A run that was discarded or
+       replaced by a seed has already had its busy state cleared, and if the
+       student has started ANOTHER run since, clearing busy here would flip the
+       new run's spinner off while it is still working. */
+    finally { if (genRun.current === token){ setBusy(false); setProg(null); } }
   };
 
   if (drafts){
     return <DraftReview drafts={drafts} setDrafts={setDrafts} meta={meta} setMeta={setMeta} shortfall={shortfall}
       live={busy ? (prog || { i: 0, n: 0 }) : null}
-      onCancel={() => { genRun.current++; setDrafts(null); setShortfall(''); }}
+      onCancel={() => { genRun.current++; setBusy(false); setProg(null); setDrafts(null); setShortfall(''); }}
       onSave={() => { onSave(drafts.filter(d => d.keep), meta); setDrafts(null); setShortfall(''); setSource(''); setImages([]); }} />;
   }
 

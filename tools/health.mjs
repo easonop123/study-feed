@@ -139,14 +139,20 @@ if (!MODEL_SMART) throw new Error('grab: MODEL_SMART not found');
    starts lying: the app was changed to send reasoning_effort on the hints, this
    file kept testing the old request, and it went on reporting a feature broken
    after it had been fixed. Anything the app decides, read from the app. */
+/* Trailing arguments after lowEffort are allowed — the markers now pass
+   `undefined, undefined, meta` to learn which model answered — but lowEffort
+   itself is read, not assumed: the fourth argument has to literally be `true`.
+   A stricter pattern stopped matching the moment those arguments appeared and
+   fell back to `dflt` without a word, which happened to be right and is exactly
+   the way this checker has drifted before. */
 function callSite(fnCall, dflt){
   const rx = new RegExp('callModel\\(\\s*' + fnCall.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
-    + '\\s*,\\s*(\\d+)\\s*,\\s*([A-Za-z_$][\\w$]*)\\s*(,\\s*true)?\\s*\\)');
+    + '\\s*,\\s*(\\d+)\\s*,\\s*([A-Za-z_$][\\w$]*)\\s*(?:,\\s*(true|false|undefined))?(?:\\s*,\\s*[A-Za-z_$][\\w$]*)*\\s*\\)');
   const m = SRC.match(rx);
   if (!m) return dflt;
   const modelName = m[2];
   const model = modelNamed(SRC, modelName) || MODEL_SMART;
-  return { max: Number(m[1]), model: model, low: !!m[3] };
+  return { max: Number(m[1]), model: model, low: m[3] === 'true' };
 }
 
 /* Read, never defaulted. A ceiling this file guesses at is a request the app

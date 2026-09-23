@@ -175,5 +175,17 @@ await new Promise(r => setTimeout(r, HEDGE + 40));
 check('an early head failure still goes straight back, with no alternate sent', [x.out.e, H.calls().length], ['API returned 410 — gone', 1]);
 check('and is not double-reported as a late failure', x.seen.late, []);
 
+/* Found in review: when BOTH fail, the error handed back must be the HEAD's.
+   A hung head plus an alternate that fails fast used to reject with the
+   alternate's 503 — so postChat never saw "timed out", never remembered the
+   hang, and a non-retryable alternate error (a 400) ended the whole call when
+   only the head had timed out. */
+x = await runAlt([{ ms: 300, ok: false, error: 'timed out — the AI took too long to respond' },
+                  { ms: 10, ok: false, error: 'API returned 503 — no capacity' }], BODY_WALL, HEDGE);
+check('both failing hands back the head\'s timeout, not the alternate\'s fast 503', x.out, { ok: false, e: 'timed out — the AI took too long to respond' });
+x = await runAlt([{ ms: 300, ok: false, error: 'timed out — the AI took too long to respond' },
+                  { ms: 10, ok: false, error: 'API returned 400 — unknown parameter' }], BODY_WALL, HEDGE);
+check('and a non-retryable alternate error does not stand in for it', x.out, { ok: false, e: 'timed out — the AI took too long to respond' });
+
 console.log(`\n${failed ? failed + ' FAILED' : 'all passed'}`);
 if (failed) process.exit(1);
