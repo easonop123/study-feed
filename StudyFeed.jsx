@@ -5205,10 +5205,23 @@ function UpgradePath({ card, answer, r, level, demo }){
   if (!got){
     return (
       <div style={{ marginTop: 12 }}>
-        <Btn full kind="soft" onClick={run} disabled={busy} style={{ fontSize: 14 }}>
-          <span className="flex items-center justify-center gap-2">
-            {busy ? <><Rings size={17} />Working out how…</> : (atTop ? 'How do I make this airtight?' : `How do I get to ${target}?`)}
-          </span>
+        {/* Default, not soft: this sits in MarkResult's PANEL, whose ground is
+            T.well — the same colour as a soft button. It rendered as bare
+            centred bold text, a heading rather than a thing to press, on the
+            one action that turns a mark into a better answer. White on the
+            well reads as a button; the accent ink and the sparkle say it is
+            the one worth pressing. */}
+        <Btn full onClick={run} disabled={busy} style={{ fontSize: 14, color: T.accentInk }}>
+          {busy
+            ? <span className="flex items-center justify-center gap-2"><Rings size={17} />Working out how…</span>
+            /* The icon sits in the line of text rather than beside it as a flex
+               item, so if the label wraps — the tour's modal is narrower than
+               the feed, and so is a 320px phone — the sparkle travels with
+               the first word instead of floating alone at the left edge. */
+            : <span>
+                <span style={{ display: 'inline-flex', verticalAlign: '-2px', marginRight: 7 }}><Ico name="sparkle" size={15} /></span>
+                {atTop ? 'How do I make this airtight?' : `How do I get to ${target}?`}
+              </span>}
         </Btn>
         {err && <Sub style={{ marginTop: 8, color: T.red }}>{err}</Sub>}
       </div>
@@ -5298,14 +5311,25 @@ function AnnotatedAnswer({ answer, notes, defaultOpen = true }){
 
   return (
     <div style={{ marginTop: 12, paddingTop: 12, borderTop: `1px dashed ${T.border}` }}>
-      <button className="sf-tap" onClick={() => setOpen(o => !o)}
+      {/* A chevron rather than the words "hide"/"show". On a phone the counts
+          plus the word wrapped, and "hide" was left alone on a second line
+          like a stray word; the chevron is the universal toggle, takes a
+          fraction of the width, and the button says what it does to a
+          screen reader instead. */}
+      <button className="sf-tap" onClick={() => setOpen(o => !o)} aria-expanded={open}
+        aria-label={open ? 'Hide what you wrote' : 'Show what you wrote'}
         style={{ background: 'none', border: 'none', padding: 0, cursor: 'pointer', width: '100%' }}>
-        <div className="flex items-center justify-between" style={{ marginBottom: open ? 10 : 0 }}>
+        <div className="flex items-center justify-between" style={{ marginBottom: open ? 10 : 0, gap: 8 }}>
           <Chip colour={T.muted}>What you wrote</Chip>
-          <Sub style={{ fontSize: 11.5 }}>
-            {(located.length + orphans.length) > 0 ? `${located.length + orphans.length} note${(located.length + orphans.length) === 1 ? '' : 's'} · ` : ''}
-            {plural(words, 'word')} · {open ? 'hide' : 'show'}
-          </Sub>
+          <span className="flex items-center" style={{ gap: 6, color: T.faint }}>
+            <Sub style={{ fontSize: 11.5, whiteSpace: 'nowrap' }}>
+              {(located.length + orphans.length) > 0 ? plural(located.length + orphans.length, 'note') + ' · ' : ''}
+              {plural(words, 'word')}
+            </Sub>
+            <span style={{ display: 'flex', transform: open ? 'rotate(180deg)' : 'none', transition: 'transform 180ms' }}>
+              <Ico name="chevron" size={14} />
+            </span>
+          </span>
         </div>
       </button>
 
@@ -5411,7 +5435,9 @@ function MarkResult({ r, card, answer, level, deck, demo, onEdit }){
           kept, not cleared: this is an edit, not a fresh start. */}
       {onEdit && (
         <div style={{ marginTop: 12 }}>
-          <Btn full kind="soft" onClick={onEdit} style={{ fontSize: 14 }}>
+          {/* Default for the same reason as the upgrade button: soft on the
+              panel's well is invisible. */}
+          <Btn full onClick={onEdit} style={{ fontSize: 14 }}>
             <span className="flex items-center justify-center gap-2"><Ico name="pencil" size={15} />Improve this answer and mark again</span>
           </Btn>
         </div>
