@@ -61,7 +61,7 @@ const src = [
   extract('liveChain'), extractConst('isReasoner'), extractConst('takesReasoningEffort'),
   extractConst('ATTEMPT_MS'), extractConst('RETRY_WAIT_MS'), extract('isRetryable'), extract('isGoneModel'),
   extractConst('TOTAL_BUDGET_MS'), extractConst('HARD_TRIES'), extractConst('GEN_HEDGE_MS'),
-  extract('postOnce'), extract('postHedged'), extract('postChat'),
+  extract('postOnce'), extract('bodyFor'), extract('postHedged'), extract('postChat'),
   ['NCEA_RULES', 'isNcea', 'nceaRules', 'STRICT_CLAUSE', 'COMMAND_VERBS'].map(extractConst).join('\n'),
   extract('mixTargets'), extract('mixedPrompt'),
   'return { postChat, mixedPrompt, GEN_HEDGE_MS, TEXT_MODELS, hedged: () => __hedged, served: () => servedBy };',

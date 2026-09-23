@@ -40,10 +40,11 @@ function extract(name){
 /* PLAN is a list of { ms, ok, value|error } — one per call, in call order. */
 const H = new Function(`
 let PLAN = [], CALLS = [], TRACKED = [];
-function track(ev, props){ TRACKED.push(ev); }
+let TRACKPROPS = [];
+function track(ev, props){ TRACKED.push(ev); TRACKPROPS.push(props || {}); }
 function postOnce(body, timeoutMs, cancel){
   const step = PLAN[CALLS.length] || { ms: 5, ok: true, value: 'default' };
-  const rec = { timeoutMs, aborted: false, label: step.value || step.error };
+  const rec = { timeoutMs, aborted: false, label: step.value || step.error, model: body.model };
   CALLS.push(rec);
   return new Promise((resolve, reject) => {
     const t = setTimeout(() => step.ok ? resolve(step.value) : reject(new Error(step.error)), step.ms);
@@ -53,8 +54,8 @@ function postOnce(body, timeoutMs, cancel){
 ${extract('postHedged')}
 return {
   postHedged,
-  reset: (plan) => { PLAN = plan; CALLS = []; TRACKED = []; },
-  calls: () => CALLS, tracked: () => TRACKED,
+  reset: (plan) => { PLAN = plan; CALLS = []; TRACKED = []; TRACKPROPS = []; },
+  calls: () => CALLS, tracked: () => TRACKED, trackProps: () => TRACKPROPS,
 };
 `)();
 
@@ -128,6 +129,51 @@ r = await run([{ ms: 10, ok: true, value: 'A' }], BODY_WALL, BODY_WALL);
 check('a hedge at or past the wall is a plain request', H.calls()[0].timeoutMs, BODY_WALL);
 r = await run([{ ms: 10, ok: true, value: 'A' }], BODY_WALL, BODY_WALL - 500);
 check('and so is one too close to the wall to be worth sending', H.calls().length, 1);
+
+console.log('\n  — the duplicate goes to the next model in the chain —');
+/* The duplicate re-asking the SAME model was measured useless for marking
+   (r = 0.97) and is useless during a hang, when the head is the thing that is
+   stuck. Sent to the next model in the chain it is a different queue. */
+const runAlt = async (plan, wall, hedge) => {
+  H.reset(plan);
+  const seen = { won: 0, late: [] };
+  const alt = { body: { model: 'next' }, onWin: () => { seen.won++; }, onHeadFailedLate: (e) => { seen.late.push(e.message); } };
+  let out;
+  try { out = { ok: true, v: await H.postHedged({ model: 'head' }, wall, hedge, alt) }; }
+  catch (e){ out = { ok: false, e: e.message }; }
+  return { out, seen };
+};
+
+let x = await runAlt([{ ms: 400, ok: true, value: 'A' }, { ms: 20, ok: true, value: 'B' }], BODY_WALL, HEDGE);
+check('the duplicate is sent to the alternate model', H.calls().map(c => c.model), ['head', 'next']);
+check('and its answer is used', x.out, { ok: true, v: 'B' });
+check('the caller is told the alternate served it', x.seen.won, 1);
+check('the hedge is counted with where it went', H.trackProps()[0], { model: 'head', to: 'next' });
+await settle();
+check('the head is NOT aborted — it is left running to learn from', H.calls()[0].aborted, false);
+
+/* A hung head loses the race, then times out. That is a hang, and it has to be
+   learned — otherwise every later call pays the hedge delay for ever. */
+x = await runAlt([{ ms: 300, ok: false, error: 'timed out — the AI took too long to respond' }, { ms: 20, ok: true, value: 'B' }], BODY_WALL, HEDGE);
+await new Promise(r => setTimeout(r, 350));
+check('a head that fails after losing is reported', x.seen.late, ['timed out — the AI took too long to respond']);
+check('without disturbing the answer the student already has', x.out, { ok: true, v: 'B' });
+
+/* A slow-but-working head answers after losing: nothing to learn. */
+x = await runAlt([{ ms: 250, ok: true, value: 'A-late' }, { ms: 20, ok: true, value: 'B' }], BODY_WALL, HEDGE);
+await new Promise(r => setTimeout(r, 300));
+check('a head that answers late is NOT reported as hung', x.seen.late, []);
+
+x = await runAlt([{ ms: 120, ok: true, value: 'A' }, { ms: 400, ok: true, value: 'B' }], BODY_WALL, HEDGE);
+check('a head that still wins is kept', x.out, { ok: true, v: 'A' });
+check('and the alternate is not credited', x.seen.won, 0);
+await settle();
+check('and the alternate is aborted', H.calls()[1].aborted, true);
+
+x = await runAlt([{ ms: 10, ok: false, error: 'API returned 410 — gone' }], BODY_WALL, HEDGE);
+await new Promise(r => setTimeout(r, HEDGE + 40));
+check('an early head failure still goes straight back, with no alternate sent', [x.out.e, H.calls().length], ['API returned 410 — gone', 1]);
+check('and is not double-reported as a late failure', x.seen.late, []);
 
 console.log(`\n${failed ? failed + ' FAILED' : 'all passed'}`);
 if (failed) process.exit(1);

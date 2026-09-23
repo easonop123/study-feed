@@ -734,7 +734,7 @@ endpoint, and there it stays a silent no-op.
 | `deck_created` | cards, long |
 | `cards_generated` | cards, images, lost, mode, **served**, **walked** |
 | `generate_failed` | reason, **served**, **walked** |
-| `request_hedged` | model — a generate was still out at 25s and a duplicate was sent (see `postHedged`). Read it against `cards_generated`: the share of generates that fall into the free tier's slow mode, measured in the wild rather than from a probe |
+| `request_hedged` | model, **to** — a generate was still out at 25s and a duplicate was sent to the NEXT model in the chain (see `postHedged`). Read it against `cards_generated`: the share of generates that fall into the free tier's slow mode, measured in the wild rather than from a probe. `to` is where it went; a spike in hedges with `served` shifting to the second model is what a hung head looks like from the outside |
 | `answer_marked` | grade |
 | `working_marked` | grade, final |
 | `paper_started` / `paper_marked` / `paper_failed` | questions, asked, marks, grade, minutes, blank, shape, planned, steered, weak, reason |

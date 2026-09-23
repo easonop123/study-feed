@@ -102,9 +102,9 @@ function grab(fns, consts){
 /* Every name in the grab list has to be destructured too, or it is fetched and
    then thrown away — which is how trimQuoteWrapper came to be undefined at the
    one point score() needed it, and why a whole run died three cases in. */
-const { markPrompt, rescueObjects, locateNotes, placeNotes, quoteToRegex, trimQuoteWrapper, allOccurrences } =
+const { markPrompt, rescueObjects, locateNotes, placeNotes, quoteToRegex, trimQuoteWrapper, allOccurrences, isReasoner } =
   grab(['markPrompt', 'rescueObjects', 'trimQuoteWrapper', 'quoteToRegex', 'allOccurrences', 'placeNotes', 'locateNotes'],
-       ['NCEA_RULES', 'isNcea', 'nceaRules']);
+       ['NCEA_RULES', 'isNcea', 'nceaRules', 'isReasoner']);
 
 /* Exactly what markAnswer sends: callModel(prompt, 1700, MODEL_SMART) with no
    reasoning_effort — MODEL_SMART deliberately keeps its full thinking. Read
@@ -197,6 +197,13 @@ async function mark(card, answer, level){
      parameter is a 400 from NVIDIA, so this must never reach a model family
      nobody has tried it on. */
   if (EFFORT && /gpt-oss/i.test(MODEL)) body.reasoning_effort = EFFORT;
+  /* The switch postChat sends to a reasoning model, read from the app. Without
+     it this eval tested a request the app never sends: nemotron thinks out
+     loud by default, spends the ceiling on transcript and returns no JSON, so
+     `--model nvidia/nemotron-...` scored a working marker as broken. It is
+     the model the app falls back to whenever the head hangs, so it is the
+     one this most needed to measure honestly. */
+  if (isReasoner(MODEL)) body.chat_template_kwargs = { thinking: false };
   const started = Date.now();
   let res;
   try {

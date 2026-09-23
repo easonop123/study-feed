@@ -2555,6 +2555,24 @@ const HARD_TRIES = 8;
    so the model chain, the hang memory and every retry decision work exactly
    as they did.
 
+   THE DUPLICATE GOES TO THE NEXT MODEL IN THE CHAIN, not the same one again.
+   Two reasons, both measured on 24 Sep 2026. Re-asking the same model lands
+   in the same queue: for marking the pair correlated at r = 0.97 (below), so
+   a same-model duplicate is mostly a copy of the delay. And when the head is
+   HUNG — gemma-4 answered nothing for an afternoon, every request cut off at
+   the 86-88s wall — a same-model duplicate is a second request to a model
+   that is not answering, and the chain only moved on after the full wall.
+   Sent to the next model instead, same hour, interleaved, during that outage:
+
+                         unhedged            hedged to next model
+     successful calls    115.1s, 94.1s       54.9s, 32.0s          ~2.4x faster
+
+   When the alternate wins, the head is NOT aborted. It is left to run out, so
+   that if it times out the hang memory learns it exactly as if it had been
+   waited on (onHeadFailedLate -> noteHang), and the next ten minutes skip it
+   outright. Aborting it would have meant never learning the head was hung,
+   and every call paying the hedge delay for as long as the outage lasted.
+
    GENERATION ONLY, and marking was measured rather than left out by default
    (tools/probe-hedge-mark.mjs, 24 Sep 2026: 12 pairs of identical marks fired
    together, both allowed to finish). Two findings, both against it:
@@ -2573,32 +2591,71 @@ const HARD_TRIES = 8;
    it is only worth its extra requests while r stays low. */
 const GEN_HEDGE_MS = 25000;
 
-function postHedged(body, wall, hedgeAfter){
+/* One model's request. Decided per model rather than once per call, because a
+   chain walks several families and each takes its own switches — and because
+   a hedge now sends the SAME prompt to a DIFFERENT model, which needs that
+   model's switches, not the head's. */
+function bodyFor(id, messages, maxTokens, lowEffort){
+  const body = {
+    model: id,
+    messages,
+    temperature: isReasoner(id) ? 0.6 : 0.7,
+    top_p: 0.9,
+    max_tokens: maxTokens,
+    stream: false,
+  };
+  // Reasoning models: switch off chain-of-thought so replies are clean JSON.
+  if (isReasoner(id)) body.chat_template_kwargs = { thinking: false };
+  // gpt-oss ignores that flag; this is the lever it does take. Opt-in only —
+  // see takesReasoningEffort for why marking is deliberately left out.
+  if (lowEffort && takesReasoningEffort(id)) body.reasoning_effort = 'low';
+  return body;
+}
+
+function postHedged(body, wall, hedgeAfter, alt){
   if (!hedgeAfter || hedgeAfter >= wall - 1000) return postOnce(body, wall);
+  const altBody = (alt && alt.body) ? alt.body : body;
+  const crossModel = altBody !== body;
   return new Promise((resolve, reject) => {
     const cA = new AbortController(), cB = new AbortController();
-    let settled = false, sentB = false, failed = 0, firstErr = null, timer = null;
-    const win = (loser) => (value) => {
+    let settled = false, sentB = false, bWon = false, failed = 0, firstErr = null, timer = null;
+    postOnce(body, wall, cA.signal).then((value) => {
       if (settled) return;
-      settled = true; clearTimeout(timer); loser.abort();
+      settled = true; clearTimeout(timer); cB.abort();
       resolve(value);
-    };
-    const lose = (which) => (e) => {
-      if (settled) return;
+    }, (e) => {
+      if (settled){
+        /* Lost to a different model and then failed: that is how a hang is
+           learned without the student having waited on it. */
+        if (bWon && crossModel && alt && alt.onHeadFailedLate) alt.onHeadFailedLate(e);
+        return;
+      }
       if (!firstErr) firstErr = e;
       /* The original failed before we ever asked twice: that is an ordinary
          failure, not a race, and postChat is the thing that knows what to do
          with it. Hand it straight back. */
-      if (which === 'A' && !sentB){ settled = true; clearTimeout(timer); reject(e); return; }
+      if (!sentB){ settled = true; clearTimeout(timer); reject(e); return; }
       failed++;
       if (failed >= 2){ settled = true; reject(firstErr); }
-    };
-    postOnce(body, wall, cA.signal).then(win(cB), lose('A'));
+    });
     timer = setTimeout(() => {
       if (settled) return;
       sentB = true;
-      track('request_hedged', { model: body.model });
-      postOnce(body, wall - hedgeAfter, cB.signal).then(win(cA), lose('B'));
+      track('request_hedged', { model: body.model, to: altBody.model });
+      postOnce(altBody, wall - hedgeAfter, cB.signal).then((value) => {
+        if (settled) return;
+        settled = true; bWon = true;
+        /* Same model: nothing to learn from the loser, so free its slot.
+           Different model: leave the head running — see onHeadFailedLate. */
+        if (!crossModel) cA.abort();
+        if (alt && alt.onWin) alt.onWin();
+        resolve(value);
+      }, (e) => {
+        if (settled) return;
+        if (!firstErr) firstErr = e;
+        failed++;
+        if (failed >= 2){ settled = true; reject(firstErr); }
+      });
     }, hedgeAfter);
   });
 }
@@ -2611,20 +2668,7 @@ async function postChat(messages, maxTokens, model, lowEffort, hedgeAfter){
   while (tries < HARD_TRIES && left() > 1000){
     tries++;
     const id = chain[i % chain.length];
-    const body = {
-      model: id,
-      messages,
-      temperature: isReasoner(id) ? 0.6 : 0.7,
-      top_p: 0.9,
-      max_tokens: maxTokens,
-      stream: false,
-    };
-    // Reasoning models: switch off chain-of-thought so replies are clean JSON.
-    if (isReasoner(id)) body.chat_template_kwargs = { thinking: false };
-    // gpt-oss ignores that flag; this is the lever it does take. Opt-in only,
-    // and decided per model in the chain rather than once per call — see
-    // takesReasoningEffort for why marking is deliberately left out.
-    if (lowEffort && takesReasoningEffort(id)) body.reasoning_effort = 'low';
+    const body = bodyFor(id, messages, maxTokens, lowEffort);
 
     /* Never wait past the deadline, and never on a clock longer than the one
        the attempt schedule allows for this position in the walk. */
@@ -2634,7 +2678,20 @@ async function postChat(messages, maxTokens, model, lowEffort, hedgeAfter){
     /* Hedged on the FIRST attempt only. A retry is already a second roll of
        the dice; hedging it too would stack duplicates onto a queue that has
        just shown it is struggling. */
-    try { return await postHedged(body, wall, tries === 1 ? hedgeAfter : 0); }
+    /* The duplicate goes to the NEXT model in the chain, not the same one
+       again — see postHedged. A single-model chain (vision) has nowhere else
+       to go, so it re-asks the same model as before. */
+    const altId = (tries === 1 && hedgeAfter && chain.length > 1) ? chain[(i + 1) % chain.length] : null;
+    const alt = altId && altId !== id ? {
+      body: bodyFor(altId, messages, maxTokens, lowEffort),
+      onWin: () => { servedBy = altId; },
+      /* The head lost the race but was left running, precisely so this can
+         happen: if it then times out it really was hung, and the hang memory
+         skips it for the next ten minutes exactly as if it had been waited on.
+         If it answers late it was merely slow and nothing is remembered. */
+      onHeadFailedLate: (e) => { if (/timed out|could not reach/i.test(String(e && e.message || ''))) noteHang(id); },
+    } : null;
+    try { return await postHedged(body, wall, tries === 1 ? hedgeAfter : 0, alt); }
     catch (e){
       last = e;
       i++;

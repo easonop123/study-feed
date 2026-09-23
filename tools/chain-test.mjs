@@ -115,6 +115,7 @@ function harness(script, opts){
        straight to postOnce above, so the chain is still exercised over the one
        fake wire. Stubbing it instead would have let a hedge that broke the
        chain pass here. The hedge's own racing is tools/hedge-test.mjs. */
+    extract('bodyFor'),
     extract('postHedged'),
     extract('postChat'),
     'return { postChat, TEXT_MODELS, VISION_MODELS, calls: __calls, waits: __waits, now: () => __now, advance: (ms) => { __now += ms; } };',
