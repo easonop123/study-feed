@@ -7343,11 +7343,18 @@ function DraftReview({ drafts, setDrafts, meta, setMeta, onSave, onCancel, short
       <Sub style={{ marginBottom: 14 }}>Tap a card to drop it. {kept} of {drafts.length} kept.</Sub>
 
       <Card style={{ padding: 14, marginBottom: 14, boxShadow: SH.raised }}>
-        <div className="grid grid-cols-3 gap-2">
-          {['subject','topic','standard'].map(k => (
-            <div key={k}>
+        {/* Three across at 375px made every field 99px wide, so the topic and
+            the standard — the value a student is encouraged to spell out in
+            full ("NCEA Level 1 AS92022 genetic variation") — showed as
+            "What is an al" and "NCEA Lev". On a phone the standard gets a row of
+            its own (.sf-meta). And an empty field says what it is for, since
+            the guess is often nothing at all for a subject. */}
+        <div className="sf-meta">
+          {[['subject', 'e.g. Chemistry'], ['topic', 'e.g. Rates of reaction'], ['standard', 'e.g. NCEA Level 1']].map(([k, eg]) => (
+            <div key={k} className={k === 'standard' ? 'sf-meta-wide' : undefined}>
               <div style={{ fontFamily: SANS, fontSize: 12, fontWeight: 700, color: T.muted, textTransform: 'capitalize', marginBottom: 5 }}>{k}</div>
-              <input value={meta[k]} onChange={e => setMeta({ ...meta, [k]: e.target.value })}
+              <input value={meta[k]} onChange={e => setMeta({ ...meta, [k]: e.target.value })} placeholder={eg}
+                aria-label={k.charAt(0).toUpperCase() + k.slice(1)}
                 style={{ ...INPUT, padding: '9px 10px', fontSize: 13 }} />
             </div>
           ))}
@@ -11418,6 +11425,15 @@ function Shell({ children, tab, setTab, due, pending }){
           .sf-hero-ring-n { font-size: 18px; }
           .sf-hero-ring-l { font-size: 9px; margin-top: 2px; }
           .sf-wide-only { display: none; }
+        }
+
+        /* Draft review's subject / topic / standard: three across when there
+           is room, and on a phone the standard — the longest value — on a line
+           of its own. */
+        .sf-meta { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 8px; }
+        @media (max-width: 459px) {
+          .sf-meta { grid-template-columns: 1fr 1fr; }
+          .sf-meta-wide { grid-column: 1 / -1; }
         }
 
         /* one column on a phone, two once there's room */
