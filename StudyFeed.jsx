@@ -4063,9 +4063,12 @@ function Tip({ id, settings, onSettings, icon, tone, children }){
       border: `1px solid ${rgba(c, 0.18)}`, borderRadius: R.well, padding: '11px 13px' }}>
       <span style={{ color: c, marginTop: 1, flexShrink: 0 }}><Ico name={icon || 'bulb'} size={16} /></span>
       <div style={{ flex: 1, fontFamily: SANS, fontSize: 13, lineHeight: 1.5, color: T.ink }}>{children}</div>
-      <button className="sf-tap" onClick={dismiss} aria-label="Dismiss tip"
-        style={{ background: 'none', border: 'none', cursor: 'pointer', color: T.faint, fontSize: 18,
-          lineHeight: '16px', padding: '0 2px', flexShrink: 0 }}>×</button>
+      {/* Was a "×" glyph in a 16x16 box — under even WCAG 2.2's 24px minimum
+          (SC 2.5.8), on the one control every tip has. The icon stays small;
+          .sf-hit makes the area that answers a tap ~40px. */}
+      <button className="sf-tap sf-hit" onClick={dismiss} aria-label="Dismiss tip"
+        style={{ background: 'none', border: 'none', cursor: 'pointer', color: T.faint,
+          padding: 1, flexShrink: 0, display: 'flex' }}><Ico name="cross" size={14} weight={2.2} /></button>
     </div>
   );
 }
@@ -7269,7 +7272,7 @@ function Create({ onSave, settings, onSettings, onPending, onStarter, seed, onSe
             came here to press. */}
         {!hasMaterial && onStarter && (
           <div style={{ marginTop: 14, textAlign: 'center' }}>
-            <button onClick={onStarter} className="sf-tap"
+            <button onClick={onStarter} className="sf-tap sf-hit-y"
               style={{ background: 'none', border: 'none', cursor: 'pointer', padding: '4px 6px',
                 fontFamily: SANS, fontSize: 13.5, fontWeight: 600, color: T.accentInk }}>
               Nothing to paste? Take a ready-made deck →
@@ -7758,7 +7761,7 @@ function Stat({ n, k, colour }){
    somewhere else still wants one, and there is no sensible default to invent. */
 function Toggle({ on, onClick, label }){
   return (
-    <button className="sf-tap" onClick={onClick}
+    <button className="sf-tap sf-hit-y" onClick={onClick}
       role="switch" aria-checked={on ? 'true' : 'false'} aria-label={label || undefined}
       style={{ width: 50, height: 30, borderRadius: R.pill, border: 'none', flexShrink: 0, cursor: 'pointer',
         background: on ? T.green : 'var(--sf-track)', position: 'relative', transition: 'background 200ms' }}>
@@ -7841,7 +7844,7 @@ function TransferCard({ library, progress, onImport }){
           Export {chosenCards > 0 ? `(${plural(chosen.length, 'deck')} · ${plural(chosenCards, 'card')})` : ''}
         </Sub>
         {library.decks.length > 1 && (
-          <button className="sf-tap" onClick={() => picking ? setPicking(false) : startPicking()}
+          <button className="sf-tap sf-hit" onClick={() => picking ? setPicking(false) : startPicking()}
             style={{ background: 'none', border: 'none', cursor: 'pointer', padding: 0,
               fontFamily: SANS, fontSize: 12.5, fontWeight: 700, color: T.accentInk }}>
             {picking ? 'Export all' : 'Choose decks'}
@@ -8229,7 +8232,7 @@ function Home({ library, progress, stats, settings, due, onStart, onCreate, onDe
             <Card style={{ ...panel, flex: '1 1 340px' }}>
               <div className="flex items-center justify-between" style={{ marginBottom: 12 }}>
                 <span style={LBL}>Your decks</span>
-                <button className="sf-tap" onClick={onDecks} style={{ background: 'none', border: 'none', cursor: 'pointer', fontFamily: SANS, fontSize: 12.5, fontWeight: 650, color: T.accentInk }}>All decks →</button>
+                <button className="sf-tap sf-hit" onClick={onDecks} style={{ background: 'none', border: 'none', cursor: 'pointer', fontFamily: SANS, fontSize: 12.5, fontWeight: 650, color: T.accentInk }}>All decks →</button>
               </div>
               {deckRows.slice(0, 5).map(({ d, dueN, pct }, i) => {
                 const c = subjectColour(d.subject);
@@ -11328,6 +11331,18 @@ function Shell({ children, tab, setTab, due, pending }){
         .sf-act-sub { display: none; }
         @media (min-width: 460px) { .sf-act-sub { display: block; } }
         .sf-tap:active { transform: scale(0.985); }
+        /* Bigger places to tap, same drawing. A tap on ::after lands on the
+           element itself, so these grow the area that answers a finger without
+           moving a single pixel of layout. Measured before: the tip "x" was
+           16x16, the mute button 32x32, every switch 30px tall and the text
+           links 18-28px — all under the 44px a thumb needs, the first under
+           even WCAG's 24px minimum. -sm is for a control with a neighbour close
+           enough that the full 12px would reach over it; -y grows height only,
+           for things already wide enough. */
+        .sf-hit, .sf-hit-sm, .sf-hit-y { position: relative; }
+        .sf-hit::after    { content: ''; position: absolute; inset: -12px; }
+        .sf-hit-sm::after { content: ''; position: absolute; inset: -6px; }
+        .sf-hit-y::after  { content: ''; position: absolute; inset: -8px 0; }
         @media (hover: hover) {
           .sf-btn:hover:not(:disabled) { filter: brightness(0.98); }
           .sf-tap:hover { border-color: ${rgba(T.accent, 0.35)}; }
@@ -11473,7 +11488,7 @@ function Masthead({ due, streak, sound, onSound }){
         {due > 0 && <Chip colour={T.red} solid>{due} due</Chip>}
         {/* muting has to be one tap from wherever you are — this gets used in
             class, and hunting through Settings mid-lesson is not an option */}
-        <button className="sf-tap" onClick={onSound} aria-label={sound ? 'Mute sounds' : 'Unmute sounds'}
+        <button className="sf-tap sf-hit-sm" onClick={onSound} aria-label={sound ? 'Mute sounds' : 'Unmute sounds'}
           title={sound ? 'Mute sounds' : 'Unmute sounds'}
           style={{ width: 32, height: 32, borderRadius: R.pill, border: 'none', cursor: 'pointer',
             background: 'transparent', color: sound ? T.muted : T.faint, padding: 0, flexShrink: 0,
