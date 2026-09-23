@@ -70,6 +70,8 @@ const SUITES = [
     note: 'invented [?] lines are dropped; a word it could not read is kept' },
   { name: 'hedged requests', cmd: ['tools/hedge-test.mjs'],
     note: 'a slow request is asked twice, the loser aborted, early failures passed back' },
+  { name: 'backup-marker note', cmd: ['tools/marker-note-test.mjs'],
+    note: 'a grade from the fallback says so; the head\'s and the tour\'s never do' },
 ];
 
 /* WAIT FOR THE PROCESS, NOT FOR ITS PIPES.

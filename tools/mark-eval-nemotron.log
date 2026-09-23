@@ -1,0 +1,116 @@
+(node:8620) [MODULE_TYPELESS_PACKAGE_JSON] Warning: Module type of file:///C:/Users/Eason/StudyFeed/starter-decks.js is not specified and it doesn't parse as CommonJS.
+Reparsing as ES module because module syntax was detected. This incurs a performance overhead.
+To eliminate this warning, add "type": "module" to \\?\C:\Users\Eason\StudyFeed\package.json.
+(Use `node --trace-warnings ...` to show where the warning was created)
+Marking eval — 42 calls against https://studyfeed.app/api/nvidia
+Model: nvidia/nemotron-3.5-lightning-30b-a3b, max_tokens 3000, reasoning full
+
+[  1/42] genetics #0 not-yet           Achieved    7.08s  ⚠ GRADE Achieved want Not yet
+[  2/42] genetics #0 achieved          Achieved    6.42s  ok
+[  3/42] genetics #0 merit             FAILED — HTTP 504: {"error":"NVIDIA did not respond in time — the model timed out."}
+[  4/42] genetics #0 excellence        FAILED — HTTP 504: {"error":"NVIDIA did not respond in time — the model timed out."}
+[  5/42] genetics #0 waffle            Achieved    14.7s  ⚠ GRADE Achieved want Not yet
+[  6/42] genetics #0 terse-correct     FAILED — no JSON object in reply
+[  7/42] genetics #0 confident-error   FAILED — HTTP 504: {"error":"NVIDIA did not respond in time — the model timed out."}
+[  8/42] genetics #1 not-yet           FAILED — HTTP 504: {"error":"NVIDIA did not respond in time — the model timed out."}
+[  9/42] genetics #1 achieved          Achieved    18.9s  ok
+[ 10/42] genetics #1 merit             FAILED — HTTP 504: {"error":"NVIDIA did not respond in time — the model timed out."}
+[ 11/42] genetics #1 excellence        Merit       18.0s  ⚠ GRADE Merit want Excellence · 1 quote dropped
+[ 12/42] genetics #1 waffle            Achieved    7.44s  ⚠ GRADE Achieved want Not yet
+[ 13/42] genetics #1 terse-correct     FAILED — HTTP 504: {"error":"NVIDIA did not respond in time — the model timed out."}
+[ 14/42] genetics #1 confident-error   Not yet     3.30s  ok
+[ 15/42] acids-bases #0 not-yet           Achieved    19.6s  ⚠ GRADE Achieved want Not yet
+[ 16/42] acids-bases #0 achieved          Achieved    45.1s  ok
+[ 17/42] acids-bases #0 merit             Merit       9.77s  ok
+[ 18/42] acids-bases #0 excellence        Merit       4.43s  ⚠ GRADE Merit want Excellence
+[ 19/42] acids-bases #0 waffle            Achieved    6.72s  ⚠ GRADE Achieved want Not yet · 1 quote dropped
+[ 20/42] acids-bases #0 terse-correct     Merit       13.4s  ok
+[ 21/42] acids-bases #0 confident-error   FAILED — HTTP 504: {"error":"NVIDIA did not respond in time — the model timed out."}
+[ 22/42] acids-bases #1 not-yet           Achieved    17.7s  ⚠ GRADE Achieved want Not yet
+[ 23/42] acids-bases #1 achieved          Achieved    7.64s  ok
+[ 24/42] acids-bases #1 merit             FAILED — HTTP 504: {"error":"NVIDIA did not respond in time — the model timed out."}
+[ 25/42] acids-bases #1 excellence        Merit       22.9s  ⚠ GRADE Merit want Excellence
+[ 26/42] acids-bases #1 waffle            FAILED — no JSON object in reply
+[ 27/42] acids-bases #1 terse-correct     Achieved    11.9s  ⚠ 1 quote dropped
+[ 28/42] acids-bases #1 confident-error   Not yet     8.39s  ok
+[ 29/42] writing-about-text #0 not-yet           FAILED — no JSON object in reply
+[ 30/42] writing-about-text #0 achieved          Achieved    9.57s  ok
+[ 31/42] writing-about-text #0 merit             FAILED — no JSON object in reply
+[ 32/42] writing-about-text #0 excellence        Merit       26.7s  ⚠ GRADE Merit want Excellence
+[ 33/42] writing-about-text #0 waffle            Achieved    3.17s  ⚠ GRADE Achieved want Not yet
+[ 34/42] writing-about-text #0 terse-correct     Merit       8.96s  ⚠ 1 quote dropped
+[ 35/42] writing-about-text #0 confident-error   Not yet     5.19s  ok
+[ 36/42] writing-about-text #1 not-yet           FAILED — no JSON object in reply
+[ 37/42] writing-about-text #1 achieved          FAILED — HTTP 504: {"error":"NVIDIA did not respond in time — the model timed out."}
+[ 38/42] writing-about-text #1 merit             FAILED — HTTP 504: {"error":"NVIDIA did not respond in time — the model timed out."}
+[ 39/42] writing-about-text #1 excellence        Merit       11.9s  ⚠ GRADE Merit want Excellence
+[ 40/42] writing-about-text #1 waffle            Achieved    3.86s  ⚠ GRADE Achieved want Not yet
+[ 41/42] writing-about-text #1 terse-correct     FAILED — HTTP 504: {"error":"NVIDIA did not respond in time — the model timed out."}
+[ 42/42] writing-about-text #1 confident-error   Achieved    12.5s  ok
+
+========================================================================
+SUMMARY
+========================================================================
+Calls            42  (16 failed outright)
+Grade in band    13/26  50%
+All-good notes   0/26  0%   (should be 0)
+Unanchored       4/90  4%  across 26 answers with notes
+  ...not found   1   (model did not copy the answer at all)
+  ...overlapping 3   (findable, but another note took the span)
+  ...too short   0
+  (all of these still SHOW — they just carry no highlight)
+Truncated        0
+Missing "lift"   0
+Cited a standard 0/26  0%   (should be 0 — it has never seen one)
+Latency          median 9.8s   slowest 45.2s
+Completion tokens median 367  p90 464  max 3000  (ceiling 3000)
+
+BY CASE KIND
+  not-yet            0/3 in band   → Achieved, Achieved, Achieved
+  achieved           5/5 in band   → Achieved, Achieved, Achieved, Achieved, Achieved
+  waffle             0/5 in band   → Achieved, Achieved, Achieved, Achieved, Achieved
+  excellence         0/5 in band   → Merit, Merit, Merit, Merit, Merit
+  confident-error    4/4 in band   → Not yet, Not yet, Not yet, Achieved
+  merit              1/1 in band   → Merit
+  terse-correct      3/3 in band   → Merit, Achieved, Merit
+
+OFF-BAND
+  genetics #0 not-yet            got Achieved, wanted Not yet
+  genetics #0 waffle             got Achieved, wanted Not yet
+  genetics #1 excellence         got Merit, wanted Excellence
+  genetics #1 waffle             got Achieved, wanted Not yet
+  acids-bases #0 not-yet            got Achieved, wanted Not yet
+  acids-bases #0 excellence         got Merit, wanted Excellence
+  acids-bases #0 waffle             got Achieved, wanted Not yet
+  acids-bases #1 not-yet            got Achieved, wanted Not yet
+  acids-bases #1 excellence         got Merit, wanted Excellence
+  writing-about-text #0 excellence         got Merit, wanted Excellence
+  writing-about-text #0 waffle             got Achieved, wanted Not yet
+  writing-about-text #1 excellence         got Merit, wanted Excellence
+  writing-about-text #1 waffle             got Achieved, wanted Not yet
+
+FAILED CALLS
+  genetics #0 merit              HTTP 504: {"error":"NVIDIA did not respond in time — the model timed out."}
+  genetics #0 excellence         HTTP 504: {"error":"NVIDIA did not respond in time — the model timed out."}
+  genetics #0 terse-correct      no JSON object in reply
+  genetics #0 confident-error    HTTP 504: {"error":"NVIDIA did not respond in time — the model timed out."}
+  genetics #1 not-yet            HTTP 504: {"error":"NVIDIA did not respond in time — the model timed out."}
+  genetics #1 merit              HTTP 504: {"error":"NVIDIA did not respond in time — the model timed out."}
+  genetics #1 terse-correct      HTTP 504: {"error":"NVIDIA did not respond in time — the model timed out."}
+  acids-bases #0 confident-error    HTTP 504: {"error":"NVIDIA did not respond in time — the model timed out."}
+  acids-bases #1 merit              HTTP 504: {"error":"NVIDIA did not respond in time — the model timed out."}
+  acids-bases #1 waffle             no JSON object in reply
+  writing-about-text #0 not-yet            no JSON object in reply
+  writing-about-text #0 merit              no JSON object in reply
+  writing-about-text #1 not-yet            no JSON object in reply
+  writing-about-text #1 achieved           HTTP 504: {"error":"NVIDIA did not respond in time — the model timed out."}
+  writing-about-text #1 merit              HTTP 504: {"error":"NVIDIA did not respond in time — the model timed out."}
+  writing-about-text #1 terse-correct      HTTP 504: {"error":"NVIDIA did not respond in time — the model timed out."}
+Error: ENOENT: no such file or directory, open 'C:\Users\Eason\StudyFeed\tools\tools\mark-eval-nemotron.json'
+    at writeFileSync (node:fs:2422:20)
+    at main (file:///C:/Users/Eason/StudyFeed/tools/mark-eval.mjs:363:3) {
+  errno: -4058,
+  code: 'ENOENT',
+  syscall: 'open',
+  path: 'C:\\Users\\Eason\\StudyFeed\\tools\\tools\\mark-eval-nemotron.json'
+}

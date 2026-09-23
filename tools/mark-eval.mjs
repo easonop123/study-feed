@@ -31,7 +31,7 @@
 
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
-import { dirname, join } from 'node:path';
+import { dirname, join, resolve } from 'node:path';
 import { modelFromArgs, checkerDeadlineMs } from './app-source.mjs';
 import { CASES } from './mark-eval-cases.mjs';
 /* Static so Node's MODULE_TYPELESS_PACKAGE_JSON warning about this file prints
@@ -358,7 +358,14 @@ async function main(){
   }
 
   report(rows);
-  const outPath = join(HERE, arg('out', 'mark-eval-results.json'));
+  /* join(HERE, ...) is right for a bare filename and wrong for a path the
+     caller typed: `--out tools/x.json` from the repo root became
+     tools/tools/x.json and threw at the very last line, after every live call
+     had been paid for. It has now lost two full runs that way (16 Sep, and the
+     42-case nemotron run on 24 Sep). Resolve a typed path against the cwd;
+     keep the old behaviour for a bare name. */
+  const outArg = arg('out', 'mark-eval-results.json');
+  const outPath = /[\/]/.test(outArg) ? resolve(outArg) : join(HERE, outArg);
   const { writeFileSync } = await import('node:fs');
   writeFileSync(outPath, JSON.stringify(rows, null, 2));
   console.log(`\nFull rows: ${outPath}`);

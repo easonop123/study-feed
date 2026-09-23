@@ -3032,10 +3032,50 @@ RULES FOR "notes" — these are shown highlighted on top of the student's own wr
    tokens, so raising it does not make the ordinary call more expensive. If
    more required output is ever added to this prompt, re-run the eval rather
    than assuming the headroom is still there. */
+/* WHICH MARKER GAVE THIS GRADE — said out loud when it is not the one the
+   marking is measured on.
+
+   The chain falls back to another model when the head does not answer, and on
+   24 Sep 2026 the head (gemma-4) was hung for an afternoon, so every mark in
+   that window came from the fallback. That fallback was then run through the
+   same 42-case corpus the head is held to (tools/mark-eval-nemotron.log):
+
+                        gemma-4 (#30)     nemotron-3.5-lightning
+     grade in band      38/42  90%        13/26  50%
+     failed outright    0                 16/42  38%
+     Excellence         —                 0/5   every one marked Merit
+     waffle             —                 0/5   every one rewarded Achieved
+     Not yet            —                 0/3   every one marked Achieved
+
+   It squashes grades toward the middle. A student with an Excellence answer is
+   told Merit; one who wrote three fluent sentences of nothing is told
+   Achieved. Handing that over silently is the worst of the options. Refusing
+   to mark while the head is down is a real alternative, and a product
+   decision rather than this function's — so for now the grade is given, and
+   the student is told plainly where it came from and what it gets wrong. A
+   second attempt costs them nothing: the answer survives a reload
+   (drafts:main) and is still on screen.
+
+   Keyed by model and by what was marked, because the specific tendencies were
+   measured for nemotron on WRITTEN answers only. Any other stand-in, and any
+   stand-in marking working, gets the plain version — true of every fallback,
+   and claiming nothing that was not measured. The tour's canned marks carry
+   no servedBy and never show it. */
+function markerNote(by, kind){
+  if (!by || by === TEXT_MODELS[0]) return '';
+  const base = 'The main marker was too busy, so a backup marked this one.';
+  if (kind === 'answer' && /nemotron/i.test(by))
+    return base + ' It is measurably less reliable at the ends of the scale — it almost never gives Excellence and is too generous to thin answers — so mark it again in a few minutes for a firmer grade.';
+  return base + ' Mark it again in a few minutes for a firmer grade.';
+}
+
 async function markAnswer(card, answer, level){
   const reply = await callModel(markPrompt(card, answer, level), 3000, MODEL_SMART);
-  const objs = rescueObjects(reply);
-  return objs[0] || null;
+  /* Read at once, before anything else can start a request and move it. */
+  const by = servedBy;
+  const obj = rescueObjects(reply)[0] || null;
+  if (obj) obj.servedBy = by;
+  return obj;
 }
 
 /* The notes rules are deliberately NOT shared with markPrompt, and this is not
@@ -3097,8 +3137,10 @@ RULES FOR "notes" — these are shown highlighted on top of the student's own wo
    loss of the mark rather than a degraded one. */
 async function markWorking(card, working, level){
   const reply = await callModel(markWorkingPrompt(card, working, level), 3000, MODEL_SMART);
-  const objs = rescueObjects(reply);
-  return objs[0] || null;
+  const by = servedBy;
+  const obj = rescueObjects(reply)[0] || null;
+  if (obj) obj.servedBy = by;
+  return obj;
 }
 
 /* The first step that is actually wrong — not the first that looks wrong.
@@ -5470,6 +5512,12 @@ function MarkResult({ r, card, answer, level, deck, demo, onEdit }){
   return (
     <div style={{ ...PANEL, marginTop: 12, animation: 'sf-reveal 260ms cubic-bezier(.2,.8,.3,1)' }}>
       <Chip colour={gc} solid>{r.grade}</Chip>
+      {markerNote(r.servedBy, 'answer') && (
+        <Sub style={{ fontSize: 12.5, marginTop: 9, display: 'flex', gap: 8, alignItems: 'flex-start' }}>
+          <InlineIco name="warn" size={15} style={{ marginTop: 2, color: T.amber }} />
+          <span>{markerNote(r.servedBy, 'answer')}</span>
+        </Sub>
+      )}
       {Array.isArray(r.hit) && r.hit.length > 0 && (
         <div style={{ marginTop: 10 }}>
           <Sub style={{ fontWeight: 700, color: T.ink }}>What earned credit</Sub>
@@ -5547,6 +5595,12 @@ function WorkedResult({ r, card, working, onEdit }){
         <Chip colour={gc} solid>{r.grade}</Chip>
         <Chip colour={finalC}>{finalWord}</Chip>
       </div>
+      {markerNote(r.servedBy, 'working') && (
+        <Sub style={{ fontSize: 12.5, marginTop: 9, display: 'flex', gap: 8, alignItems: 'flex-start' }}>
+          <InlineIco name="warn" size={15} style={{ marginTop: 2, color: T.amber }} />
+          <span>{markerNote(r.servedBy, 'working')}</span>
+        </Sub>
+      )}
 
       {/* The one fact worth pulling out of a page of marking. Everything after
           a slip in a calculation is contaminated by it, so where it STARTED is
