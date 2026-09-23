@@ -2953,14 +2953,24 @@ async function mapLimit(items, limit, fn, onDone){
   return out;
 }
 
-async function genText(source, mode, level, onProgress, model, pctLong, strict){
+async function genText(source, mode, level, onProgress, model, pctLong, strict, onCards){
   const batches = batchText(source);
   onProgress && onProgress(0, batches.length, 'text');
   /* genChunk swallows its own failures and returns [], so a chunk that dies
      cannot take the others down with it — which is what makes running them
-     together safe. */
+     together safe.
+
+     onCards gets each section's cards the moment that section lands, rather
+     than all of them once the slowest has. Sections run three at a time and
+     generation is bimodal (~15s or ~50s), so three sections usually include a
+     slow one: waiting for all of them meant waiting for the worst of three.
+     The return value is unchanged — every card, in order — for callers that
+     want the whole set. */
   const per = await mapLimit(batches, GEN_CONCURRENCY,
-    (b) => genChunk(b, mode, level, model, pctLong, strict, 0),
+    (b) => genChunk(b, mode, level, model, pctLong, strict, 0).then((got) => {
+      if (onCards && got && got.length) onCards(got);
+      return got;
+    }),
     (done, total) => { onProgress && onProgress(done, total, 'text'); });
   let cards = [];
   for (let i = 0; i < per.length; i++) cards = cards.concat(per[i]);
@@ -7128,6 +7138,7 @@ function Create({ onSave, settings, onSettings, onPending, onStarter, seed, onSe
   const [prog, setProg] = useState(null);
   const [err, setErr] = useState('');
   const [drafts, setDrafts] = useState(null);
+  const genRun = useRef(0);   // bumped per run and on Discard — see run()
   // set when some sections of the material failed but others produced cards
   const [shortfall, setShortfall] = useState('');
   const [meta, setMeta] = useState({ subject: '', topic: '', standard: 'NCEA Level 1' });
@@ -7190,12 +7201,29 @@ function Create({ onSave, settings, onSettings, onPending, onStarter, seed, onSe
 
     setBusy(true); setErr(''); setProg(null); setShortfall('');
     lastApiError = ''; genLost = 0;
+    /* CARDS LAND AS THEY ARE MADE. The review screen opens on the first
+       section's cards, and the rest are appended as their sections finish, so
+       the student reads and prunes while the slow sections are still out.
+       A token per run: Discard bumps it, so a section that lands after the
+       student has thrown the set away is dropped rather than bringing the
+       drafts back. The subject and topic are guessed ONCE, on the first batch,
+       so a later batch never overwrites what the student has typed there; and
+       the old end-of-run setDrafts is gone, because replacing the list would
+       reset every card they had already dropped. */
+    const token = ++genRun.current;
+    let metaSet = false;
+    const land = (batch) => {
+      if (genRun.current !== token) return;
+      const fresh = batch.map(c => ({ ...c, keep: true }));
+      setDrafts(prev => dedupeCards((prev || []).concat(fresh)));
+      if (!metaSet){ metaSet = true; setMeta({ subject: guessSubject(source), topic: guessTopic(source), standard: lvl }); }
+    };
     try {
       const model = pickModel(cardType, settings);
       let cards = [];
       const pctLong = longMixOf(settings);
       const strict = strictSource;
-      if (source.trim()) cards = cards.concat(await genText(source, cardType, lvl, (i, n, phase) => setProg({ i, n, phase }), model, pctLong, strict));
+      if (source.trim()) cards = cards.concat(await genText(source, cardType, lvl, (i, n, phase) => setProg({ i, n, phase }), model, pctLong, strict, land));
       if (images.length){
         setProg({ i: 0, n: 0, phase: 'prep' });
         const shrunk = [];
@@ -7203,10 +7231,12 @@ function Create({ onSave, settings, onSettings, onPending, onStarter, seed, onSe
         if (shrunk.length){
           // read each image into study text, then make cards from that text
           const imgText = await transcribeImages(shrunk, (i, n) => setProg({ i, n, phase: 'images' }));
-          if (imgText.trim()) cards = cards.concat(await genText(imgText, cardType, lvl, (i, n, phase) => setProg({ i, n, phase }), model, pctLong, strict));
+          if (imgText.trim()) cards = cards.concat(await genText(imgText, cardType, lvl, (i, n, phase) => setProg({ i, n, phase }), model, pctLong, strict, land));
           else if (!cards.length){ setErr('Could not read those images. Try a clearer photo.'); setBusy(false); setProg(null); return; }
         } else if (!cards.length){ setErr('Could not read those images. Try a clearer photo.'); setBusy(false); setProg(null); return; }
       }
+      /* Thrown away mid-run: nothing below is the student's business now. */
+      if (genRun.current !== token) return;
       cards = dedupeCards(cards);
       if (!cards.length){
         /* The likelier failure than a throw: genChunk swallows its own errors
@@ -7239,8 +7269,7 @@ function Create({ onSave, settings, onSettings, onPending, onStarter, seed, onSe
         setShortfall('The AI ran out of time on ' + genLost + (genLost === 1 ? ' section' : ' sections')
           + ' of your material, so this is a shorter set than usual. It is the AI being slow, not your connection. Save these, then generate again from the parts that are missing.');
       }
-      setMeta({ subject: guessSubject(source), topic: guessTopic(source), standard: lvl });
-      setDrafts(cards.map(c => ({ ...c, keep: true })));
+      /* Already on screen — landed section by section by land() above. */
       /* Generated, not yet saved — the gap between this and deck_created is the
          number that says whether the cards coming back are any good. */
       track('cards_generated', { cards: cards.length, images: images.length,
@@ -7254,7 +7283,8 @@ function Create({ onSave, settings, onSettings, onPending, onStarter, seed, onSe
 
   if (drafts){
     return <DraftReview drafts={drafts} setDrafts={setDrafts} meta={meta} setMeta={setMeta} shortfall={shortfall}
-      onCancel={() => { setDrafts(null); setShortfall(''); }}
+      live={busy ? (prog || { i: 0, n: 0 }) : null}
+      onCancel={() => { genRun.current++; setDrafts(null); setShortfall(''); }}
       onSave={() => { onSave(drafts.filter(d => d.keep), meta); setDrafts(null); setShortfall(''); setSource(''); setImages([]); }} />;
   }
 
@@ -7417,9 +7447,12 @@ function draftPreview(d){
   return { tag: 'Flip', main: d.front, sub: d.back };
 }
 
-function DraftReview({ drafts, setDrafts, meta, setMeta, onSave, onCancel, shortfall }){
+function DraftReview({ drafts, setDrafts, meta, setMeta, onSave, onCancel, shortfall, live }){
   const kept = drafts.filter(d => d.keep).length;
-  const toggle = (id) => setDrafts(drafts.map(d => d.id === id ? { ...d, keep: !d.keep } : d));
+  /* Functional, not `drafts.map(...)` from this render's closure: cards are
+     appended while this screen is open, and a tap computed from a stale list
+     would write it back and delete whatever had just landed. */
+  const toggle = (id) => setDrafts(ds => ds.map(d => d.id === id ? { ...d, keep: !d.keep } : d));
   const colour = subjectColour(meta.subject);
 
   return (
@@ -7442,6 +7475,18 @@ function DraftReview({ drafts, setDrafts, meta, setMeta, onSave, onCancel, short
           <Sub style={{ color: T.accentInk, fontWeight: 600, fontSize: 13, display: 'flex', gap: 8, alignItems: 'flex-start' }}>
             <InlineIco name="warn" size={14} style={{ marginTop: 2 }} />
             <span>{shortfall}</span>
+          </Sub>
+        </div>
+      )}
+      {live && (
+        <div style={{ background: rgba(T.accent, 0.08), borderRadius: R.well, padding: '11px 14px', marginBottom: 14 }}>
+          <Sub style={{ fontSize: 13, display: 'flex', gap: 9, alignItems: 'center', color: T.ink }}>
+            <Rings size={16} />
+            <span>
+              <b>Still making cards</b>
+              {live.n > 0 ? (live.phase === 'images' ? ' — reading slide ' + live.i + ' of ' + live.n : ' — ' + live.i + ' of ' + live.n + ' sections done') : ''}
+              . Look through these while the rest arrive.
+            </span>
           </Sub>
         </div>
       )}
@@ -7485,7 +7530,11 @@ function DraftReview({ drafts, setDrafts, meta, setMeta, onSave, onCancel, short
         })}
       </div>
 
-      <Btn full kind="primary" onClick={onSave} disabled={!kept}>Save {plural(kept, 'card')}</Btn>
+      {/* Waits for the last section: saving early would leave the cards still on
+          their way with nowhere to land. */}
+      <Btn full kind="primary" onClick={onSave} disabled={!kept || !!live}>
+        {live ? 'Making the rest…' : 'Save ' + plural(kept, 'card')}
+      </Btn>
     </div>
   );
 }
