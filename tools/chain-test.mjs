@@ -110,6 +110,12 @@ function harness(script, opts){
     extract('isGoneModel'),
     extractConst('TOTAL_BUDGET_MS'),
     extractConst('HARD_TRIES'),
+    /* The real hedge, not a stand-in: postChat hands every attempt to it. With
+       no hedge delay — which is every call these checks make — it forwards
+       straight to postOnce above, so the chain is still exercised over the one
+       fake wire. Stubbing it instead would have let a hedge that broke the
+       chain pass here. The hedge's own racing is tools/hedge-test.mjs. */
+    extract('postHedged'),
     extract('postChat'),
     'return { postChat, TEXT_MODELS, VISION_MODELS, calls: __calls, waits: __waits, now: () => __now, advance: (ms) => { __now += ms; } };',
   ].join('\n');

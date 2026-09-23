@@ -2525,18 +2525,28 @@ const HARD_TRIES = 8;
 
    Measured rather than assumed (tools/probe-hedge.mjs, 10 rounds of two
    identical requests fired together): correlation between the pair r = 0.35,
-   so mostly independent. Hedging at 20s:
+   so mostly independent. Then checked end to end through this exact code
+   (tools/probe-hedge-live.mjs), alternating hedged and unhedged generates in
+   the same hour so both saw the same queue. Two different afternoons:
 
-                 single    hedge@20s
-     mean        30.2s     25.3s
-     p90         65.3s     46.7s
-     worst       83.7s     46.7s      second request sent on 40% of calls
+                     queue in its slow mode        queue calm
+                     single     hedged             single     hedged
+     p90             65.3s      46.7s              40.9s      33.5s
+     worst           83.7s      46.7s              40.9s      33.5s
+     mean            30.2s      25.3s              22.2s      22.6s
 
-   20s is not arbitrary: it sits in the gap between the two modes, so a request
-   that was going to be fast never triggers a duplicate, and one that has
-   fallen into the slow mode gets a fresh roll of the dice. Lower thresholds
-   hedge requests that were about to finish; 15s fired 80% of the time for
-   almost no extra gain.
+   So what it buys is THE TAIL, in both conditions — the "it took over a
+   minute" wait, which is the one students remember — and not the mean, which
+   on a calm afternoon it does not move at all. That is the right thing to
+   buy: nobody notices 22s against 23s.
+
+   25s, not the 20s it was first set to. The fast mode is not fixed: 12-19s on
+   the first afternoon, 14-22s on the second. At 20s the calm run sent a
+   duplicate on 62% of calls, most of them for requests that were a second or
+   two from finishing — load for nothing. 25s clears the fast mode's top on
+   both days, so a request that was going to be fast never triggers one, and
+   one that has fallen into the slow mode (44-84s) still gets a fresh roll of
+   the dice early enough to matter.
 
    The duplicate shares the original's deadline, so a hedged call never runs
    longer than an unhedged one would have been allowed to. The loser is
@@ -2544,7 +2554,7 @@ const HARD_TRIES = 8;
    duplicate was sent, that failure goes straight back to postChat unchanged,
    so the model chain, the hang memory and every retry decision work exactly
    as they did. */
-const GEN_HEDGE_MS = 20000;
+const GEN_HEDGE_MS = 25000;
 
 function postHedged(body, wall, hedgeAfter){
   if (!hedgeAfter || hedgeAfter >= wall - 1000) return postOnce(body, wall);

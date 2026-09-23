@@ -68,6 +68,8 @@ const SUITES = [
     note: 'a half-written answer survives a reload, including typing mid-load' },
   { name: 'photo transcripts', cmd: ['tools/transcript-test.mjs'],
     note: 'invented [?] lines are dropped; a word it could not read is kept' },
+  { name: 'hedged requests', cmd: ['tools/hedge-test.mjs'],
+    note: 'a slow request is asked twice, the loser aborted, early failures passed back' },
 ];
 
 /* WAIT FOR THE PROCESS, NOT FOR ITS PIPES.

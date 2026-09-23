@@ -166,7 +166,12 @@ const PLAN_MAX  = ceiling('PLAN_MAX_TOKENS');
 /* genChunk, buildPaper and planPaper do not match the callSite shape (they pass
    a model variable and a computed prompt), so their settings stay explicit —
    all three pass lowEffort:true, which is checked by reading the call line. */
-const GEN_LOW   = /callModel\(promptFor\([^)]*\), GEN_MAX_TOKENS, model, true\)/.test(SRC);
+/* An optional trailing argument is allowed: genChunk now passes GEN_HEDGE_MS
+   after lowEffort. The hedge is client-side timing — it sends the SAME request
+   again — so it changes nothing about the request this check builds, and must
+   not quietly turn this into "low: false" the way a stricter match would. */
+const GEN_LOW   = /callModel\(promptFor\([^)]*\), GEN_MAX_TOKENS, model, true(?:, [A-Z_]+)?\)/.test(SRC);
+if (!GEN_LOW) throw new Error('grab: genChunk no longer passes lowEffort — read its call line before trusting this check');
 const PAPER_LOW = /PAPER_MAX_TOKENS, MODEL_SMART, true\)/.test(SRC);
 const PLAN_LOW  = /PLAN_MAX_TOKENS, MODEL_SMART, true\)/.test(SRC);
 
