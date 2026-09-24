@@ -9835,7 +9835,14 @@ function cleanBlueprint(arr, want){
 }
 
 async function buildDiagnostic(topic, level, n){
-  const reply = await callModel(blueprintPrompt(topic, level, n), 3000, MODEL_GEN, true);
+  /* Hedged like generation: this is WRITING the test, not grading it, and the
+     chain's second model was measured writing it well (tools/diagnose-eval.mjs
+     --blueprint, 24 Sep 2026 — nemotron: right rung spread, 100% standalone
+     probes, 0 over-pitched, 0 standards cited, about gemma's quality). It is
+     the first thing Find my gaps does and the student sees nothing until it
+     returns, so on a hung head it cost the full 88s before the first question.
+     The READING of the answers is a grade, and is not hedged. */
+  const reply = await callModel(blueprintPrompt(topic, level, n), 3000, MODEL_GEN, true, GEN_HEDGE_MS);
   return cleanBlueprint(parseJsonArray(reply), n);
 }
 
