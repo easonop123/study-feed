@@ -4029,7 +4029,7 @@ function Rings({ size = 92 }){
       <div style={ring(35, 0, 90, T.accent, 3, 1, 0.85)} />
       <div style={ring(42, 0, 120, T.accentInk, 2.5, 1, 0.9)} />
       <div style={ring(52, 180, 45, T.accent, 4, -1, 0.4)} />
-      <div style={ring(61, 270, 20, T.green, 3.5, 1, 0.55)} />
+      <div style={ring(61, 270, 20, T.accentInk, 3.5, 1, 0.55)} />
     </div>
   );
 }
@@ -10275,7 +10275,7 @@ function PatchNotesList({ notes, showVersion }){
           <div className="flex flex-col gap-2" style={{ marginTop: 12 }}>
             {rel.items.map((it, i) => (
               <div key={i} className="flex gap-3" style={{ alignItems: 'flex-start' }}>
-                <span style={{ color: T.green, fontWeight: 800, fontSize: 14, lineHeight: '20px', flexShrink: 0 }}>›</span>
+                <span style={{ color: T.accentInk, fontWeight: 800, fontSize: 14, lineHeight: '20px', flexShrink: 0 }}>›</span>
                 <span style={{ fontFamily: SANS, fontSize: 14, lineHeight: 1.5, color: T.ink }}>{it}</span>
               </div>
             ))}
@@ -11719,6 +11719,16 @@ function Shell({ children, tab, setTab, due, pending }){
 
 const NAV_ITEMS = [['home','Home'],['feed','Study'],['create','Create'],['decks','Decks'],['stats','Stats'],['changelog','Updates'],['feedback','Ideas'],['settings','You']];
 
+/* What a screen reader says for a tab. The bottom bar shows "cards due" as a
+   bare red dot and unsaved cards as an unlabelled number, so without this the
+   Study tab was read as just "Study" with work waiting on it. It starts with
+   the visible label, so voice control ("tap Study") still finds it. */
+function navLabel(k, label, due, pending){
+  if (k === 'feed' && due > 0) return label + ', ' + plural(due, 'card') + ' due';
+  if (k === 'create' && pending > 0) return label + ', ' + plural(pending, 'card') + ' not saved yet';
+  return label;
+}
+
 function NavBadge({ k, due, pending }){
   if (k === 'feed' && due > 0){
     return <span style={{ marginLeft: 'auto', fontFamily: SANS, fontSize: 11, fontWeight: 700, color: '#fff',
@@ -11741,11 +11751,12 @@ function SideNav({ tab, setTab, due, pending }){
         color: T.ink, letterSpacing: '-0.03em', padding: '0 10px', marginBottom: 22 }}>
         <Mark size={24} />Study Feed
       </div>
-      <div className="flex flex-col gap-1">
+      <nav className="flex flex-col gap-1" aria-label="Main">
         {NAV_ITEMS.map(([k, label]) => {
           const active = tab === k;
           return (
             <button key={k} className="sf-tap" onClick={() => setTab(k)} data-tour={'nav-' + k}
+              aria-current={active ? 'page' : undefined} aria-label={navLabel(k, label, due, pending)}
               style={{ display: 'flex', alignItems: 'center', gap: 12, width: '100%', textAlign: 'left',
                 padding: '11px 12px', borderRadius: 14, border: 'none', cursor: 'pointer',
                 background: active ? rgba(T.accent, 0.1) : 'transparent',
@@ -11757,7 +11768,7 @@ function SideNav({ tab, setTab, due, pending }){
             </button>
           );
         })}
-      </div>
+      </nav>
     </div>
   );
 }
@@ -11790,7 +11801,7 @@ function Nav({ tab, setTab, due, pending }){
   const items = NAV_ITEMS;
   return (
     <div className="sf-navbottom" style={{ position: 'fixed', bottom: 0, left: 0, right: 0, justifyContent: 'center', pointerEvents: 'none' }}>
-      <div style={{ width: '100%', maxWidth: 520, pointerEvents: 'auto',
+      <nav aria-label="Main" style={{ width: '100%', maxWidth: 520, pointerEvents: 'auto',
         background: 'var(--sf-nav)', backdropFilter: 'blur(16px)', WebkitBackdropFilter: 'blur(16px)',
         borderTop: `1px solid ${T.border}`, display: 'flex',
         padding: '8px 6px calc(8px + env(safe-area-inset-bottom))' }}>
@@ -11798,6 +11809,7 @@ function Nav({ tab, setTab, due, pending }){
           const active = tab === k;
           return (
             <button key={k} className="sf-tap" onClick={() => setTab(k)} data-tour={'nav-' + k}
+              aria-current={active ? 'page' : undefined} aria-label={navLabel(k, label, due, pending)}
               style={{ flex: 1, background: 'none', border: 'none', cursor: 'pointer', padding: '4px 0',
                 display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 3, position: 'relative' }}>
               <Icon name={k} active={active} />
@@ -11818,7 +11830,7 @@ function Nav({ tab, setTab, due, pending }){
             </button>
           );
         })}
-      </div>
+      </nav>
     </div>
   );
 }
