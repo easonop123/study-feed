@@ -139,14 +139,20 @@ if (!MODEL_SMART) throw new Error('grab: MODEL_SMART not found');
    starts lying: the app was changed to send reasoning_effort on the hints, this
    file kept testing the old request, and it went on reporting a feature broken
    after it had been fixed. Anything the app decides, read from the app. */
+/* Trailing arguments after lowEffort are allowed — the markers now pass
+   `undefined, undefined, meta` to learn which model answered — but lowEffort
+   itself is read, not assumed: the fourth argument has to literally be `true`.
+   A stricter pattern stopped matching the moment those arguments appeared and
+   fell back to `dflt` without a word, which happened to be right and is exactly
+   the way this checker has drifted before. */
 function callSite(fnCall, dflt){
   const rx = new RegExp('callModel\\(\\s*' + fnCall.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
-    + '\\s*,\\s*(\\d+)\\s*,\\s*([A-Za-z_$][\\w$]*)\\s*(,\\s*true)?\\s*\\)');
+    + '\\s*,\\s*(\\d+)\\s*,\\s*([A-Za-z_$][\\w$]*)\\s*(?:,\\s*(true|false|undefined))?(?:\\s*,\\s*[A-Za-z_$][\\w$]*)*\\s*\\)');
   const m = SRC.match(rx);
   if (!m) return dflt;
   const modelName = m[2];
   const model = modelNamed(SRC, modelName) || MODEL_SMART;
-  return { max: Number(m[1]), model: model, low: !!m[3] };
+  return { max: Number(m[1]), model: model, low: m[3] === 'true' };
 }
 
 /* Read, never defaulted. A ceiling this file guesses at is a request the app
@@ -166,7 +172,12 @@ const PLAN_MAX  = ceiling('PLAN_MAX_TOKENS');
 /* genChunk, buildPaper and planPaper do not match the callSite shape (they pass
    a model variable and a computed prompt), so their settings stay explicit —
    all three pass lowEffort:true, which is checked by reading the call line. */
-const GEN_LOW   = /callModel\(promptFor\([^)]*\), GEN_MAX_TOKENS, model, true\)/.test(SRC);
+/* An optional trailing argument is allowed: genChunk now passes GEN_HEDGE_MS
+   after lowEffort. The hedge is client-side timing — it sends the SAME request
+   again — so it changes nothing about the request this check builds, and must
+   not quietly turn this into "low: false" the way a stricter match would. */
+const GEN_LOW   = /callModel\(promptFor\([^)]*\), GEN_MAX_TOKENS, model, true(?:, [A-Z_]+)?\)/.test(SRC);
+if (!GEN_LOW) throw new Error('grab: genChunk no longer passes lowEffort — read its call line before trusting this check');
 const PAPER_LOW = /PAPER_MAX_TOKENS, MODEL_SMART, true\)/.test(SRC);
 const PLAN_LOW  = /PLAN_MAX_TOKENS, MODEL_SMART, true\)/.test(SRC);
 

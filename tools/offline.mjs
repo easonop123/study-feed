@@ -60,6 +60,18 @@ const SUITES = [
     note: 'the service worker never caches /api/ and never pins a stale build' },
   { name: 'the model chain', cmd: ['tools/chain-test.mjs'],
     note: 'a retired model is fallen past, a hung one is not asked twice' },
+  { name: 'the scheduler', cmd: ['tools/schedule-test.mjs'],
+    note: 'Again/Hard/Good/Easy each mean something, and flagged cards come back harder' },
+  { name: 'deck transfer', cmd: ['tools/transfer-test.mjs'],
+    note: 'an import only ever adds — nothing overwritten, no two decks on one id' },
+  { name: 'answer drafts', cmd: ['tools/draft-store-test.mjs'],
+    note: 'a half-written answer survives a reload, including typing mid-load' },
+  { name: 'photo transcripts', cmd: ['tools/transcript-test.mjs'],
+    note: 'invented [?] lines are dropped; a word it could not read is kept' },
+  { name: 'hedged requests', cmd: ['tools/hedge-test.mjs'],
+    note: 'a slow request is asked twice, the loser aborted, early failures passed back' },
+  { name: 'backup-marker note', cmd: ['tools/marker-note-test.mjs'],
+    note: 'a grade from the fallback says so; the head\'s and the tour\'s never do' },
 ];
 
 /* WAIT FOR THE PROCESS, NOT FOR ITS PIPES.

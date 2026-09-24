@@ -206,12 +206,19 @@ npm test          # every check that needs no endpoint and no key, in about half
 | `place-notes-test.mjs` | a quoted phrase highlights where the student actually wrote it |
 | `sw-test.mjs` | the service worker never caches `/api/` and never pins a stale build |
 | `chain-test.mjs` | a retired model is fallen past for free, a hung one is not asked twice |
+| `schedule-test.mjs` | Again/Hard/Good/Easy give four different answers from the first review; ease holds its floor; a card you *knew* then blanked is flagged, one still being learned is not |
+| `transfer-test.mjs` | an import only ever adds — a friend's deck cannot overwrite yours, and no two decks land on one id |
+| `draft-store-test.mjs` | a half-written answer survives a reload, including one typed while the store was still loading |
+| `transcript-test.mjs` | a photographed page adds no lines that are not on it, and keeps the word it could not read |
+| `hedge-test.mjs` | a slow request is asked twice, the loser is aborted, and a failure before the duplicate reaches the model chain unchanged |
 | syntax | `StudyFeed.jsx` bundles — no `??` / `?.` / `||=`, which the Artifact rejects |
 | classes | every Tailwind class used has a rule in the shell, and no rule is dead |
 | freshness | `docs/app.js` is byte-identical to a fresh build |
 | deploy config | the build runs these checks, and every scheduled job has a handler |
 
 Six of these are new, and the freshness one matters most. **`docs/app.js` is what the deployed site serves, and it only matches `StudyFeed.jsx` because a human remembered to run the build.** "Always rebuild or the change won't ship" was a rule enforced by memory, and a change that did not ship looks exactly like a change that did not work — you go back and edit the thing that was already right. The check rebuilds to a scratch file and compares, importing the real options from `build.mjs` rather than a copy of them, because a staleness check written against a copy of the build settings would pass while shipping a differently-built bundle.
+
+It has already paid for itself. From 17 to 23 Sep 2026 **`npm run build` did nothing at all on Windows** — exit 0, no output, bundle untouched — because `build.mjs` decided whether it was being run directly by comparing `import.meta.url` with `` `file://${process.argv[1]}` ``, which on Windows is `file://C:\…` against `file:///C:/…` and never matches. Vercel builds on Linux, so the deployed site was always right, which is exactly why nobody noticed: the damage was all local, and every browser check on the development machine in that week was testing the old code. Now `pathToFileURL`, which gets the drive letter and slashes right on both.
 
 `--dry` is the other one worth knowing. The prompt builders are lifted out of `StudyFeed.jsx` at run time, and the list of what to lift is hand-maintained, so a builder that grows a new dependency breaks the checker rather than the app. That is not hypothetical: when the full paper learned to ask for a calculation, `paperPrompt` started reading `PAPER_VERBS`, the list was not updated, and `health.mjs` died with a `ReferenceError` **four minutes into a live run, on the twelfth row, where the results should have been**. The dependency was missing the moment the file was saved. `--dry` builds all sixteen requests, sends none of them, and finds it in 60 milliseconds.
 
@@ -727,8 +734,11 @@ endpoint, and there it stays a silent no-op.
 | `deck_created` | cards, long |
 | `cards_generated` | cards, images, lost, mode, **served**, **walked** |
 | `generate_failed` | reason, **served**, **walked** |
-| `answer_marked` | grade |
-| `working_marked` | grade, final |
+| `request_hedged` | model, **to** — a generate was still out at 25s and a duplicate was sent to the NEXT model in the chain (see `postHedged`). Read it against `cards_generated`: the share of generates that fall into the free tier's slow mode, measured in the wild rather than from a probe. `to` is where it went; a spike in hedges with `served` shifting to the second model is what a hung head looks like from the outside |
+| `answer_marked` | grade, **served**, **walked** |
+| `upgrade_prefetched` | — the "How do I get to …?" button came into view and its answer started loading while the student read their mark |
+| `upgrade_opened` | grade, **prefetch** (`ready` / `pending` / `failed` / `none`) — the button was pressed, and what the prefetch had done by then. `opened ÷ prefetched` is the tap rate, which is what says whether prefetching pays for its calls; the share that were `ready` is how often the student got it instantly. Until this there was no event at all for the upgrade path, so nothing said how often the app's flagship feature is used |
+| `working_marked` | grade, final, **served**, **walked** |
 | `paper_started` / `paper_marked` / `paper_failed` | questions, asked, marks, grade, minutes, blank, shape, planned, steered, weak, reason |
 | `paper_to_cards` | parts, grade |
 | `photo_answer` | result, kind, words / lines, reason |

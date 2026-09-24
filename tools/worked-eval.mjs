@@ -89,8 +89,8 @@ function grab(fns, consts){
 
 /* Every name in the grab list has to be destructured too, or it is fetched and
    then thrown away — the trap mark-eval.mjs documents at length. */
-const { markWorkingPrompt, firstBadStep, rescueObjects } =
-  grab(['markWorkingPrompt', 'firstBadStep', 'rescueObjects'], ['NCEA_RULES', 'isNcea', 'nceaRules']);
+const { markWorkingPrompt, firstBadStep, rescueObjects, bodyFor } =
+  grab(['markWorkingPrompt', 'firstBadStep', 'rescueObjects', 'bodyFor'], ['NCEA_RULES', 'isNcea', 'nceaRules', 'isReasoner', 'takesReasoningEffort']);
 
 const ENDPOINT = process.env.SF_ENDPOINT || 'https://studyfeed.app/api/nvidia';
 /* `--model <id>` to point the whole run at a candidate — see modelFromArgs. */
@@ -171,14 +171,12 @@ const CASES = [
 ];
 
 async function callOnce(prompt){
-  const body = {
-    model: MODEL,
-    messages: [{ role: 'user', content: prompt }],
-    temperature: 0.7,
-    top_p: 0.9,
-    max_tokens: MAX_TOKENS,
-    stream: false,
-  };
+/* The body comes from the app's own bodyFor, so a --model run on a reasoning
+   model (nemotron) carries the thinking:false the app sends it. A hand-built
+   body here left that out — mark-eval, diagnose-eval and paper-eval all had
+   the same gap and it was fixed in each; this closes it before it bites. */
+  /* markWorking is called without lowEffort — full reasoning, as marking is. */
+  const body = bodyFor(MODEL, [{ role: 'user', content: prompt }], MAX_TOKENS, false);
   const started = Date.now();
   const res = await fetch(ENDPOINT, {
     method: 'POST',

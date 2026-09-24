@@ -67,12 +67,12 @@ function extract(name){
   throw new Error(`grab: could not end ${name}`);
 }
 
-const CONSTS = ['NCEA_RULES', 'isNcea', 'nceaRules', 'GRADES', 'NEXT_GRADE', 'nextGradeUp'];
-const FNS = ['upgradePrompt', 'rescueObjects'];
+const CONSTS = ['NCEA_RULES', 'isNcea', 'nceaRules', 'GRADES', 'NEXT_GRADE', 'nextGradeUp', 'isReasoner', 'takesReasoningEffort'];
+const FNS = ['upgradePrompt', 'rescueObjects', 'bodyFor'];
 const grabbed = new Function(
   CONSTS.map(extractConst).concat(FNS.map(extract)).join('\n\n') +
   `\nreturn { ${CONSTS.concat(FNS).join(', ')} };`)();
-const { upgradePrompt, rescueObjects } = grabbed;
+const { upgradePrompt, rescueObjects, bodyFor } = grabbed;
 
 const ENDPOINT = process.env.SF_ENDPOINT || 'https://studyfeed.app/api/nvidia';
 /* `--model <id>` to point the whole run at a candidate — see modelFromArgs. */
@@ -94,8 +94,12 @@ function promptFor(card, answer, result, level){
 }
 
 async function ask(card, answer, result, level){
-  const body = { model: MODEL, messages: [{ role: 'user', content: promptFor(card, answer, result, level) }],
-    temperature: 0.7, top_p: 0.9, max_tokens: UPGRADE_MAX, stream: false };
+/* The body comes from the app's own bodyFor, so a --model run on a reasoning
+   model (nemotron) carries the thinking:false the app sends it. A hand-built
+   body here left that out — mark-eval, diagnose-eval and paper-eval all had
+   the same gap and it was fixed in each; this closes it before it bites. */
+  /* The upgrade path is called without lowEffort in the app. */
+  const body = bodyFor(MODEL, [{ role: 'user', content: promptFor(card, answer, result, level) }], UPGRADE_MAX, false);
   const started = Date.now();
   const res = await fetch(ENDPOINT, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
   const text = await res.text();
