@@ -11229,11 +11229,32 @@ export default function App(){
       const hasDecks = !!(lib && lib.decks && lib.decks.length);
       const isNewcomer = !merged.onboarded && neverSeenAVersion && !hasDecks;
 
-      if (isNewcomer){
+      /* Arriving from one of the landing page's deep links is a newcomer who
+         has ALREADY said what they came for. The hero button is "Find my gaps
+         — free →" (/app/#gaps), and it used to open the diagnostic and then
+         draw the seven-panel tour straight over it, so the one thing the whole
+         landing page sells was hidden behind a walkthrough of something else —
+         whose last step sends them to Create, the opposite of what they
+         clicked. Checked on the real journey: landing page, storage clear,
+         press the hero button, tour on screen, diagnostic underneath.
+         So the tour waits. It is not lost: it stays one tap away (Settings →
+         How this app works, and the empty Home's "Show me how it works"). */
+      let deepLinked = false;
+      try { deepLinked = /^#(gaps|ideas)$/i.test(window.location.hash || ''); } catch (e){}
+
+      if (isNewcomer && !deepLinked){
         setShowTutorial(true);
         /* A changelog is a catch-up for people who were already here. Stacking
            it behind the tutorial for someone who has never opened the app is
            two overlays and no context for either, so this one is spent. */
+        merged.lastSeenVersion = APP_VERSION;
+        save('settings:main', merged);
+      } else if (isNewcomer && deepLinked){
+        /* No tour (see deepLinked) — and no changelog either, which the branch
+           below would otherwise pop, putting a different overlay over the
+           thing they clicked for. A changelog is a catch-up for people who were
+           already here; this person has never opened the app. Spent, as the
+           tour branch spends it. */
         merged.lastSeenVersion = APP_VERSION;
         save('settings:main', merged);
       } else {
@@ -11241,7 +11262,10 @@ export default function App(){
            THIS version yet. Once they dismiss it, lastSeenVersion is stamped so
            it won't reappear until the next update. The changelog also has its
            own tab for reopening any time. */
-        if (merged.lastSeenVersion !== APP_VERSION) setShowNews(true);
+        /* Not on a deep-linked visit: someone who clicked "Find my gaps" gets
+           Find my gaps, not a changelog over it. Nothing is stamped, so it pops
+           on their next ordinary visit instead of being lost. */
+        if (merged.lastSeenVersion !== APP_VERSION && !deepLinked) setShowNews(true);
         /* An existing user is retroactively onboarded, so that flipping this
            build's newcomer test can never ambush them later. */
         if (!merged.onboarded){ merged.onboarded = true; save('settings:main', merged); }
