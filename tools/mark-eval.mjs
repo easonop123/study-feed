@@ -31,7 +31,7 @@
 
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
-import { dirname, join } from 'node:path';
+import { dirname, join, resolve, isAbsolute } from 'node:path';
 import { modelFromArgs, checkerDeadlineMs } from './app-source.mjs';
 import { CASES } from './mark-eval-cases.mjs';
 /* Static so Node's MODULE_TYPELESS_PACKAGE_JSON warning about this file prints
@@ -102,9 +102,9 @@ function grab(fns, consts){
 /* Every name in the grab list has to be destructured too, or it is fetched and
    then thrown away — which is how trimQuoteWrapper came to be undefined at the
    one point score() needed it, and why a whole run died three cases in. */
-const { markPrompt, rescueObjects, locateNotes, placeNotes, quoteToRegex, trimQuoteWrapper, allOccurrences } =
+const { markPrompt, rescueObjects, locateNotes, placeNotes, quoteToRegex, trimQuoteWrapper, allOccurrences, isReasoner } =
   grab(['markPrompt', 'rescueObjects', 'trimQuoteWrapper', 'quoteToRegex', 'allOccurrences', 'placeNotes', 'locateNotes'],
-       ['NCEA_RULES', 'isNcea', 'nceaRules']);
+       ['NCEA_RULES', 'isNcea', 'nceaRules', 'isReasoner']);
 
 /* Exactly what markAnswer sends: callModel(prompt, 1700, MODEL_SMART) with no
    reasoning_effort — MODEL_SMART deliberately keeps its full thinking. Read
@@ -197,6 +197,13 @@ async function mark(card, answer, level){
      parameter is a 400 from NVIDIA, so this must never reach a model family
      nobody has tried it on. */
   if (EFFORT && /gpt-oss/i.test(MODEL)) body.reasoning_effort = EFFORT;
+  /* The switch postChat sends to a reasoning model, read from the app. Without
+     it this eval tested a request the app never sends: nemotron thinks out
+     loud by default, spends the ceiling on transcript and returns no JSON, so
+     `--model nvidia/nemotron-...` scored a working marker as broken. It is
+     the model the app falls back to whenever the head hangs, so it is the
+     one this most needed to measure honestly. */
+  if (isReasoner(MODEL)) body.chat_template_kwargs = { thinking: false };
   const started = Date.now();
   let res;
   try {
@@ -351,7 +358,17 @@ async function main(){
   }
 
   report(rows);
-  const outPath = join(HERE, arg('out', 'mark-eval-results.json'));
+  /* join(HERE, ...) is right for a bare filename and wrong for a path the
+     caller typed: `--out tools/x.json` from the repo root became
+     tools/tools/x.json and threw at the very last line, after every live call
+     had been paid for. It has now lost two full runs that way (16 Sep, and the
+     42-case nemotron run on 24 Sep). Resolve a typed path against the cwd;
+     keep the old behaviour for a bare name. */
+  const outArg = arg('out', 'mark-eval-results.json');
+  /* isAbsolute OR any separator, either kind: the first version of this was
+     written as a regex whose backslash got eaten on the way into the file, so
+     it matched "/" only and a Windows `--out tools\x.json` still doubled. */
+  const outPath = (isAbsolute(outArg) || /[\\/]/.test(outArg)) ? resolve(outArg) : join(HERE, outArg);
   const { writeFileSync } = await import('node:fs');
   writeFileSync(outPath, JSON.stringify(rows, null, 2));
   console.log(`\nFull rows: ${outPath}`);

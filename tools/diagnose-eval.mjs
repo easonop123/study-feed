@@ -22,18 +22,26 @@ import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import * as esbuild from 'esbuild';
-import { modelNamed } from './app-source.mjs';
+import { modelFromArgs } from './app-source.mjs';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
-const OUT = path.join(ROOT, 'tools', '.diagnose-eval-bundle.mjs');
+/* Per process, not fixed: two runs at once (say the head and a candidate model,
+   side by side) used to share one shim and one bundle, and one deleted the
+   other's shim while the other imported a half-written bundle — both died. */
+const OUT = path.join(ROOT, 'tools', '.diagnose-eval-bundle-' + process.pid + '.mjs');
 const ENDPOINT = process.env.SF_ENDPOINT || 'https://studyfeed.app/api/nvidia';
 
+/* bodyFor is the app's own request builder: with it this eval sends each model
+   exactly what the app sends it — nemotron's thinking:false, gpt-oss's
+   reasoning_effort — instead of retyping those switches here and drifting.
+   Before it, `--model nvidia/nemotron-...` would have measured a request the app
+   never sends (nemotron thinks out loud without the switch and returns no JSON). */
 const EXPORTS = ['blueprintPrompt', 'diagnosePrompt', 'cleanBlueprint', 'rungSplit',
-  'parseJsonArray', 'rescueObjects', 'RUNGS'];
+  'parseJsonArray', 'rescueObjects', 'RUNGS', 'bodyFor'];
 
 async function loadApp(){
   const src = fs.readFileSync(path.join(ROOT, 'StudyFeed.jsx'), 'utf8');
-  const shim = path.join(ROOT, '.diagnose-eval-src.jsx');
+  const shim = path.join(ROOT, '.diagnose-eval-src-' + process.pid + '.jsx');
   fs.writeFileSync(shim, src + '\nexport { ' + EXPORTS.join(', ') + ' };\n');
   try {
     await esbuild.build({
@@ -43,19 +51,23 @@ async function loadApp(){
     });
   } finally { fs.unlinkSync(shim); }
   const src2 = fs.readFileSync(path.join(ROOT, 'StudyFeed.jsx'), 'utf8');
-  const model = modelNamed(src2, 'MODEL_SMART');
+  /* `--model <id>` measures a candidate (or the chain's fallback) without
+     editing the app, the same flag the other evals take. */
+  const model = modelFromArgs(src2, process.argv);
   if (!model) throw new Error('MODEL_SMART not found in StudyFeed.jsx');
   const mod = await import('file://' + OUT.replace(/\\/g, '/') + '?t=' + Date.now());
+  /* Imported, so the per-process bundle can go now rather than piling up. */
+  try { fs.unlinkSync(OUT); } catch (e){}
   return { app: mod, model };
 }
 
-async function ask(model, prompt, maxTokens){
+let APP = null;   // set once the bundle is loaded; ask() builds requests with its bodyFor
+async function ask(model, prompt, maxTokens, lowEffort){
   const started = Date.now();
   const res = await fetch(ENDPOINT, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ model, messages: [{ role: 'user', content: prompt }],
-      temperature: 0.7, top_p: 0.9, max_tokens: maxTokens, stream: false }),
+    body: JSON.stringify(APP.bodyFor(model, [{ role: 'user', content: prompt }], maxTokens, lowEffort)),
   });
   const text = await res.text();
   const ms = Date.now() - started;
@@ -82,6 +94,8 @@ const only = args.includes('--blueprint') ? 'blueprint' : args.includes('--diagn
 const REPEAT = Math.max(1, Number(args[args.indexOf('--repeat') + 1]) || 1);
 
 const { app, model } = await loadApp();
+APP = app;
+console.log('model ' + model);
 const pct = (n, d) => d ? (100 * n / d).toFixed(0).padStart(3) + '%' : '  --';
 let failures = 0;
 
@@ -97,7 +111,7 @@ if (only !== 'diagnose'){
   console.log('topic                              n   rungs        standalone  one-thing  over  cites  ms');
   for (const t of TOPICS){
     for (let r = 0; r < REPEAT; r++){
-      const out = await ask(model, app.blueprintPrompt(t.topic, t.level, t.n), 3000);
+      const out = await ask(model, app.blueprintPrompt(t.topic, t.level, t.n), 3000, true);
       if (!out.ok){ console.log(t.topic.padEnd(34) + ' FAILED ' + out.error); failures++; continue; }
       const items = app.cleanBlueprint(app.parseJsonArray(out.reply), t.n);
       const tally = app.RUNGS.map(rg => items.filter(i => i.rung === rg).length).join('/');
@@ -182,7 +196,7 @@ if (only !== 'blueprint'){
   for (const set of ANSWERS){
     for (let r = 0; r < REPEAT; r++){
       const items = FIXED.map((f, i) => ({ ...f, answer: set.a[i] }));
-      const out = await ask(model, app.diagnosePrompt('rates of reaction', 'NCEA Level 1', items), 3000);
+      const out = await ask(model, app.diagnosePrompt('rates of reaction', 'NCEA Level 1', items), 3000, false);
       if (!out.ok){ console.log(set.kind.padEnd(33) + ' FAILED ' + out.error); failures++; continue; }
       const obj = app.rescueObjects(out.reply)[0];
       if (!obj || !Array.isArray(obj.items)){

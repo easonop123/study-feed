@@ -211,6 +211,120 @@ async function save(key, value){
   } catch (e){ console.error('storage.set failed', key, e); return false; }
 }
 
+/* ---- answer drafts -------------------------------------------------------
+
+   A long answer is three hundred words the student typed, and until now it
+   lived in component state only: a reload, a closed tab or a stray tap on a
+   nav item destroyed it. That used to be a rare accident. It is not rare any
+   more — the free tier times out on roughly 1 call in 8, the marking screen
+   can sit there for over a minute, and the thing a person does to a screen
+   that looks stuck is reload it. The loading screen now asks them not to;
+   this is what makes that request unnecessary rather than merely polite.
+
+   A FIFTH storage key, which the app has avoided until now. It earns it:
+   drafts are written on a debounce while typing, and settings:main is held in
+   App state and saved whole, so routing draft writes through settings from a
+   component this deep would race with App's own writes and lose one or the
+   other. The Ask panel's "no fifth key" note is about a chat thread that is
+   meant to be transient; a half-written exam answer is not.
+
+   Drafts are deliberately NOT exported with a deck — they are work in
+   progress, not content.
+
+   Only a RECENT draft is offered back. Restoring an answer weeks later, when
+   the card has come round again in the feed, would hand the student their old
+   words at exactly the moment the point is to produce them from memory. */
+const DRAFT_KEY = 'drafts:main';
+const DRAFT_MAX_AGE_MS = 24 * 60 * 60 * 1000;   // a reload, not a revision cycle
+const DRAFT_MAX = 40;
+const DRAFT_DEBOUNCE_MS = 700;
+
+let draftCache = null;          // the store, once read; authoritative thereafter
+let draftPending = null;        // typed before the read landed — newer than disk
+let draftLoading = null;        // the single in-flight read, shared by all callers
+let draftTimer = null;
+
+function pruneDrafts(all){
+  const now = Date.now();
+  const fresh = {};
+  const keys = Object.keys(all || {})
+    .filter(k => all[k] && (now - (all[k].at || 0)) < DRAFT_MAX_AGE_MS)
+    .sort((a, b) => (all[b].at || 0) - (all[a].at || 0))
+    .slice(0, DRAFT_MAX);
+  for (const k of keys) fresh[k] = all[k];
+  return fresh;
+}
+
+/* ONE read of the store, shared by everyone who asks while it is in flight.
+
+   The read is genuinely async — in the Artifact it is a `window.storage.get`
+   round trip — and the student is typing into the box the whole time. The
+   window is small and the two things that can go wrong in it are not:
+   assigning the loaded store over the cache throws away whatever they typed
+   while it was loading, and letting the debounce fire before the load lands
+   persists a store containing ONLY the card in front of them, wiping every
+   other draft they had.
+
+   So the load merges rather than assigns, and anything typed meanwhile wins —
+   it is newer than what was on disk by definition. Everything that writes
+   waits on this same promise before it persists. */
+function ensureDrafts(){
+  if (draftCache) return Promise.resolve(draftCache);
+  if (!draftLoading){
+    draftLoading = load(DRAFT_KEY, {}).then((stored) => {
+      draftCache = pruneDrafts({ ...(stored || {}), ...(draftPending || {}) });
+      draftPending = null;
+      draftLoading = null;
+      return draftCache;
+    });
+  }
+  return draftLoading;
+}
+
+async function readDraft(cardId){
+  if (!cardId) return '';
+  const all = await ensureDrafts();
+  const d = all[cardId];
+  return (d && typeof d.text === 'string') ? d.text : '';
+}
+
+/* Debounced so a fast typist does not write the whole store on every
+   keystroke. The in-memory copy updates synchronously, so a component reading
+   it in the same tick sees the new value before it has been persisted — and
+   before the load has even finished, which is the case that matters. */
+function writeDraft(cardId, text){
+  if (!cardId) return;
+  if (!draftCache && !draftPending) draftPending = {};
+  const into = draftCache || draftPending;
+  if (String(text || '').trim()) into[cardId] = { text: text, at: Date.now() };
+  else delete into[cardId];
+  ensureDrafts();
+  if (draftTimer) clearTimeout(draftTimer);
+  draftTimer = setTimeout(() => {
+    draftTimer = null;
+    /* Work from the value the load resolved with, not from the module
+       variable — by the time this runs the variable may have been replaced,
+       and reading it is how a stale or missing store gets written back. */
+    ensureDrafts().then((all) => {
+      draftCache = pruneDrafts(all);
+      save(DRAFT_KEY, draftCache);
+    });
+  }, DRAFT_DEBOUNCE_MS);
+}
+
+/* Called when the card is done with — the answer has been marked and the
+   student has moved on, so keeping it would only risk handing it back. */
+function clearDraft(cardId){
+  if (!cardId) return;
+  if (draftPending) delete draftPending[cardId];
+  if (draftCache && !(cardId in draftCache) && !draftLoading) return;
+  if (draftTimer){ clearTimeout(draftTimer); draftTimer = null; }
+  ensureDrafts().then((all) => {
+    delete all[cardId];
+    save(DRAFT_KEY, all);
+  });
+}
+
 /* longMix = what % of your cards should be long (extended-response) answers.
    Drives both what gets generated and how the feed is blended. */
 const DEFAULT_SETTINGS = { interleave: true, newPerDay: 12, capNew: false, longMix: 30, theme: 'system', name: '', examDate: '', lastSeenVersion: '', onboarded: false, dismissedTips: {}, sound: true, font: 'inter', learnSession: null, diagnosis: null, paper: null };
@@ -358,8 +472,20 @@ function failureKind(e){
    1.x numbers sitting above the new 1.0.0 cannot cause a mis-fire. They are not
    shown next to the pre-launch entries either — those were dev builds and the
    numbers mean nothing to a student. */
-const APP_VERSION = '1.8.3';
+const APP_VERSION = '1.9.0';
 const PATCH_NOTES = [
+  { v: '1.9.0', date: '2026-09-24', title: 'Less waiting, and it tells you the truth', items: [
+    'Cards show up as they are made. Long notes and PDFs are worked through a few sections at a time, and the app used to wait for the slowest section before showing you anything. Now the first cards appear as soon as they exist and the rest fill in underneath while you look through them. Save waits until the last ones arrive, so nothing still on its way gets lost.',
+    'When the AI is being slow, it asks a second one. The free service this runs on is usually quick and sometimes stuck, and the same request can take fifteen seconds or ninety. If making cards is still going after twenty-five seconds, the app now asks the next model on its list at the same time and takes whichever answers first. On a day when the main model had stopped answering altogether, that cut the wait from nearly two minutes to under one. Find my gaps does the same while it writes your test, and the "Stuck?" hints, "explain this further" and the Ask chat do it after twelve seconds, so a hint or an answer no longer takes a minute and a half when the main model is stuck.',
+    '"How do I get to Excellence?" is usually ready before you press it. It can only start once your mark is back, and it is one of the slower things the app does — but you read your mark first, so it now gets going while you read.',
+    'Your writing survives a reload. A long answer or a page of working used to live only on the screen, so reloading because it looked stuck, closing the tab or knocking the back button lost the lot. It is kept as you type and comes straight back. It is cleared once you grade the card, and after a day, so a card that comes round again is never handed your old attempt.',
+    'If the main marker is too busy and a backup marks your answer, it says so. We tested the backup properly and it is not as good: it almost never gives Excellence and it is too kind to answers that say very little. Rather than hand you a grade like that without a word, the app tells you where it came from and suggests marking it again in a few minutes.',
+    'Making cards on a phone starts with the box you type in. It used to sit underneath all the options, below the bottom of the screen, so the first thing you saw had nowhere to type. Your notes come first now, then how you want them made.',
+    'The Home screen fits on a phone. The "done today" circle used to take up a line of its own and push everything else down; it sits in the corner now, and the ways to test yourself are on the first screen.',
+    'The buttons after a mark look like buttons. "How do I get to Merit?" and "Improve this answer and mark again" were the same colour as the box they sat in and read as plain text. The feedback lists have their bullet points back too.',
+    'On an iPhone, tapping into a box to type no longer zooms the whole page in. It happened on nearly every box in the app — including the one you write long answers in — and left the page zoomed after the keyboard went away until you pinched back out.',
+    'Smaller things: the Stats page no longer says "4 due" at the top and "0 still due" underneath; the little "×" on tips and the other small controls are much easier to hit with a thumb; a photo of your working no longer adds empty lines to the end; and the card review shows your whole standard on a phone instead of cutting it off.',
+  ] },
   { v: '1.8.3', date: '2026-09-18', title: 'It stops blaming your wifi', items: [
     'When making cards runs out of time, the app used to tell you your connection had dropped. It almost never had. Every failure we measured over two days was the AI service itself, on connections that were loading everything else perfectly — so the app was sending people off to fix something that was not broken. It now says which end the problem is at.',
     'And it says how long generating actually takes. The tip promised 15 to 30 seconds; it really runs 20 to 40, and longer when the service is busy. A promise the app misses every other time teaches you it is broken when it is working.',
@@ -620,6 +746,13 @@ function intervalWord(days){
 }
 
 const uid = () => Date.now().toString(36) + Math.random().toString(36).slice(2, 7);
+
+/* "1 cards" is the kind of thing that makes an app look auto-generated, and a
+   deck with one card in it is the FIRST thing a new student ever sees on Home.
+   One idiom for every count on screen: the hand-rolled `n > 1 ? 's' : ''`
+   spellings were each right where they stood and wrong the moment one was
+   copied somewhere a zero could reach it ("0 card"). */
+const plural = (n, word) => n + ' ' + word + (n === 1 ? '' : 's');
 
 /* ---- import / export -----------------------------------------------------
    Cards cost money to generate, so they should be movable: between the
@@ -1226,8 +1359,18 @@ function mergeImport(payload, library, progress){
       cards.push({ ...c, id: fresh });
     }
     if (!cards.length) continue;
+    /* A deck id has to be unique across the library AND across this payload.
+       existingDeckIds used to be built once from the library and never
+       updated, so a file carrying two decks with the same id — two exports
+       pasted together, or a hand-edited one — landed both under that id. Two
+       decks on one id render on the same React key, and edit and delete
+       cannot tell them apart, so the student deletes one and loses the other.
+       A deck with no id at all used to arrive as id: undefined, which is the
+       same problem with fewer steps. Found by tools/transfer-test.mjs. */
+    const deckId = (deckClash || !d.id) ? uid() : d.id;
+    existingDeckIds.add(deckId);
     incoming.push({
-      id: deckClash ? uid() : d.id,
+      id: deckId,
       subject: String(d.subject || 'Untitled'),
       topic: String(d.topic || ''),
       standard: String(d.standard || 'NCEA Level 1'),
@@ -2263,9 +2406,16 @@ function friendlyApiError(e, what){
 /* One try at the proxy, with its own wall clock. The abort signal covers the
    body read as well as the connection, because a congested network can hand
    back headers promptly and then dribble the body out for another minute. */
-async function postOnce(body, timeoutMs){
+async function postOnce(body, timeoutMs, cancel){
   const ctrl = new AbortController();
   const timer = setTimeout(() => ctrl.abort(), timeoutMs);
+  /* `cancel` lets a caller stop this attempt from outside — postHedged uses it
+     to drop whichever of its two requests lost the race, so the loser stops
+     holding a slot at the vendor. Its rejection is ignored by the caller. */
+  if (cancel){
+    if (cancel.aborted) ctrl.abort();
+    else cancel.addEventListener('abort', () => ctrl.abort());
+  }
   try {
     const res = await fetch('/api/nvidia', {
       method: 'POST',
@@ -2373,7 +2523,186 @@ function isGoneModel(e){
    that fails instantly forever; it is never what ends a normal call. */
 const TOTAL_BUDGET_MS = ATTEMPT_MS.reduce(function (a, b){ return a + b; }, 0);
 const HARD_TRIES = 8;
-async function postChat(messages, maxTokens, model, lowEffort){
+/* ---- hedged requests -----------------------------------------------------
+
+   Ask again if the first answer is slow, and keep whichever lands first.
+
+   The free tier's latency is not slow so much as BIMODAL. The same generate
+   prompt and the same ~530-token reply, sampled on 23 Sep 2026: 60% of the time
+   it lands in 12-19s, the rest of the time 44-84s — the model is fast when it
+   gets a slot and the difference is queue. The textbook answer to a fat tail
+   is a hedged request, and whether it pays depends on one thing: do two
+   requests sent at the same moment land in different parts of the queue? If
+   congestion is global, both are slow together and this just doubles the load.
+
+   Measured rather than assumed (tools/probe-hedge.mjs, 10 rounds of two
+   identical requests fired together): correlation between the pair r = 0.35,
+   so mostly independent. Then checked end to end through this exact code
+   (tools/probe-hedge-live.mjs), alternating hedged and unhedged generates in
+   the same hour so both saw the same queue. Two different afternoons:
+
+                     queue in its slow mode        queue calm
+                     single     hedged             single     hedged
+     p90             65.3s      46.7s              40.9s      33.5s
+     worst           83.7s      46.7s              40.9s      33.5s
+     mean            30.2s      25.3s              22.2s      22.6s
+
+   So what it buys is THE TAIL, in both conditions — the "it took over a
+   minute" wait, which is the one students remember — and not the mean, which
+   on a calm afternoon it does not move at all. That is the right thing to
+   buy: nobody notices 22s against 23s.
+
+   25s, not the 20s it was first set to. The fast mode is not fixed: 12-19s on
+   the first afternoon, 14-22s on the second. At 20s the calm run sent a
+   duplicate on 62% of calls, most of them for requests that were a second or
+   two from finishing — load for nothing. 25s clears the fast mode's top on
+   both days, so a request that was going to be fast never triggers one, and
+   one that has fallen into the slow mode (44-84s) still gets a fresh roll of
+   the dice early enough to matter.
+
+   The duplicate shares the original's deadline, so a hedged call never runs
+   longer than an unhedged one would have been allowed to. The loser is
+   aborted the moment the winner lands. If the ORIGINAL fails before the
+   duplicate was sent, that failure goes straight back to postChat unchanged,
+   so the model chain, the hang memory and every retry decision work exactly
+   as they did.
+
+   THE DUPLICATE GOES TO THE NEXT MODEL IN THE CHAIN, not the same one again.
+   Two reasons, both measured on 24 Sep 2026. Re-asking the same model lands
+   in the same queue: for marking the pair correlated at r = 0.97 (below), so
+   a same-model duplicate is mostly a copy of the delay. And when the head is
+   HUNG — gemma-4 answered nothing for an afternoon, every request cut off at
+   the 86-88s wall — a same-model duplicate is a second request to a model
+   that is not answering, and the chain only moved on after the full wall.
+   Sent to the next model instead, same hour, interleaved, during that outage:
+
+                         unhedged            hedged to next model
+     successful calls    115.1s, 94.1s       54.9s, 32.0s          ~2.4x faster
+
+   When the alternate wins, the head is NOT aborted. It is left to run out, so
+   that if it times out the hang memory learns it exactly as if it had been
+   waited on (onHeadFailedLate -> noteHang), and the next ten minutes skip it
+   outright. Aborting it would have meant never learning the head was hung,
+   and every call paying the hedge delay for as long as the outage lasted.
+
+   GENERATION ONLY, and marking was measured rather than left out by default
+   (tools/probe-hedge-mark.mjs, 24 Sep 2026: 12 pairs of identical marks fired
+   together, both allowed to finish). Two findings, both against it:
+     - the pairs finished together, r = 0.97 — 30.9s/30.8s, 61.3s/61.2s. A
+       duplicate lands in the same queue as the original, so racing moved the
+       worst case by a tenth of a second. It would double marking's load and
+       buy nothing.
+     - the faster of a pair ran slightly shorter (328 vs 341 tokens, 3.58 vs
+       3.67 notes). All 12 pairs agreed on the grade, so it is small — but it
+       is a bias in the direction of thinner feedback, on the call whose
+       feedback is the product.
+   Why generation and marking correlate so differently is not known; they were
+   measured on different afternoons, and the correlation may move with the
+   queue. Worth re-running tools/probe-hedge.mjs before assuming either figure
+   still holds — the generation hedge costs nothing when it does not help, but
+   it is only worth its extra requests while r stays low. */
+const GEN_HEDGE_MS = 25000;
+
+/* The small helpers — "Stuck? writing points", sentence starters, "explain this
+   further" — hedge too, and much earlier. They normally answer in 2-10s (health
+   check, 23 Sep: 7.9s, 1.9s, 4.2s). But on a hung head a student waited the
+   FULL 88s attempt before the chain moved on, for a hint of three bullet
+   points: measured the next day with gemma-4 stuck, writing points timed out at
+   85s and the other two took 45-49s. 12s clears their normal range with room to
+   spare, so a healthy call never sends a duplicate, and a stuck one reaches the
+   next model in about a fifth of the time.
+
+   Why these and not the marking: these are help, not a grade, and every one of
+   them already falls back to the chain's second model — the hedge only gets
+   there sooner. The marker was measured, and its fallback is not good enough to
+   reach for early (see markerNote). */
+const HELPER_HEDGE_MS = 12000;
+
+/* One model's request. Decided per model rather than once per call, because a
+   chain walks several families and each takes its own switches — and because
+   a hedge now sends the SAME prompt to a DIFFERENT model, which needs that
+   model's switches, not the head's. */
+function bodyFor(id, messages, maxTokens, lowEffort){
+  const body = {
+    model: id,
+    messages,
+    temperature: isReasoner(id) ? 0.6 : 0.7,
+    top_p: 0.9,
+    max_tokens: maxTokens,
+    stream: false,
+  };
+  // Reasoning models: switch off chain-of-thought so replies are clean JSON.
+  if (isReasoner(id)) body.chat_template_kwargs = { thinking: false };
+  // gpt-oss ignores that flag; this is the lever it does take. Opt-in only —
+  // see takesReasoningEffort for why marking is deliberately left out.
+  if (lowEffort && takesReasoningEffort(id)) body.reasoning_effort = 'low';
+  return body;
+}
+
+function postHedged(body, wall, hedgeAfter, alt){
+  if (!hedgeAfter || hedgeAfter >= wall - 1000) return postOnce(body, wall);
+  const altBody = (alt && alt.body) ? alt.body : body;
+  const crossModel = altBody !== body;
+  return new Promise((resolve, reject) => {
+    const cA = new AbortController(), cB = new AbortController();
+    /* When both fail, the error handed back is the HEAD's, whichever failed
+       first. postChat reasons about the model it asked: a head that TIMED OUT
+       has to reach it as a timeout, so the hang is remembered and retried as
+       one. Handing back a fast 503 or 400 from the alternate instead meant a
+       hung head was never learned, and a non-retryable alternate error ended
+       the whole call when only the head had timed out. */
+    let settled = false, sentB = false, bWon = false, failed = 0, errA = null, errB = null, timer = null;
+    const bothFailed = () => { settled = true; reject(errA || errB); };
+    postOnce(body, wall, cA.signal).then((value) => {
+      if (settled) return;
+      settled = true; clearTimeout(timer); cB.abort();
+      resolve(value);
+    }, (e) => {
+      if (settled){
+        /* Lost to a different model and then failed: that is how a hang is
+           learned without the student having waited on it. */
+        if (bWon && crossModel && alt && alt.onHeadFailedLate) alt.onHeadFailedLate(e);
+        return;
+      }
+      errA = e;
+      /* The original failed before we ever asked twice: that is an ordinary
+         failure, not a race, and postChat is the thing that knows what to do
+         with it. Hand it straight back. */
+      if (!sentB){ settled = true; clearTimeout(timer); reject(e); return; }
+      failed++;
+      if (failed >= 2) bothFailed();
+    });
+    timer = setTimeout(() => {
+      if (settled) return;
+      sentB = true;
+      track('request_hedged', { model: body.model, to: altBody.model });
+      postOnce(altBody, wall - hedgeAfter, cB.signal).then((value) => {
+        if (settled) return;
+        settled = true; bWon = true;
+        /* Same model: nothing to learn from the loser, so free its slot.
+           Different model: leave the head running — see onHeadFailedLate. */
+        if (!crossModel) cA.abort();
+        if (alt && alt.onWin) alt.onWin();
+        resolve(value);
+      }, (e) => {
+        if (settled) return;
+        errB = e;
+        failed++;
+        if (failed >= 2) bothFailed();
+      });
+    }, hedgeAfter);
+  });
+}
+
+/* `meta`, when given, is filled with which model answered THIS call. The
+   servedBy / servedWalk globals are still set for the analytics that read them
+   straight after a call, but they are shared: a mark is 30-90s of awaiting, and
+   any request that starts in that window — a generate's hedge, the upgrade
+   prefetch, a hint — overwrites them. Reading the global after the await is how
+   the backup-marker note could have told a student a backup marked an answer
+   that the head had marked, or said nothing about one the backup had. A caller
+   that needs to KNOW asks through meta. */
+async function postChat(messages, maxTokens, model, lowEffort, hedgeAfter, meta){
   const chain = liveChain(model);
   const started = Date.now();
   const left = () => TOTAL_BUDGET_MS - (Date.now() - started);
@@ -2381,27 +2710,39 @@ async function postChat(messages, maxTokens, model, lowEffort){
   while (tries < HARD_TRIES && left() > 1000){
     tries++;
     const id = chain[i % chain.length];
-    const body = {
-      model: id,
-      messages,
-      temperature: isReasoner(id) ? 0.6 : 0.7,
-      top_p: 0.9,
-      max_tokens: maxTokens,
-      stream: false,
-    };
-    // Reasoning models: switch off chain-of-thought so replies are clean JSON.
-    if (isReasoner(id)) body.chat_template_kwargs = { thinking: false };
-    // gpt-oss ignores that flag; this is the lever it does take. Opt-in only,
-    // and decided per model in the chain rather than once per call — see
-    // takesReasoningEffort for why marking is deliberately left out.
-    if (lowEffort && takesReasoningEffort(id)) body.reasoning_effort = 'low';
+    const body = bodyFor(id, messages, maxTokens, lowEffort);
 
     /* Never wait past the deadline, and never on a clock longer than the one
        the attempt schedule allows for this position in the walk. */
     const wall = Math.min(ATTEMPT_MS[Math.min(attempt, ATTEMPT_MS.length - 1)], left());
     const spent0 = Date.now();
     servedBy = id; servedWalk = tries - 1;
-    try { return await postOnce(body, wall); }
+    let servedHere = id, walkedHere = tries - 1;
+    /* Hedged on the FIRST attempt only. A retry is already a second roll of
+       the dice; hedging it too would stack duplicates onto a queue that has
+       just shown it is struggling. */
+    /* The duplicate goes to the NEXT model in the chain, not the same one
+       again — see postHedged. A single-model chain (vision) has nowhere else
+       to go, so it re-asks the same model as before. */
+    const altId = (tries === 1 && hedgeAfter && chain.length > 1) ? chain[(i + 1) % chain.length] : null;
+    const alt = altId && altId !== id ? {
+      body: bodyFor(altId, messages, maxTokens, lowEffort),
+      /* walked goes up too. servedTags documents walked 0 as "the head
+         answered", so leaving it at 0 on an alternate's win would hide every
+         hedge win from a dashboard filtering on walked > 0 to spot a hung head
+         — the very outage the hedge exists for. */
+      onWin: () => { servedBy = altId; servedWalk = tries; servedHere = altId; walkedHere = tries; },
+      /* The head lost the race but was left running, precisely so this can
+         happen: if it then times out it really was hung, and the hang memory
+         skips it for the next ten minutes exactly as if it had been waited on.
+         If it answers late it was merely slow and nothing is remembered. */
+      onHeadFailedLate: (e) => { if (/timed out|could not reach/i.test(String(e && e.message || ''))) noteHang(id); },
+    } : null;
+    try {
+      const text = await postHedged(body, wall, tries === 1 ? hedgeAfter : 0, alt);
+      if (meta){ meta.served = servedHere; meta.walked = walkedHere; }
+      return text;
+    }
     catch (e){
       last = e;
       i++;
@@ -2435,8 +2776,8 @@ async function postChat(messages, maxTokens, model, lowEffort){
   throw last;
 }
 /* Everything except the chat helper sends exactly one user turn. */
-const postMessages = (content, maxTokens, model, lowEffort) => postChat([{ role: 'user', content }], maxTokens, model, lowEffort);
-const callModel = (prompt, maxTokens = 1000, model = MODEL_GEN, lowEffort) => postMessages(prompt, maxTokens, model, lowEffort);
+const postMessages = (content, maxTokens, model, lowEffort, hedgeAfter, meta) => postChat([{ role: 'user', content }], maxTokens, model, lowEffort, hedgeAfter, meta);
+const callModel = (prompt, maxTokens = 1000, model = MODEL_GEN, lowEffort, hedgeAfter, meta) => postMessages(prompt, maxTokens, model, lowEffort, hedgeAfter, meta);
 /* Read ONE slide/photo with the vision model and return it as plain study text
    (all wording transcribed, diagrams/graphs/formulae described). `img` is a
    { media_type, data } object from resizeImage. */
@@ -2478,13 +2819,33 @@ const HANDWRITING_PROMPT = 'This is a photo of one page of a student\'s HANDWRIT
    alternative is the student marking the word "NO_ANSWER" as their essay. */
 const NO_ANSWER = 'NO_ANSWER';
 
+/* Drop trailing lines that say nothing but "[?]".
+
+   The vision model occasionally runs past the end of what is on the page and
+   pads with numbered placeholders — seen on 23 Sep 2026 on a four-line page of
+   working: "4. [?] 5. [?] 6. [?] 7. [?] 8. [?] 9. [?]", 128 tokens where a
+   clean read is ~38. Those lines are not illegible handwriting, they are lines
+   that do not exist, and they land in the student's answer box where they have
+   to be deleted by hand before marking — or, worse, are left in and marked as
+   six blank steps.
+
+   ONLY trailing ones, and only lines that are nothing but a placeholder. A
+   "[?]" inside a real line marks a word the model genuinely could not read,
+   which the student needs to see and fix, so it stays. */
+function trimPlaceholderTail(text){
+  const lines = String(text == null ? '' : text).split('\n');
+  const junk = /^\s*(\d+\s*[.)]\s*)?\[\?\]\s*$/;
+  while (lines.length && (junk.test(lines[lines.length - 1]) || !lines[lines.length - 1].trim())) lines.pop();
+  return lines.join('\n').trim();
+}
+
 async function transcribeAnswer(img){
   const content = [
     { type: 'text', text: HANDWRITING_PROMPT },
     { type: 'image_url', image_url: { url: 'data:' + img.media_type + ';base64,' + img.data } },
   ];
   const out = await postMessages(content, 1500, MODEL_VISION);
-  const clean = String(out == null ? '' : out).trim();
+  const clean = trimPlaceholderTail(out);
   if (!clean || clean.toUpperCase().indexOf(NO_ANSWER) === 0) return '';
   return clean;
 }
@@ -2507,7 +2868,7 @@ async function transcribeWorking(img){
     { type: 'image_url', image_url: { url: 'data:' + img.media_type + ';base64,' + img.data } },
   ];
   const out = await postMessages(content, 1200, MODEL_VISION);
-  const clean = String(out == null ? '' : out).trim();
+  const clean = trimPlaceholderTail(out);
   if (!clean || clean.toUpperCase().indexOf(NO_ANSWER) === 0) return '';
   return clean;
 }
@@ -2593,7 +2954,7 @@ let genLost = 0;
    below that the chunks are too small to be worth cards. */
 async function genChunk(chunk, mode, level, model, pctLong, strict, depth){
   try {
-    const reply = await callModel(promptFor(mode, chunk, level, pctLong, strict), GEN_MAX_TOKENS, model, true);
+    const reply = await callModel(promptFor(mode, chunk, level, pctLong, strict), GEN_MAX_TOKENS, model, true, GEN_HEDGE_MS);
     return parseReply(mode, reply);
   } catch (e){
     noteApiError(e);
@@ -2643,14 +3004,24 @@ async function mapLimit(items, limit, fn, onDone){
   return out;
 }
 
-async function genText(source, mode, level, onProgress, model, pctLong, strict){
+async function genText(source, mode, level, onProgress, model, pctLong, strict, onCards){
   const batches = batchText(source);
   onProgress && onProgress(0, batches.length, 'text');
   /* genChunk swallows its own failures and returns [], so a chunk that dies
      cannot take the others down with it — which is what makes running them
-     together safe. */
+     together safe.
+
+     onCards gets each section's cards the moment that section lands, rather
+     than all of them once the slowest has. Sections run three at a time and
+     generation is bimodal (~15s or ~50s), so three sections usually include a
+     slow one: waiting for all of them meant waiting for the worst of three.
+     The return value is unchanged — every card, in order — for callers that
+     want the whole set. */
   const per = await mapLimit(batches, GEN_CONCURRENCY,
-    (b) => genChunk(b, mode, level, model, pctLong, strict, 0),
+    (b) => genChunk(b, mode, level, model, pctLong, strict, 0).then((got) => {
+      if (onCards && got && got.length) onCards(got);
+      return got;
+    }),
     (done, total) => { onProgress && onProgress(done, total, 'text'); });
   let cards = [];
   for (let i = 0; i < per.length; i++) cards = cards.concat(per[i]);
@@ -2722,10 +3093,62 @@ RULES FOR "notes" — these are shown highlighted on top of the student's own wr
    tokens, so raising it does not make the ordinary call more expensive. If
    more required output is ever added to this prompt, re-run the eval rather
    than assuming the headroom is still there. */
+/* WHICH MARKER GAVE THIS GRADE — said out loud when it is not the one the
+   marking is measured on.
+
+   The chain falls back to another model when the head does not answer, and on
+   24 Sep 2026 the head (gemma-4) was hung for an afternoon, so every mark in
+   that window came from the fallback. That fallback was then run through the
+   same 42-case corpus the head is held to (tools/mark-eval-nemotron.log):
+
+                        gemma-4 (#30)     nemotron-3.5-lightning
+     grade in band      38/42  90%        13/26  50%
+     failed outright    0                 16/42  38%
+     Excellence         —                 0/5   every one marked Merit
+     waffle             —                 0/5   every one rewarded Achieved
+     Not yet            —                 0/3   every one marked Achieved
+
+   It squashes grades toward the middle. A student with an Excellence answer is
+   told Merit; one who wrote three fluent sentences of nothing is told
+   Achieved. Handing that over silently is the worst of the options. Refusing
+   to mark while the head is down is a real alternative, and a product
+   decision rather than this function's — so for now the grade is given, and
+   the student is told plainly where it came from and what it gets wrong. A
+   second attempt costs them nothing: the answer survives a reload
+   (drafts:main) and is still on screen.
+
+   Keyed by model and by what was marked, because the specific tendencies were
+   measured for nemotron on WRITTEN answers only. Any other stand-in, and any
+   stand-in marking working, gets the plain version — true of every fallback,
+   and claiming nothing that was not measured. The tour's canned marks carry
+   no servedBy and never show it. */
+function markerNote(by, kind){
+  if (!by || by === TEXT_MODELS[0]) return '';
+  const base = 'The main marker was too busy, so a backup marked this one.';
+  if (kind === 'answer' && /nemotron/i.test(by))
+    return base + ' It is measurably less reliable at the ends of the scale — it almost never gives Excellence and is too generous to thin answers — so mark it again in a few minutes for a firmer grade.';
+  return base + ' Mark it again in a few minutes for a firmer grade.';
+}
+
+/* The note itself, once, for both result views. */
+function MarkerNote({ by, kind }){
+  const text = markerNote(by, kind);
+  if (!text) return null;
+  return (
+    <Sub style={{ fontSize: 12.5, marginTop: 9, display: 'flex', gap: 8, alignItems: 'flex-start' }}>
+      <InlineIco name="warn" size={15} style={{ marginTop: 2, color: T.amber }} />
+      <span>{text}</span>
+    </Sub>
+  );
+}
+
 async function markAnswer(card, answer, level){
-  const reply = await callModel(markPrompt(card, answer, level), 3000, MODEL_SMART);
-  const objs = rescueObjects(reply);
-  return objs[0] || null;
+  /* Which model marked it, from THIS call — see postChat's meta. */
+  const meta = {};
+  const reply = await callModel(markPrompt(card, answer, level), 3000, MODEL_SMART, undefined, undefined, meta);
+  const obj = rescueObjects(reply)[0] || null;
+  if (obj){ obj.servedBy = meta.served; obj.servedWalk = meta.walked; }
+  return obj;
 }
 
 /* The notes rules are deliberately NOT shared with markPrompt, and this is not
@@ -2786,9 +3209,11 @@ RULES FOR "notes" — these are shown highlighted on top of the student's own wo
    make this the longest reply the app asks for, and a truncated one is a total
    loss of the mark rather than a degraded one. */
 async function markWorking(card, working, level){
-  const reply = await callModel(markWorkingPrompt(card, working, level), 3000, MODEL_SMART);
-  const objs = rescueObjects(reply);
-  return objs[0] || null;
+  const meta = {};
+  const reply = await callModel(markWorkingPrompt(card, working, level), 3000, MODEL_SMART, undefined, undefined, meta);
+  const obj = rescueObjects(reply)[0] || null;
+  if (obj){ obj.servedBy = meta.served; obj.servedWalk = meta.walked; }
+  return obj;
 }
 
 /* The first step that is actually wrong — not the first that looks wrong.
@@ -3111,7 +3536,7 @@ ${isNcea(level) ? 'Never name or cite an achievement standard number or title, a
 Return ONLY a JSON array of short strings. No prose outside it.`;
 }
 async function getHints(card, level){
-  const reply = await callModel(hintPrompt(card, level), 900, MODEL_SMART, true);
+  const reply = await callModel(hintPrompt(card, level), 900, MODEL_SMART, true, HELPER_HEDGE_MS);
   const arr = parseJsonArray(reply);
   return Array.isArray(arr) ? arr.map(String).filter(Boolean).slice(0, 6) : [];
 }
@@ -3134,7 +3559,7 @@ Do NOT fill in the blanks. Do NOT give the finished answer, the actual terms, or
 Return ONLY a JSON array of short strings. No prose outside it.`;
 }
 async function getBigHint(card, level){
-  const reply = await callModel(bigHintPrompt(card, level), 1100, MODEL_SMART, true);
+  const reply = await callModel(bigHintPrompt(card, level), 1100, MODEL_SMART, true, HELPER_HEDGE_MS);
   const arr = parseJsonArray(reply);
   return Array.isArray(arr) ? arr.map(String).filter(Boolean).slice(0, 5) : [];
 }
@@ -3190,7 +3615,7 @@ Return ONLY JSON:
 Explain the card's own answer — don't contradict it, and don't invent facts, values or NZQA codes that aren't implied by it.`;
 }
 async function getExplain(card, level, depth){
-  const reply = await callModel(explainPrompt(card, level, depth), 1200, MODEL_SMART, true);
+  const reply = await callModel(explainPrompt(card, level, depth), 1200, MODEL_SMART, true, HELPER_HEDGE_MS);
   const objs = rescueObjects(reply);
   return objs[0] || null;
 }
@@ -3267,7 +3692,9 @@ async function askHelper(history){
     const isLast = i === tail.length - 1;
     msgs.push({ role: m.role, content: m.text + (isLast && m.role === 'user' ? chatContextBlock() : '') });
   }
-  const reply = await postChat(msgs, 800, MODEL_SMART);
+  /* Same hedge as the hints: a question in the chat is someone waiting on a
+     reply, and on a hung head it sat out the whole 88s attempt first. */
+  const reply = await postChat(msgs, 800, MODEL_SMART, undefined, HELPER_HEDGE_MS);
   return (reply || '').trim();
 }
 
@@ -3602,7 +4029,7 @@ function Rings({ size = 92 }){
       <div style={ring(35, 0, 90, T.accent, 3, 1, 0.85)} />
       <div style={ring(42, 0, 120, T.accentInk, 2.5, 1, 0.9)} />
       <div style={ring(52, 180, 45, T.accent, 4, -1, 0.4)} />
-      <div style={ring(61, 270, 20, T.green, 3.5, 1, 0.55)} />
+      <div style={ring(61, 270, 20, T.accentInk, 3.5, 1, 0.55)} />
     </div>
   );
 }
@@ -3649,10 +4076,24 @@ function Progress({ label, value, valueText, right, colour, height = 12, reduceM
 function Loading({ title, subtitle, size, stages }){
   const [secs, setSecs] = useState(0);
   const staged = stages && stages.length;
+  /* Elapsed is read off the clock, not counted in ticks. A student waiting
+     a minute for a mark very often switches tab while they wait, and browsers
+     throttle a background tab's timers to about once a minute — so a tick
+     counter falls behind, and they come back to the 25-second message while
+     the client is already on its last attempt. These stages exist to be
+     honest about exactly that, so they have to be right on return. Reading
+     Date.now() means a late tick shows the correct stage, where a counted one
+     shows an old one. */
   useEffect(() => {
     if (!staged) return undefined;
-    const t = setInterval(() => setSecs(s => s + 1), 1000);
-    return () => clearInterval(t);
+    const t0 = Date.now();
+    const tick = () => setSecs(Math.floor((Date.now() - t0) / 1000));
+    const t = setInterval(tick, 1000);
+    /* And catch up the moment the tab is visible again, rather than on
+       whenever the throttled interval next gets round to it. */
+    const onShow = () => { if (!document.hidden) tick(); };
+    document.addEventListener('visibilitychange', onShow);
+    return () => { clearInterval(t); document.removeEventListener('visibilitychange', onShow); };
   }, [staged]);
 
   let shownTitle = title, shownSub = subtitle;
@@ -3713,7 +4154,7 @@ function RichText({ text, style }){
     const items = bullets;
     bullets = [];
     out.push(
-      <ul key={'u' + k} style={{ margin: '2px 0 8px', paddingLeft: 18 }}>
+      <ul key={'u' + k} style={{ margin: '2px 0 8px', paddingLeft: 18, listStyleType: 'disc' }}>
         {items.map((b, i) => <li key={i} style={{ marginBottom: 3 }}>{inlineBold(b, 'b' + k + i)}</li>)}
       </ul>
     );
@@ -3739,9 +4180,12 @@ function Tip({ id, settings, onSettings, icon, tone, children }){
       border: `1px solid ${rgba(c, 0.18)}`, borderRadius: R.well, padding: '11px 13px' }}>
       <span style={{ color: c, marginTop: 1, flexShrink: 0 }}><Ico name={icon || 'bulb'} size={16} /></span>
       <div style={{ flex: 1, fontFamily: SANS, fontSize: 13, lineHeight: 1.5, color: T.ink }}>{children}</div>
-      <button className="sf-tap" onClick={dismiss} aria-label="Dismiss tip"
-        style={{ background: 'none', border: 'none', cursor: 'pointer', color: T.faint, fontSize: 18,
-          lineHeight: '16px', padding: '0 2px', flexShrink: 0 }}>×</button>
+      {/* Was a "×" glyph in a 16x16 box — under even WCAG 2.2's 24px minimum
+          (SC 2.5.8), on the one control every tip has. The icon stays small;
+          .sf-hit makes the area that answers a tap ~40px. */}
+      <button className="sf-tap sf-hit" onClick={dismiss} aria-label="Dismiss tip"
+        style={{ background: 'none', border: 'none', cursor: 'pointer', color: T.faint,
+          padding: 1, flexShrink: 0, display: 'flex' }}><Ico name="cross" size={14} weight={2.2} /></button>
     </div>
   );
 }
@@ -3904,7 +4348,15 @@ function StudyCard({ card, deck, onGrade, reduceMotion, prog, practice, onFeedba
     return { 0: forGrade(Q.AGAIN), 3: forGrade(Q.HARD), 4: forGrade(Q.GOOD), 5: forGrade(Q.EASY) };
   }, [prog, practice, committedWrong, card.id]);
 
-  const grade = (q) => onGrade(q, committedWrong);
+  /* Every card leaves the screen through here, whichever face it wore, so it
+     is the one place that knows an answer is finished with. Dropping the draft
+     now stops a long answer being handed back on a later review, when the
+     whole point is to produce it from memory again. Harmless for card types
+     that never had one. */
+  /* Only the two faces that write drafts. Every other card type would load and
+     rewrite the whole store on its first grade for nothing — in the Artifact,
+     a storage round trip on the grade path. */
+  const grade = (q) => { if (isLongCard(card)) clearDraft(card.id); return onGrade(q, committedWrong); };
   const anim = reduceMotion ? {} : { animation: 'sf-in 260ms cubic-bezier(.2,.8,.3,1)' };
 
   return (
@@ -4539,8 +4991,34 @@ const cannedAfter = (value, ms = 700) => new Promise(r => setTimeout(() => r(val
 
 /* `demo` swaps the three model calls for fixed answers and nothing else — the
    markup, the states and the ordering are the ones a student meets later. */
+/* An answer box that survives a reload. Restores an unfinished draft when the
+   card mounts, and returns the setter every route that CHANGES the text goes
+   through — typing, the symbol bar, a photographed page — so the draft is
+   saved on the edit rather than in an effect watching the value. An effect
+   would fire once on mount with the box still empty and delete the very draft
+   the restore is in the middle of fetching. The restore is async and never
+   overwrites text the student has already started typing. Shared by the long
+   answer and the worked problem so a fix cannot reach only one of them. */
+function useDraft(cardId, enabled, setValue){
+  useEffect(() => {
+    if (!enabled || !cardId) return undefined;
+    let live = true;
+    readDraft(cardId).then((text) => {
+      if (live && text) setValue((cur) => cur ? cur : text);
+    });
+    return () => { live = false; };
+  }, [cardId, enabled]);
+  return (next) => {
+    setValue(next);
+    if (enabled && cardId) writeDraft(cardId, next);
+  };
+}
+
 function ExtendedFace({ card, phase, deck, onReveal, onBack, demo }){
   const [answer, setAnswer] = useState('');
+  /* The tutorial is excluded: its answer is canned, and persisting it would
+     restore the demo's words into a real card. */
+  const saveAnswer = useDraft(card && card.id, !demo, setAnswer);
   const [busy, setBusy] = useState(false);
   const [result, setResult] = useState(null);
   const [err, setErr] = useState('');
@@ -4581,7 +5059,7 @@ function ExtendedFace({ card, phase, deck, onReveal, onBack, demo }){
     selRef.current = { start: pos, end: pos };
     caretRef.current = pos;
     if (ta) ta.focus();
-    setAnswer(val.slice(0, start) + sym + val.slice(end));
+    saveAnswer(val.slice(0, start) + sym + val.slice(end));
   };
 
   useEffect(() => { setAnswer(''); setResult(null); setErr(''); setHints(null); setHintErr(''); setBig(null); setBigErr(''); setPhoto(null); setPhotoNote(''); selRef.current = { start: 0, end: 0 }; }, [card.id]);
@@ -4625,7 +5103,7 @@ function ExtendedFace({ card, phase, deck, onReveal, onBack, demo }){
         return;
       }
       const had = answer.trim();
-      setAnswer(had ? had + '\n\n' + read : read);
+      saveAnswer(had ? had + '\n\n' + read : read);
       setPhoto(null);
       setPhotoNote(had ? 'added' : 'read');
       track('photo_answer', { result: 'ok', words: read.split(/\s+/).length });
@@ -4668,8 +5146,13 @@ function ExtendedFace({ card, phase, deck, onReveal, onBack, demo }){
         /* Clamped to the ladder rather than forwarded. This is model output, and
            a model that returns something unexpected should not be able to put
            arbitrary text into the analytics. */
+        /* served/walked: which model in the chain gave this grade. Failed marks
+           already carried it and successful ones did not, so the one thing
+           worth knowing about a good-looking mark — was it the head, or the
+           fallback that is measurably worse at this (see mark-eval on
+           nemotron) — could not be answered from the data. */
         if (!demo) track('answer_marked', {
-          grade: GRADES.indexOf(r.grade) >= 0 ? r.grade : 'other' });
+          grade: GRADES.indexOf(r.grade) >= 0 ? r.grade : 'other', served: r.servedBy, walked: r.servedWalk });
         /* a mark you waited 15 seconds for should announce itself */
         if (r.grade === 'Excellence'){ play('excellence'); buzz([14, 40, 14]); }
         else if (r.grade === 'Merit'){ play('milestone'); buzz(16); }
@@ -4735,7 +5218,7 @@ function ExtendedFace({ card, phase, deck, onReveal, onBack, demo }){
             )}
           </div>
           <textarea ref={taRef} value={answer}
-            onChange={e => { setAnswer(e.target.value); selRef.current = { start: e.target.selectionStart, end: e.target.selectionEnd }; }}
+            onChange={e => { saveAnswer(e.target.value); selRef.current = { start: e.target.selectionStart, end: e.target.selectionEnd }; }}
             onSelect={rememberSel} onClick={rememberSel} onKeyUp={rememberSel}
             placeholder={`Use the ${card.verb.toLowerCase()} command properly — ${card.marks} marks means ${card.marks >= 5 ? 'several linked points' : 'more than one point'}.`}
             rows={6}
@@ -4764,7 +5247,7 @@ function ExtendedFace({ card, phase, deck, onReveal, onBack, demo }){
           )}
           <SymbolBar onInsert={insertSymbol} />
           <div className="flex items-center justify-between" style={{ marginTop: 7, marginBottom: 11 }}>
-            <Sub style={{ fontSize: 12 }}>{words > 0 ? `${words} words` : 'Even a rough attempt beats reading the answer'}</Sub>
+            <Sub style={{ fontSize: 12 }}>{words > 0 ? plural(words, 'word') : 'Even a rough attempt beats reading the answer'}</Sub>
           </div>
           {/* Marking is a 25-to-55-second wait against the model, and longer
               when the first attempt times out and the client retries. Without
@@ -4891,30 +5374,98 @@ function ExtendedFace({ card, phase, deck, onReveal, onBack, demo }){
 /* The marking says WHAT is missing; this says HOW. Asked for after you've read
    the mark, because the answer is already written — so it can quote your own
    sentences back and show the upgraded version of them. */
-function UpgradePath({ card, answer, r, level, demo }){
+function UpgradePath({ card, answer, r, level, demo, prefetch: allowPrefetch = true }){
   const [got, setGot] = useState(null);
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState('');
   const target = nextGradeUp(r.grade);
   const atTop = r.grade === 'Excellence';
 
+  /* START IT WHILE THEY READ.
+
+     The upgrade path cannot begin until the mark has landed — it is written
+     from the mark — and then it is one of the slower calls in the app (35.6s
+     in the 23 Sep health check). But a student does not press this the moment
+     the mark appears: they read their grade, the two lists and the notes
+     first. That reading time is free. So the request is started when the
+     button actually scrolls into view, and pressing it collects the answer —
+     instantly if it has arrived, after a shorter wait if it has not.
+
+     Only once it is VISIBLE, not on every mark: a student who never scrolls
+     down to it is a student who was not going to press it, and costs nothing.
+     A prefetch that failed is simply asked again on the press, so this can
+     only ever make the button faster, never make it fail where it would have
+     worked. `upgrade_prefetched` against `upgrade_opened` is how to tell
+     whether it pays for its calls. None of this happens in the tour, whose
+     answer is canned. */
+  const pre = useRef(null);            // { promise, state: 'pending' | 'ready' | 'failed' }
+  const seenRef = useRef(null);
+  const prefetch = () => {
+    if (demo || pre.current) return;
+    const promise = getUpgrade(card, answer, r, level);
+    const entry = { promise: promise, state: 'pending' };
+    pre.current = entry;
+    promise.then(() => { entry.state = 'ready'; }, () => { entry.state = 'failed'; });
+  };
+  useEffect(() => {
+    /* Not in a results LIST (an exam paper's parts). "It came into view, so
+       they are about to press it" holds for the single card in the feed; in a
+       paper a student reads ten results top to bottom, and ten unrequested
+       35-second calls is not a prefetch, it is a flood. */
+    if (demo || got || !allowPrefetch) return undefined;
+    const el = seenRef.current;
+    if (!el || typeof IntersectionObserver === 'undefined') return undefined;
+    const io = new IntersectionObserver((entries) => {
+      for (const e of entries) if (e.isIntersecting){
+        io.disconnect();
+        if (!pre.current){ prefetch(); track('upgrade_prefetched', {}); }
+        return;
+      }
+    }, { threshold: 0.6 });
+    io.observe(el);
+    return () => io.disconnect();
+  }, [demo, got]);
+
   const run = async () => {
     setBusy(true); setErr('');
+    const had = pre.current ? pre.current.state : 'none';
+    if (!demo) track('upgrade_opened', { grade: GRADES.indexOf(r.grade) >= 0 ? r.grade : 'other', prefetch: had });
     try {
-      const u = demo ? await cannedAfter(demo.upgrade, 900) : await getUpgrade(card, answer, r, level);
+      let u;
+      if (demo) u = await cannedAfter(demo.upgrade, 900);
+      else if (pre.current && pre.current.state !== 'failed'){
+        /* Arrived, or on its way: collect it. If it fails now, ask once more
+           rather than showing an error for a request the student never made. */
+        try { u = await pre.current.promise; }
+        catch (e){ pre.current = null; u = await getUpgrade(card, answer, r, level); }
+      }
+      else { pre.current = null; u = await getUpgrade(card, answer, r, level); }
       if (u && (Array.isArray(u.steps) || u.habit)) setGot(u);
-      else setErr('Could not read that. Try again.');
-    } catch (e){ setErr(friendlyApiError(e)); }
+      else { pre.current = null; setErr('Could not read that. Try again.'); }
+    } catch (e){ pre.current = null; setErr(friendlyApiError(e)); }
     finally { setBusy(false); }
   };
 
   if (!got){
     return (
-      <div style={{ marginTop: 12 }}>
-        <Btn full kind="soft" onClick={run} disabled={busy} style={{ fontSize: 14 }}>
-          <span className="flex items-center justify-center gap-2">
-            {busy ? <><Rings size={17} />Working out how…</> : (atTop ? 'How do I make this airtight?' : `How do I get to ${target}?`)}
-          </span>
+      <div ref={seenRef} style={{ marginTop: 12 }}>
+        {/* Default, not soft: this sits in MarkResult's PANEL, whose ground is
+            T.well — the same colour as a soft button. It rendered as bare
+            centred bold text, a heading rather than a thing to press, on the
+            one action that turns a mark into a better answer. White on the
+            well reads as a button; the accent ink and the sparkle say it is
+            the one worth pressing. */}
+        <Btn full onClick={run} disabled={busy} style={{ fontSize: 14, color: T.accentInk }}>
+          {busy
+            ? <span className="flex items-center justify-center gap-2"><Rings size={17} />Working out how…</span>
+            /* The icon sits in the line of text rather than beside it as a flex
+               item, so if the label wraps — the tour's modal is narrower than
+               the feed, and so is a 320px phone — the sparkle travels with
+               the first word instead of floating alone at the left edge. */
+            : <span>
+                <span style={{ display: 'inline-flex', verticalAlign: '-2px', marginRight: 7 }}><Ico name="sparkle" size={15} /></span>
+                {atTop ? 'How do I make this airtight?' : `How do I get to ${target}?`}
+              </span>}
         </Btn>
         {err && <Sub style={{ marginTop: 8, color: T.red }}>{err}</Sub>}
       </div>
@@ -5004,14 +5555,25 @@ function AnnotatedAnswer({ answer, notes, defaultOpen = true }){
 
   return (
     <div style={{ marginTop: 12, paddingTop: 12, borderTop: `1px dashed ${T.border}` }}>
-      <button className="sf-tap" onClick={() => setOpen(o => !o)}
+      {/* A chevron rather than the words "hide"/"show". On a phone the counts
+          plus the word wrapped, and "hide" was left alone on a second line
+          like a stray word; the chevron is the universal toggle, takes a
+          fraction of the width, and the button says what it does to a
+          screen reader instead. */}
+      <button className="sf-tap" onClick={() => setOpen(o => !o)} aria-expanded={open}
+        aria-label={open ? 'Hide what you wrote' : 'Show what you wrote'}
         style={{ background: 'none', border: 'none', padding: 0, cursor: 'pointer', width: '100%' }}>
-        <div className="flex items-center justify-between" style={{ marginBottom: open ? 10 : 0 }}>
+        <div className="flex items-center justify-between" style={{ marginBottom: open ? 10 : 0, gap: 8 }}>
           <Chip colour={T.muted}>What you wrote</Chip>
-          <Sub style={{ fontSize: 11.5 }}>
-            {(located.length + orphans.length) > 0 ? `${located.length + orphans.length} note${(located.length + orphans.length) === 1 ? '' : 's'} · ` : ''}
-            {words} words · {open ? 'hide' : 'show'}
-          </Sub>
+          <span className="flex items-center" style={{ gap: 6, color: T.faint }}>
+            <Sub style={{ fontSize: 11.5, whiteSpace: 'nowrap' }}>
+              {(located.length + orphans.length) > 0 ? plural(located.length + orphans.length, 'note') + ' · ' : ''}
+              {plural(words, 'word')}
+            </Sub>
+            <span style={{ display: 'flex', transform: open ? 'rotate(180deg)' : 'none', transition: 'transform 180ms' }}>
+              <Ico name="chevron" size={14} />
+            </span>
+          </span>
         </div>
       </button>
 
@@ -5076,7 +5638,7 @@ function AnnotatedAnswer({ answer, notes, defaultOpen = true }){
   );
 }
 
-function MarkResult({ r, card, answer, level, deck, demo, onEdit }){
+function MarkResult({ r, card, answer, level, deck, demo, onEdit, list }){
   const gc = r.grade === 'Excellence' ? T.green : r.grade === 'Merit' ? T.accent : r.grade === 'Achieved' ? T.muted : T.red;
   const [share, setShare] = useState(false);
   /* Excellence only. Merit is a good day and Achieved is most days; if the card
@@ -5087,10 +5649,17 @@ function MarkResult({ r, card, answer, level, deck, demo, onEdit }){
   return (
     <div style={{ ...PANEL, marginTop: 12, animation: 'sf-reveal 260ms cubic-bezier(.2,.8,.3,1)' }}>
       <Chip colour={gc} solid>{r.grade}</Chip>
+      <MarkerNote by={r.servedBy} kind="answer" />
       {Array.isArray(r.hit) && r.hit.length > 0 && (
         <div style={{ marginTop: 10 }}>
           <Sub style={{ fontWeight: 700, color: T.ink }}>What earned credit</Sub>
-          <ul style={{ margin: '6px 0 0', paddingLeft: 18, fontFamily: SANS, fontSize: 14.5, color: T.muted, lineHeight: 1.55 }}>
+          {/* listStyleType is stated, not left to the browser. The shell's reset
+              (docs/app/index.html: `menu,ol,ul{list-style:none}`, the same rule
+              Tailwind's Preflight carried before it) strips the markers, which
+              left these items indented under nothing — floating lines that read
+              as a layout fault rather than a list. The indent was always here
+              expecting bullets; this gives it them. */}
+          <ul style={{ margin: '6px 0 0', paddingLeft: 18, listStyleType: 'disc', fontFamily: SANS, fontSize: 14.5, color: T.muted, lineHeight: 1.55 }}>
             {r.hit.map((h, i) => <li key={i}>{h}</li>)}
           </ul>
         </div>
@@ -5098,20 +5667,22 @@ function MarkResult({ r, card, answer, level, deck, demo, onEdit }){
       {Array.isArray(r.missing) && r.missing.length > 0 && (
         <div style={{ marginTop: 10 }}>
           <Sub style={{ fontWeight: 700, color: T.ink }}>To reach the next grade</Sub>
-          <ul style={{ margin: '6px 0 0', paddingLeft: 18, fontFamily: SANS, fontSize: 14.5, color: T.muted, lineHeight: 1.55 }}>
+          <ul style={{ margin: '6px 0 0', paddingLeft: 18, listStyleType: 'disc', fontFamily: SANS, fontSize: 14.5, color: T.muted, lineHeight: 1.55 }}>
             {r.missing.map((m, i) => <li key={i}>{m}</li>)}
           </ul>
         </div>
       )}
       {r.lift && <div style={{ marginTop: 10, fontFamily: SANS, fontSize: 15, fontWeight: 600, color: T.ink, lineHeight: 1.5 }}>{r.lift}</div>}
       {answer && <AnnotatedAnswer answer={answer} notes={r.notes} />}
-      {card && answer && <UpgradePath card={card} answer={answer} r={r} level={level} demo={demo} />}
+      {card && answer && <UpgradePath card={card} answer={answer} r={r} level={level} demo={demo} prefetch={!list} />}
       {/* Writing it again with the feedback still on screen is the whole loop —
           and the second attempt is where the grade actually moves. The answer is
           kept, not cleared: this is an edit, not a fresh start. */}
       {onEdit && (
         <div style={{ marginTop: 12 }}>
-          <Btn full kind="soft" onClick={onEdit} style={{ fontSize: 14 }}>
+          {/* Default for the same reason as the upgrade button: soft on the
+              panel's well is invisible. */}
+          <Btn full onClick={onEdit} style={{ fontSize: 14 }}>
             <span className="flex items-center justify-center gap-2"><Ico name="pencil" size={15} />Improve this answer and mark again</span>
           </Btn>
         </div>
@@ -5156,6 +5727,7 @@ function WorkedResult({ r, card, working, onEdit }){
         <Chip colour={gc} solid>{r.grade}</Chip>
         <Chip colour={finalC}>{finalWord}</Chip>
       </div>
+      <MarkerNote by={r.servedBy} kind="working" />
 
       {/* The one fact worth pulling out of a page of marking. Everything after
           a slip in a calculation is contaminated by it, so where it STARTED is
@@ -5235,6 +5807,8 @@ function WorkedResult({ r, card, working, onEdit }){
 
 function WorkedFace({ card, phase, deck, onReveal, onBack }){
   const [working, setWorking] = useState('');
+  /* A page of working is as expensive to lose as a page of prose. */
+  const saveWorking = useDraft(card && card.id, true, setWorking);
   const [busy, setBusy] = useState(false);
   const [result, setResult] = useState(null);
   const [err, setErr] = useState('');
@@ -5269,7 +5843,7 @@ function WorkedFace({ card, phase, deck, onReveal, onBack }){
     selRef.current = { start: pos, end: pos };
     caretRef.current = pos;
     if (ta) ta.focus();
-    setWorking(val.slice(0, start) + sym + val.slice(end));
+    saveWorking(val.slice(0, start) + sym + val.slice(end));
   };
 
   useEffect(() => {
@@ -5293,7 +5867,7 @@ function WorkedFace({ card, phase, deck, onReveal, onBack }){
         return;
       }
       const had = working.trim();
-      setWorking(had ? had + '\n' + read : read);
+      saveWorking(had ? had + '\n' + read : read);
       setPhoto(null);
       setPhotoNote(had ? 'added' : 'read');
       track('photo_answer', { result: 'ok', kind: 'working', lines: read.split('\n').length });
@@ -5313,7 +5887,7 @@ function WorkedFace({ card, phase, deck, onReveal, onBack }){
         setResult(r); onReveal && onReveal();
         track('working_marked', {
           grade: GRADES.indexOf(r.grade) >= 0 ? r.grade : 'other',
-          final: ['correct', 'wrong', 'missing'].indexOf(r.final) >= 0 ? r.final : 'other' });
+          final: ['correct', 'wrong', 'missing'].indexOf(r.final) >= 0 ? r.final : 'other', served: r.servedBy, walked: r.servedWalk });
         if (r.grade === 'Excellence'){ play('excellence'); buzz([14, 40, 14]); }
         else if (r.grade === 'Merit'){ play('milestone'); buzz(16); }
         else if (r.grade === 'Achieved'){ play('right', 1); buzz(10); }
@@ -5358,7 +5932,7 @@ function WorkedFace({ card, phase, deck, onReveal, onBack }){
             </>
           </div>
           <textarea ref={taRef} value={working}
-            onChange={e => { setWorking(e.target.value); selRef.current = { start: e.target.selectionStart, end: e.target.selectionEnd }; }}
+            onChange={e => { saveWorking(e.target.value); selRef.current = { start: e.target.selectionStart, end: e.target.selectionEnd }; }}
             onSelect={rememberSel} onClick={rememberSel} onKeyUp={rememberSel}
             placeholder={'One step per line — the marks are in the method, not in the number.'}
             rows={7}
@@ -5530,7 +6104,7 @@ function PaperPart({ q, part, value, onChange, onCommit }){
       </div>
 
       <div className="flex items-center justify-between gap-3" style={{ marginBottom: 6 }}>
-        <Sub style={{ fontSize: 12 }}>{words > 0 ? `${words} words` : ' '}</Sub>
+        <Sub style={{ fontSize: 12 }}>{words > 0 ? plural(words, 'word') : ' '}</Sub>
         <>
           <input ref={photoRef} type="file" accept="image/*" style={{ display: 'none' }}
             onChange={(e) => { const f = (e.target.files || [])[0]; if (e.target) e.target.value = ''; if (f) usePhoto(f); }} />
@@ -5599,8 +6173,11 @@ function PaperPartResult({ res, part, level, open, onToggle }){
           {res.blank ? (
             <Sub>You left this one blank. {part ? part.marks : 0} marks, and the only certain way to score none.</Sub>
           ) : res.r ? (
+            /* `list`: one of up to ten results read one after another, so a
+               button scrolling into view is not a student reaching for it —
+               see UpgradePath's prefetch. */
             <MarkResult r={res.r} card={part ? partAsCard({ n: res.q, context: '' }, part) : null}
-              answer={res.answer} level={level} />
+              answer={res.answer} level={level} list />
           ) : (
             <Sub style={{ color: T.red }}>This part could not be marked — the connection dropped. Your answer is still here.</Sub>
           )}
@@ -5873,7 +6450,7 @@ function ExamPaper({ decks, progress, defaultLevel, saved, onSave, onClose, onMa
                         <span style={{ minWidth: 0, flex: 1 }}>
                           <span style={{ display: 'block', fontFamily: SANS, fontSize: 14.5, fontWeight: 700, color: T.ink }}>{d.subject || 'Untitled'}</span>
                           <span style={{ display: 'block', fontFamily: SANS, fontSize: 12.5, color: T.faint }}>
-                            {d.topic || ''}{d.topic ? ' · ' : ''}{d.cards.length} cards
+                            {d.topic || ''}{d.topic ? ' · ' : ''}{plural(d.cards.length, 'card')}
                           </span>
                         </span>
                       </button>
@@ -6618,6 +7195,7 @@ function Create({ onSave, settings, onSettings, onPending, onStarter, seed, onSe
   const [prog, setProg] = useState(null);
   const [err, setErr] = useState('');
   const [drafts, setDrafts] = useState(null);
+  const genRun = useRef(0);   // bumped per run and on Discard — see run()
   // set when some sections of the material failed but others produced cards
   const [shortfall, setShortfall] = useState('');
   const [meta, setMeta] = useState({ subject: '', topic: '', standard: 'NCEA Level 1' });
@@ -6643,6 +7221,11 @@ function Create({ onSave, settings, onSettings, onPending, onStarter, seed, onSe
     setMode('generate');
     setSource(seed.source || '');
     if (seed.level) setLevel(seed.level);
+    /* A seed replaces the material, so a generate still out belongs to the
+       OLD material: end it, or its next section lands on top of the seed with
+       the old subject and topic and nothing to say it does not belong. Same
+       reason Discard does this. */
+    genRun.current++; setBusy(false); setProg(null);
     setDrafts(null); setErr(''); setImages([]); setStrictSource(true);
     if (onSeedUsed) onSeedUsed();
   }, [seed]);
@@ -6680,12 +7263,29 @@ function Create({ onSave, settings, onSettings, onPending, onStarter, seed, onSe
 
     setBusy(true); setErr(''); setProg(null); setShortfall('');
     lastApiError = ''; genLost = 0;
+    /* CARDS LAND AS THEY ARE MADE. The review screen opens on the first
+       section's cards, and the rest are appended as their sections finish, so
+       the student reads and prunes while the slow sections are still out.
+       A token per run: Discard bumps it, so a section that lands after the
+       student has thrown the set away is dropped rather than bringing the
+       drafts back. The subject and topic are guessed ONCE, on the first batch,
+       so a later batch never overwrites what the student has typed there; and
+       the old end-of-run setDrafts is gone, because replacing the list would
+       reset every card they had already dropped. */
+    const token = ++genRun.current;
+    let metaSet = false;
+    const land = (batch) => {
+      if (genRun.current !== token) return;
+      const fresh = batch.map(c => ({ ...c, keep: true }));
+      setDrafts(prev => dedupeCards((prev || []).concat(fresh)));
+      if (!metaSet){ metaSet = true; setMeta({ subject: guessSubject(source), topic: guessTopic(source), standard: lvl }); }
+    };
     try {
       const model = pickModel(cardType, settings);
       let cards = [];
       const pctLong = longMixOf(settings);
       const strict = strictSource;
-      if (source.trim()) cards = cards.concat(await genText(source, cardType, lvl, (i, n, phase) => setProg({ i, n, phase }), model, pctLong, strict));
+      if (source.trim()) cards = cards.concat(await genText(source, cardType, lvl, (i, n, phase) => setProg({ i, n, phase }), model, pctLong, strict, land));
       if (images.length){
         setProg({ i: 0, n: 0, phase: 'prep' });
         const shrunk = [];
@@ -6693,10 +7293,12 @@ function Create({ onSave, settings, onSettings, onPending, onStarter, seed, onSe
         if (shrunk.length){
           // read each image into study text, then make cards from that text
           const imgText = await transcribeImages(shrunk, (i, n) => setProg({ i, n, phase: 'images' }));
-          if (imgText.trim()) cards = cards.concat(await genText(imgText, cardType, lvl, (i, n, phase) => setProg({ i, n, phase }), model, pctLong, strict));
-          else if (!cards.length){ setErr('Could not read those images. Try a clearer photo.'); setBusy(false); setProg(null); return; }
-        } else if (!cards.length){ setErr('Could not read those images. Try a clearer photo.'); setBusy(false); setProg(null); return; }
+          if (imgText.trim()) cards = cards.concat(await genText(imgText, cardType, lvl, (i, n, phase) => setProg({ i, n, phase }), model, pctLong, strict, land));
+          else if (!cards.length){ if (genRun.current === token) setErr('Could not read those images. Try a clearer photo.'); return; }
+        } else if (!cards.length){ if (genRun.current === token) setErr('Could not read those images. Try a clearer photo.'); return; }
       }
+      /* Thrown away mid-run: nothing below is the student's business now. */
+      if (genRun.current !== token) return;
       cards = dedupeCards(cards);
       if (!cards.length){
         /* The likelier failure than a throw: genChunk swallows its own errors
@@ -6729,22 +7331,26 @@ function Create({ onSave, settings, onSettings, onPending, onStarter, seed, onSe
         setShortfall('The AI ran out of time on ' + genLost + (genLost === 1 ? ' section' : ' sections')
           + ' of your material, so this is a shorter set than usual. It is the AI being slow, not your connection. Save these, then generate again from the parts that are missing.');
       }
-      setMeta({ subject: guessSubject(source), topic: guessTopic(source), standard: lvl });
-      setDrafts(cards.map(c => ({ ...c, keep: true })));
+      /* Already on screen — landed section by section by land() above. */
       /* Generated, not yet saved — the gap between this and deck_created is the
          number that says whether the cards coming back are any good. */
       track('cards_generated', { cards: cards.length, images: images.length,
         lost: genLost, mode: String(cardType), ...servedTags() });
     } catch (e){
       track('generate_failed', { reason: failureKind(e), ...servedTags() });
-      setErr('Generation failed. Check your connection and try again.');
+      if (genRun.current === token) setErr('Generation failed. Check your connection and try again.');
     }
-    finally { setBusy(false); setProg(null); }
+    /* Only if this is still the current run. A run that was discarded or
+       replaced by a seed has already had its busy state cleared, and if the
+       student has started ANOTHER run since, clearing busy here would flip the
+       new run's spinner off while it is still working. */
+    finally { if (genRun.current === token){ setBusy(false); setProg(null); } }
   };
 
   if (drafts){
     return <DraftReview drafts={drafts} setDrafts={setDrafts} meta={meta} setMeta={setMeta} shortfall={shortfall}
-      onCancel={() => { setDrafts(null); setShortfall(''); }}
+      live={busy ? (prog || { i: 0, n: 0 }) : null}
+      onCancel={() => { genRun.current++; setBusy(false); setProg(null); setDrafts(null); setShortfall(''); }}
       onSave={() => { onSave(drafts.filter(d => d.keep), meta); setDrafts(null); setShortfall(''); setSource(''); setImages([]); }} />;
   }
 
@@ -6760,6 +7366,24 @@ function Create({ onSave, settings, onSettings, onPending, onStarter, seed, onSe
       <Segmented value={mode} onChange={setMode}
         options={[{ v: 'generate', label: 'Generate' }, { v: 'manual', label: 'Type them' }]} />
 
+      {/* Material first, then how to make it. The notes box — the one thing
+          every student has to use — used to sit under six blocks of options,
+          at y=744 on an 812px phone: behind the bottom nav, so a new user's
+          first screen of Create showed no box to type in. This is also the
+          order the tour already tells it in (upload, paste, type, level); the
+          page was the thing contradicting it. The timing tip moves down beside
+          the button, which is where the wait it describes happens. */}
+      {mode === 'generate' && (
+        <div data-tour="create-upload">
+          <DropZone onPicked={takeFiles} attaching={attaching} imageCount={images.length} />
+        </div>
+      )}
+
+      <textarea value={source} onChange={e => setSource(e.target.value)} data-tour="create-source"
+        placeholder={mode === 'manual' ? 'question | answer\nquestion | answer' : 'Paste your notes, or just type a topic like “rates of reaction”…'}
+        rows={7}
+        style={{ ...INPUT, marginTop: 14, fontSize: 15, resize: 'vertical' }} />
+
       {mode === 'generate' && (
         <div style={{ marginTop: 10 }} data-tour="create-type">
           <Segmented value={cardType} onChange={setCardType}
@@ -6772,42 +7396,6 @@ function Create({ onSave, settings, onSettings, onPending, onStarter, seed, onSe
           <MixSlider value={longMixOf(settings)} onChange={(v) => onSettings({ ...settings, longMix: v })} compact />
         </Card>
       )}
-
-      {mode === 'generate' && (
-        <div style={{ marginTop: 10 }}>
-          <Tip id="create-time" settings={settings} onSettings={onSettings} icon="clock">
-            Generating usually takes 20–40 seconds while the AI writes each card, and longer if it is busy. Nothing saves until you've looked them over.
-          </Tip>
-        </div>
-      )}
-
-      {mode === 'generate' && (
-        <div data-tour="create-upload">
-          <DropZone onPicked={takeFiles} attaching={attaching} imageCount={images.length} />
-        </div>
-      )}
-
-      {mode === 'generate' && (
-        <Card style={{ padding: '13px 15px', marginTop: 10, boxShadow: SH.raised }}>
-          <div className="flex items-center justify-between" style={{ gap: 12 }}>
-            <div style={{ paddingRight: 6 }}>
-              <div style={{ fontFamily: SANS, fontSize: 14, fontWeight: 700, color: T.ink }}>Only my material</div>
-              <Sub style={{ fontSize: 12.5, marginTop: 2 }}>Sticks to what you paste or upload — nothing extra gets added.</Sub>
-            </div>
-            <Toggle on={strictSource} onClick={() => setStrictSource(v => !v)} label="Only my material" />
-          </div>
-          {strictSource && !hasMaterial && (
-            <Sub style={{ fontSize: 12, marginTop: 9, color: T.amber, fontWeight: 600 }}>
-              Add some notes or a file for this — a bare topic has nothing to pull from.
-            </Sub>
-          )}
-        </Card>
-      )}
-
-      <textarea value={source} onChange={e => setSource(e.target.value)} data-tour="create-source"
-        placeholder={mode === 'manual' ? 'question | answer\nquestion | answer' : 'Paste your notes, or just type a topic like “rates of reaction”…'}
-        rows={7}
-        style={{ ...INPUT, marginTop: 14, fontSize: 15, resize: 'vertical' }} />
 
       {mode === 'generate' && (
         <div style={{ marginTop: 14 }} data-tour="create-level">
@@ -6831,6 +7419,31 @@ function Create({ onSave, settings, onSettings, onPending, onStarter, seed, onSe
               placeholder="e.g. IB Diploma, Year 12 Physics"
               style={{ ...INPUT, marginTop: 8, fontSize: 15 }} />
           )}
+        </div>
+      )}
+
+      {mode === 'generate' && (
+        <Card style={{ padding: '13px 15px', marginTop: 10, boxShadow: SH.raised }}>
+          <div className="flex items-center justify-between" style={{ gap: 12 }}>
+            <div style={{ paddingRight: 6 }}>
+              <div style={{ fontFamily: SANS, fontSize: 14, fontWeight: 700, color: T.ink }}>Only my material</div>
+              <Sub style={{ fontSize: 12.5, marginTop: 2 }}>Sticks to what you paste or upload — nothing extra gets added.</Sub>
+            </div>
+            <Toggle on={strictSource} onClick={() => setStrictSource(v => !v)} label="Only my material" />
+          </div>
+          {strictSource && !hasMaterial && (
+            <Sub style={{ fontSize: 12, marginTop: 9, color: T.amber, fontWeight: 600 }}>
+              Add some notes or a file for this — a bare topic has nothing to pull from.
+            </Sub>
+          )}
+        </Card>
+      )}
+
+      {mode === 'generate' && (
+        <div style={{ marginTop: 10 }}>
+          <Tip id="create-time" settings={settings} onSettings={onSettings} icon="clock">
+            Generating usually takes 20–40 seconds while the AI writes each card, and longer if it is busy. Nothing saves until you've looked them over.
+          </Tip>
         </div>
       )}
 
@@ -6865,7 +7478,7 @@ function Create({ onSave, settings, onSettings, onPending, onStarter, seed, onSe
             came here to press. */}
         {!hasMaterial && onStarter && (
           <div style={{ marginTop: 14, textAlign: 'center' }}>
-            <button onClick={onStarter} className="sf-tap"
+            <button onClick={onStarter} className="sf-tap sf-hit-y"
               style={{ background: 'none', border: 'none', cursor: 'pointer', padding: '4px 6px',
                 fontFamily: SANS, fontSize: 13.5, fontWeight: 600, color: T.accentInk }}>
               Nothing to paste? Take a ready-made deck →
@@ -6900,9 +7513,12 @@ function draftPreview(d){
   return { tag: 'Flip', main: d.front, sub: d.back };
 }
 
-function DraftReview({ drafts, setDrafts, meta, setMeta, onSave, onCancel, shortfall }){
+function DraftReview({ drafts, setDrafts, meta, setMeta, onSave, onCancel, shortfall, live }){
   const kept = drafts.filter(d => d.keep).length;
-  const toggle = (id) => setDrafts(drafts.map(d => d.id === id ? { ...d, keep: !d.keep } : d));
+  /* Functional, not `drafts.map(...)` from this render's closure: cards are
+     appended while this screen is open, and a tap computed from a stale list
+     would write it back and delete whatever had just landed. */
+  const toggle = (id) => setDrafts(ds => ds.map(d => d.id === id ? { ...d, keep: !d.keep } : d));
   const colour = subjectColour(meta.subject);
 
   return (
@@ -6928,14 +7544,33 @@ function DraftReview({ drafts, setDrafts, meta, setMeta, onSave, onCancel, short
           </Sub>
         </div>
       )}
+      {live && (
+        <div style={{ background: rgba(T.accent, 0.08), borderRadius: R.well, padding: '11px 14px', marginBottom: 14 }}>
+          <Sub style={{ fontSize: 13, display: 'flex', gap: 9, alignItems: 'center', color: T.ink }}>
+            <Rings size={16} />
+            <span>
+              <b>Still making cards</b>
+              {live.n > 0 ? (live.phase === 'images' ? ' — reading slide ' + live.i + ' of ' + live.n : ' — ' + live.i + ' of ' + live.n + ' sections done') : ''}
+              . Look through these while the rest arrive.
+            </span>
+          </Sub>
+        </div>
+      )}
       <Sub style={{ marginBottom: 14 }}>Tap a card to drop it. {kept} of {drafts.length} kept.</Sub>
 
       <Card style={{ padding: 14, marginBottom: 14, boxShadow: SH.raised }}>
-        <div className="grid grid-cols-3 gap-2">
-          {['subject','topic','standard'].map(k => (
-            <div key={k}>
+        {/* Three across at 375px made every field 99px wide, so the topic and
+            the standard — the value a student is encouraged to spell out in
+            full ("NCEA Level 1 AS92022 genetic variation") — showed as
+            "What is an al" and "NCEA Lev". On a phone the standard gets a row of
+            its own (.sf-meta). And an empty field says what it is for, since
+            the guess is often nothing at all for a subject. */}
+        <div className="sf-meta">
+          {[['subject', 'e.g. Chemistry'], ['topic', 'e.g. Rates of reaction'], ['standard', 'e.g. NCEA Level 1']].map(([k, eg]) => (
+            <div key={k} className={k === 'standard' ? 'sf-meta-wide' : undefined}>
               <div style={{ fontFamily: SANS, fontSize: 12, fontWeight: 700, color: T.muted, textTransform: 'capitalize', marginBottom: 5 }}>{k}</div>
-              <input value={meta[k]} onChange={e => setMeta({ ...meta, [k]: e.target.value })}
+              <input value={meta[k]} onChange={e => setMeta({ ...meta, [k]: e.target.value })} placeholder={eg}
+                aria-label={k.charAt(0).toUpperCase() + k.slice(1)}
                 style={{ ...INPUT, padding: '9px 10px', fontSize: 13 }} />
             </div>
           ))}
@@ -6961,7 +7596,11 @@ function DraftReview({ drafts, setDrafts, meta, setMeta, onSave, onCancel, short
         })}
       </div>
 
-      <Btn full kind="primary" onClick={onSave} disabled={!kept}>Save {kept} cards</Btn>
+      {/* Waits for the last section: saving early would leave the cards still on
+          their way with nowhere to land. */}
+      <Btn full kind="primary" onClick={onSave} disabled={!kept || !!live}>
+        {live ? 'Making the rest…' : 'Save ' + plural(kept, 'card')}
+      </Btn>
     </div>
   );
 }
@@ -7007,7 +7646,7 @@ function Decks({ decks, progress, onEditCard, onDeleteCard, onDeleteDeck, onRena
               <div style={{ flex: 1, minWidth: 0 }}>
                 <div style={{ fontFamily: SANS, fontSize: 15.5, fontWeight: 700, color: T.ink,
                   overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{d.topic || d.subject || 'Untitled'}</div>
-                <Sub style={{ fontSize: 13 }}>{d.cards.length} cards · {d.subject || 'Untitled'}</Sub>
+                <Sub style={{ fontSize: 13 }}>{plural(d.cards.length, 'card')} · {d.subject || 'Untitled'}</Sub>
               </div>
               <div className="flex flex-col items-end gap-1">
                 {dueN > 0 && <Chip colour={T.red}>{dueN} due</Chip>}
@@ -7068,7 +7707,7 @@ function DeckEditor({ deck, progress, onBack, onEditCard, onDeleteCard, onDelete
             cursor: 'pointer', fontSize: 17, color: T.ink, boxShadow: SH.raised, flexShrink: 0 }}>‹</button>
         <div style={{ minWidth: 0, flex: 1 }}>
           <Title style={{ fontSize: 18, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{deck.topic || 'Deck'}</Title>
-          <Sub style={{ fontSize: 13 }}>{deck.subject} · {deck.cards.length} cards</Sub>
+          <Sub style={{ fontSize: 13 }}>{deck.subject} · {plural(deck.cards.length, 'card')}</Sub>
         </div>
         {!renaming && (
           <div className="flex gap-2" style={{ flexShrink: 0 }}>
@@ -7164,7 +7803,7 @@ function DeckEditor({ deck, progress, onBack, onEditCard, onDeleteCard, onDelete
         ) : (
           <div className="flex gap-2">
             <Btn full kind="danger" onClick={onDeleteDeck} style={{ background: T.red, color: '#fff' }}>
-              Delete {deck.cards.length} cards
+              Delete {plural(deck.cards.length, 'card')}
             </Btn>
             <Btn full kind="soft" onClick={() => setConfirmDeck(false)}>Keep</Btn>
           </div>
@@ -7262,13 +7901,22 @@ function CardEditRow({ card, onSave, onCancel }){
 /* ==========================================================================
    STATS  —  kept light on purpose. No badges, no notifications.
    ========================================================================== */
-function Stats({ decks, progress, stats }){
+function Stats({ decks, progress, stats, due }){
   const today = TODAY();
-  const dueTotal = useMemo(() => {
+  /* The header's number, not a second calculation of it. This counted reviews
+     only, while the masthead chip right above it counts what the feed will
+     actually hand over today — reviews due plus today's allowance of new
+     cards. So a student with a fresh deck saw "4 due" in red at the top of
+     the screen and "0 still due" two inches below it. "Still due" is asking
+     how much is left to do today, and the chip is the answer to that; the
+     reviews-only count is kept as the fallback for anywhere Stats is
+     rendered without it. */
+  const reviewsDue = useMemo(() => {
     let n = 0;
     for (const d of decks) for (const c of d.cards){ const p = progress[c.id]; if (p && p.seen && p.due <= today) n++; }
     return n;
   }, [decks, progress]);
+  const dueTotal = typeof due === 'number' ? due : reviewsDue;
   const totalCards = decks.reduce((s, d) => s + d.cards.length, 0);
   const reviewedToday = (stats.reviewsByDate && stats.reviewsByDate[today]) || 0;
   const practiceToday = (stats.practiceByDate && stats.practiceByDate[today]) || 0;
@@ -7316,7 +7964,7 @@ function Stats({ decks, progress, stats }){
           );
         })}
       </div>
-      <Sub style={{ marginTop: 18, textAlign: 'center' }}>{totalCards} cards across {decks.length} decks</Sub>
+      <Sub style={{ marginTop: 18, textAlign: 'center' }}>{plural(totalCards, 'card')} across {plural(decks.length, 'deck')}</Sub>
     </div>
   );
 }
@@ -7345,7 +7993,7 @@ function Stat({ n, k, colour }){
    somewhere else still wants one, and there is no sensible default to invent. */
 function Toggle({ on, onClick, label }){
   return (
-    <button className="sf-tap" onClick={onClick}
+    <button className="sf-tap sf-hit-y" onClick={onClick}
       role="switch" aria-checked={on ? 'true' : 'false'} aria-label={label || undefined}
       style={{ width: 50, height: 30, borderRadius: R.pill, border: 'none', flexShrink: 0, cursor: 'pointer',
         background: on ? T.green : 'var(--sf-track)', position: 'relative', transition: 'background 200ms' }}>
@@ -7404,7 +8052,7 @@ function TransferCard({ library, progress, onImport }){
     try {
       const res = mergeImport(JSON.parse(raw), library, progress);
       onImport(res);
-      say(`Added ${res.deckCount} deck${res.deckCount > 1 ? 's' : ''} · ${res.cardCount} cards.`);
+      say(`Added ${plural(res.deckCount, 'deck')} · ${plural(res.cardCount, 'card')}.`);
       setText(''); setPasting(false);
     } catch (e){ say(e.message || 'That did not look like an export.', true); }
   };
@@ -7425,10 +8073,10 @@ function TransferCard({ library, progress, onImport }){
 
       <div className="flex items-center justify-between" style={{ marginBottom: 7 }}>
         <Sub style={{ fontSize: 12.5, fontWeight: 700, color: T.ink }}>
-          Export {chosenCards > 0 ? `(${chosen.length} deck${chosen.length > 1 ? 's' : ''} · ${chosenCards} card${chosenCards > 1 ? 's' : ''})` : ''}
+          Export {chosenCards > 0 ? `(${plural(chosen.length, 'deck')} · ${plural(chosenCards, 'card')})` : ''}
         </Sub>
         {library.decks.length > 1 && (
-          <button className="sf-tap" onClick={() => picking ? setPicking(false) : startPicking()}
+          <button className="sf-tap sf-hit" onClick={() => picking ? setPicking(false) : startPicking()}
             style={{ background: 'none', border: 'none', cursor: 'pointer', padding: 0,
               fontFamily: SANS, fontSize: 12.5, fontWeight: 700, color: T.accentInk }}>
             {picking ? 'Export all' : 'Choose decks'}
@@ -7714,10 +8362,10 @@ function Home({ library, progress, stats, settings, due, onStart, onCreate, onDe
             </Tip>
           </div>
           {/* hero — what to do now */}
-          <Card style={{ padding: '22px 24px', marginBottom: 16, display: 'flex', alignItems: 'center', gap: 22, flexWrap: 'wrap' }}>
-            <div style={{ flex: '1 1 260px' }}>
-              <div style={{ fontFamily: SANS, fontSize: 21, fontWeight: 750, letterSpacing: '-0.01em', color: T.ink }}>
-                {due > 0 ? `You've got ${due} card${due > 1 ? 's' : ''} ready` : 'You\'re all caught up'}
+          <Card className="sf-hero" style={{ padding: '22px 24px', marginBottom: 16, display: 'flex', alignItems: 'center', gap: 22, flexWrap: 'wrap' }}>
+            <div className="sf-hero-main" style={{ flex: '1 1 260px' }}>
+              <div style={{ fontFamily: SANS, fontSize: 21, fontWeight: 750, letterSpacing: '-0.01em', color: T.ink, textWrap: 'balance' }}>
+                {due > 0 ? `You've got ${plural(due, 'card')} ready` : 'You\'re all caught up'}
               </div>
               <Sub style={{ marginTop: 5, marginBottom: 18 }}>
                 {due > 0 ? `A mix of quick recall and long answers — about ${mins} min.` : 'Nothing due right now. Get ahead with some extra practice, or make more cards.'}
@@ -7727,12 +8375,21 @@ function Home({ library, progress, stats, settings, due, onStart, onCreate, onDe
                 <Sub style={{ fontSize: 12.5 }}>or pick a deck below</Sub>
               </div>
             </div>
-            <div style={{ position: 'relative', width: 116, height: 116, borderRadius: '50%', flexShrink: 0,
+            {/* Sizes and position live in .sf-hero-ring rather than inline,
+                because on a phone this ring used to wrap onto a line of its
+                own under the button: a 116px circle, usually reading 0, alone
+                on the left with the right half of the card empty, pushing
+                "Test yourself" below the fold on the one screen that exists to
+                answer "what should I do now". It now tucks into the corner. */}
+            <div className="sf-hero-ring" role="img" aria-label={reviewedToday + ' done today'}
+              style={{ borderRadius: '50%', flexShrink: 0,
               background: `conic-gradient(${T.accent} 0 ${sessionPct}%, ${T.well} 0)` }}>
-              <div style={{ position: 'absolute', inset: 11, borderRadius: '50%', background: T.surface }} />
+              <div className="sf-hero-ring-hole" style={{ position: 'absolute', borderRadius: '50%', background: T.surface }} />
               <div style={{ position: 'absolute', inset: 0, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center' }}>
-                <div style={{ fontFamily: SANS, fontSize: 24, fontWeight: 800, lineHeight: 1, color: T.ink }}>{reviewedToday}</div>
-                <div style={{ fontFamily: SANS, fontSize: 10.5, color: T.faint, marginTop: 3, textTransform: 'uppercase', letterSpacing: '0.05em' }}>done today</div>
+                <div className="sf-hero-ring-n" style={{ fontFamily: SANS, fontWeight: 800, lineHeight: 1, color: T.ink }}>{reviewedToday}</div>
+                <div className="sf-hero-ring-l" style={{ fontFamily: SANS, color: T.faint, marginTop: 3, textTransform: 'uppercase', letterSpacing: '0.05em' }}>
+                  <span className="sf-wide-only">done </span>today
+                </div>
               </div>
             </div>
           </Card>
@@ -7807,7 +8464,7 @@ function Home({ library, progress, stats, settings, due, onStart, onCreate, onDe
             <Card style={{ ...panel, flex: '1 1 340px' }}>
               <div className="flex items-center justify-between" style={{ marginBottom: 12 }}>
                 <span style={LBL}>Your decks</span>
-                <button className="sf-tap" onClick={onDecks} style={{ background: 'none', border: 'none', cursor: 'pointer', fontFamily: SANS, fontSize: 12.5, fontWeight: 650, color: T.accentInk }}>All decks →</button>
+                <button className="sf-tap sf-hit" onClick={onDecks} style={{ background: 'none', border: 'none', cursor: 'pointer', fontFamily: SANS, fontSize: 12.5, fontWeight: 650, color: T.accentInk }}>All decks →</button>
               </div>
               {deckRows.slice(0, 5).map(({ d, dueN, pct }, i) => {
                 const c = subjectColour(d.subject);
@@ -7818,7 +8475,7 @@ function Home({ library, progress, stats, settings, due, onStart, onCreate, onDe
                     <Tile colour={c} glyph={(d.subject || '?').trim().charAt(0).toUpperCase()} size={38} />
                     <div style={{ flex: 1, minWidth: 0 }}>
                       <div style={{ fontFamily: SANS, fontSize: 14, fontWeight: 650, color: T.ink, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{d.topic || d.subject || 'Untitled'}</div>
-                      <div style={{ fontFamily: SANS, fontSize: 12, color: T.faint, marginTop: 1 }}>{d.subject || 'Untitled'} · {d.cards.length} cards</div>
+                      <div style={{ fontFamily: SANS, fontSize: 12, color: T.faint, marginTop: 1 }}>{d.subject || 'Untitled'} · {plural(d.cards.length, 'card')}</div>
                     </div>
                     <div style={{ width: 72, height: 6, background: T.well, borderRadius: R.pill, overflow: 'hidden', flexShrink: 0 }}>
                       <div style={{ height: '100%', width: pct + '%', background: T.green, borderRadius: R.pill }} />
@@ -7874,7 +8531,7 @@ function Home({ library, progress, stats, settings, due, onStart, onCreate, onDe
             {[
               { icon: 'plus', t: 'Make new cards', s: 'Paste notes, a file, or a topic', on: onCreate },
               flagged > 0
-                ? { icon: 'warn', t: 'Review your tricky ones', s: `${flagged} card${flagged > 1 ? 's' : ''} keep tripping you up`, on: onStart }
+                ? { icon: 'warn', t: 'Review your tricky ones', s: `${plural(flagged, 'card')} keep tripping you up`, on: onStart }
                 : { icon: 'stack', t: 'Study your feed', s: 'Review what\'s due today', on: onStart },
               { icon: 'folder', t: 'All my decks', s: 'Edit, rename, export or delete', on: onDecks },
             ].map((q, i) => (
@@ -8833,7 +9490,7 @@ function LearnMode({ decks, deckId, session, onSaveSession, onClose, onDone }){
           {enough ? (
             <>
               <Sub style={{ marginBottom: 14 }}>
-                {scopeCards.length} cards in this run. Long answers sit this one out — they belong in the feed, where they get marked.
+                {plural(scopeCards.length, 'card')} in this run. Long answers sit this one out — they belong in the feed, where they get marked.
               </Sub>
               {!saved && <Btn full kind="primary" onClick={start}>Start learning →</Btn>}
             </>
@@ -9178,7 +9835,14 @@ function cleanBlueprint(arr, want){
 }
 
 async function buildDiagnostic(topic, level, n){
-  const reply = await callModel(blueprintPrompt(topic, level, n), 3000, MODEL_GEN, true);
+  /* Hedged like generation: this is WRITING the test, not grading it, and the
+     chain's second model was measured writing it well (tools/diagnose-eval.mjs
+     --blueprint, 24 Sep 2026 — nemotron: right rung spread, 100% standalone
+     probes, 0 over-pitched, 0 standards cited, about gemma's quality). It is
+     the first thing Find my gaps does and the student sees nothing until it
+     returns, so on a hung head it cost the full 88s before the first question.
+     The READING of the answers is a grade, and is not hedged. */
+  const reply = await callModel(blueprintPrompt(topic, level, n), 3000, MODEL_GEN, true, GEN_HEDGE_MS);
   return cleanBlueprint(parseJsonArray(reply), n);
 }
 
@@ -9611,7 +10275,7 @@ function PatchNotesList({ notes, showVersion }){
           <div className="flex flex-col gap-2" style={{ marginTop: 12 }}>
             {rel.items.map((it, i) => (
               <div key={i} className="flex gap-3" style={{ alignItems: 'flex-start' }}>
-                <span style={{ color: T.green, fontWeight: 800, fontSize: 14, lineHeight: '20px', flexShrink: 0 }}>›</span>
+                <span style={{ color: T.accentInk, fontWeight: 800, fontSize: 14, lineHeight: '20px', flexShrink: 0 }}>›</span>
                 <span style={{ fontFamily: SANS, fontSize: 14, lineHeight: 1.5, color: T.ink }}>{it}</span>
               </div>
             ))}
@@ -9673,9 +10337,9 @@ function StarterPicker({ onAdd, onClose }){
                   <Sub style={{ fontSize: 13, marginTop: 2 }}>{d.blurb}</Sub>
                   <div className="flex items-center gap-1.5" style={{ marginTop: 8, flexWrap: 'wrap' }}>
                     <Chip colour={T.muted}>{d.subject}</Chip>
-                    <Chip colour={T.muted}>{n.total} cards</Chip>
+                    <Chip colour={T.muted}>{plural(n.total, 'card')}</Chip>
                     {/* the long answers are the reason to pick one of these up */}
-                    <Chip colour={T.accentInk}>{n.long} long answer{n.long === 1 ? '' : 's'}</Chip>
+                    <Chip colour={T.accentInk}>{plural(n.long, 'long answer')}</Chip>
                   </div>
                 </div>
               </button>
@@ -10364,7 +11028,7 @@ function AskPanel({ thread, setThread, onClose }){
               style={{ background: 'none', border: 'none', cursor: 'pointer', padding: '4px 8px',
                 fontFamily: SANS, fontSize: 12.5, fontWeight: 600, color: T.muted }}>Clear</button>
           )}
-          <button className="sf-tap" onClick={onClose} aria-label="Close"
+          <button className="sf-tap sf-hit" onClick={onClose} aria-label="Close"
             style={{ background: 'none', border: 'none', cursor: 'pointer', color: T.faint,
               padding: '4px 6px', display: 'flex' }}><Ico name="cross" size={17} /></button>
         </div>
@@ -10447,7 +11111,7 @@ function AskPanel({ thread, setThread, onClose }){
             <div className="flex items-center gap-1">
               <input ref={photoRef} type="file" accept="image/*" style={{ display: 'none' }}
                 onChange={(e) => { const f = (e.target.files || [])[0]; if (e.target) e.target.value = ''; if (f) attachPhoto(f); }} />
-              <button className="sf-tap" onClick={() => photoRef.current && photoRef.current.click()}
+              <button className="sf-tap sf-hit-sm" onClick={() => photoRef.current && photoRef.current.click()}
                 aria-label="Attach a photo of the question" title="Attach a photo"
                 style={{ background: 'none', border: 'none', cursor: 'pointer', padding: 7, borderRadius: 9,
                   color: T.faint, display: 'flex' }}>
@@ -10458,7 +11122,9 @@ function AskPanel({ thread, setThread, onClose }){
               </button>
               <Sub style={{ fontSize: 11, color: T.faint }}>Enter to send</Sub>
             </div>
-            <button className="sf-btn" onClick={() => send()} disabled={busy || !text.trim()} aria-label="Send"
+            {/* Send is the panel's main action and was 34px; -sm, not the full
+                12px, so its area does not reach over the attach button. */}
+            <button className="sf-btn sf-hit-sm" onClick={() => send()} disabled={busy || !text.trim()} aria-label="Send"
               style={{ width: 34, height: 34, borderRadius: R.pill, border: 'none', flexShrink: 0,
                 background: text.trim() && !busy ? T.accent : T.border,
                 color: text.trim() && !busy ? '#fff' : T.faint, display: 'flex', alignItems: 'center',
@@ -10570,11 +11236,32 @@ export default function App(){
       const hasDecks = !!(lib && lib.decks && lib.decks.length);
       const isNewcomer = !merged.onboarded && neverSeenAVersion && !hasDecks;
 
-      if (isNewcomer){
+      /* Arriving from one of the landing page's deep links is a newcomer who
+         has ALREADY said what they came for. The hero button is "Find my gaps
+         — free →" (/app/#gaps), and it used to open the diagnostic and then
+         draw the seven-panel tour straight over it, so the one thing the whole
+         landing page sells was hidden behind a walkthrough of something else —
+         whose last step sends them to Create, the opposite of what they
+         clicked. Checked on the real journey: landing page, storage clear,
+         press the hero button, tour on screen, diagnostic underneath.
+         So the tour waits. It is not lost: it stays one tap away (Settings →
+         How this app works, and the empty Home's "Show me how it works"). */
+      let deepLinked = false;
+      try { deepLinked = /^#(gaps|ideas)$/i.test(window.location.hash || ''); } catch (e){}
+
+      if (isNewcomer && !deepLinked){
         setShowTutorial(true);
         /* A changelog is a catch-up for people who were already here. Stacking
            it behind the tutorial for someone who has never opened the app is
            two overlays and no context for either, so this one is spent. */
+        merged.lastSeenVersion = APP_VERSION;
+        save('settings:main', merged);
+      } else if (isNewcomer && deepLinked){
+        /* No tour (see deepLinked) — and no changelog either, which the branch
+           below would otherwise pop, putting a different overlay over the
+           thing they clicked for. A changelog is a catch-up for people who were
+           already here; this person has never opened the app. Spent, as the
+           tour branch spends it. */
         merged.lastSeenVersion = APP_VERSION;
         save('settings:main', merged);
       } else {
@@ -10582,7 +11269,10 @@ export default function App(){
            THIS version yet. Once they dismiss it, lastSeenVersion is stamped so
            it won't reappear until the next update. The changelog also has its
            own tab for reopening any time. */
-        if (merged.lastSeenVersion !== APP_VERSION) setShowNews(true);
+        /* Not on a deep-linked visit: someone who clicked "Find my gaps" gets
+           Find my gaps, not a changelog over it. Nothing is stamped, so it pops
+           on their next ordinary visit instead of being lost. */
+        if (merged.lastSeenVersion !== APP_VERSION && !deepLinked) setShowNews(true);
         /* An existing user is retroactively onboarded, so that flipping this
            build's newcomer test can never ambush them later. */
         if (!merged.onboarded){ merged.onboarded = true; save('settings:main', merged); }
@@ -10811,7 +11501,7 @@ export default function App(){
         {tab === 'decks' && <Decks decks={library.decks} progress={progress} onEditCard={editCard}
           onDeleteCard={deleteCard} onDeleteDeck={deleteDeck} onRenameDeck={renameDeck}
           onStudyDeck={startDeck} onQuiz={openQuiz} onLearn={openLearn} onStarter={() => setStarterOpen(true)} />}
-        {tab === 'stats' && <Stats decks={library.decks} progress={progress} stats={stats} />}
+        {tab === 'stats' && <Stats decks={library.decks} progress={progress} stats={stats} due={dueCount} />}
         {tab === 'changelog' && <Changelog />}
         {tab === 'feedback' && <FeatureRequest />}
         {tab === 'settings' && <Settings settings={settings} onChange={persistSettings}
@@ -10894,6 +11584,18 @@ function Shell({ children, tab, setTab, due, pending }){
         * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
         body { overscroll-behavior-y: none; }
         textarea, input, select { font-size: 16px; font-family: ${SANS}; }
+        /* On a phone, 16px is not a style choice, it is the line iOS Safari
+           draws: focus a text field set smaller and it zooms the whole page in,
+           and leaves it zoomed after the keyboard goes until the student pinches
+           back out. The rule above was written for exactly that, and inline
+           styles quietly undid it — 20 of the app's 26 text fields ended up at
+           13-15px, including the long-answer box, the working box, every part of
+           an exam paper, the notes box in Create and the Ask composer. So on
+           touch screens the 16px is enforced over them. On a laptop the fields
+           keep the sizes they were designed at. (Not maximum-scale=1 in the
+           viewport tag, the other common fix: that also stops pinch-zoom, which
+           people with low vision rely on.) */
+        @media (pointer: coarse) { textarea, input, select { font-size: 16px !important; } }
         ::placeholder { color: ${T.faint}; }
         ::selection { background: ${rgba(T.accent, 0.18)}; }
 
@@ -10906,6 +11608,18 @@ function Shell({ children, tab, setTab, due, pending }){
         .sf-act-sub { display: none; }
         @media (min-width: 460px) { .sf-act-sub { display: block; } }
         .sf-tap:active { transform: scale(0.985); }
+        /* Bigger places to tap, same drawing. A tap on ::after lands on the
+           element itself, so these grow the area that answers a finger without
+           moving a single pixel of layout. Measured before: the tip "x" was
+           16x16, the mute button 32x32, every switch 30px tall and the text
+           links 18-28px — all under the 44px a thumb needs, the first under
+           even WCAG's 24px minimum. -sm is for a control with a neighbour close
+           enough that the full 12px would reach over it; -y grows height only,
+           for things already wide enough. */
+        .sf-hit, .sf-hit-sm, .sf-hit-y { position: relative; }
+        .sf-hit::after    { content: ''; position: absolute; inset: -12px; }
+        .sf-hit-sm::after { content: ''; position: absolute; inset: -6px; }
+        .sf-hit-y::after  { content: ''; position: absolute; inset: -8px 0; }
         @media (hover: hover) {
           .sf-btn:hover:not(:disabled) { filter: brightness(0.98); }
           .sf-tap:hover { border-color: ${rgba(T.accent, 0.35)}; }
@@ -10959,6 +11673,34 @@ function Shell({ children, tab, setTab, due, pending }){
         }
         @media (min-width: 1024px) { .sf-fab { right: 26px; bottom: 26px; } }
 
+        /* ---- Home hero ---------------------------------------------------
+           Beside the headline where there is room; tucked into the top-right
+           corner on a phone, instead of wrapping onto a line of its own and
+           stranding a 116px circle under the button. Same breakpoint as
+           .sf-act-sub, which is the same judgement about the same width. */
+        .sf-hero { position: relative; }
+        .sf-hero-ring { position: relative; width: 116px; height: 116px; }
+        .sf-hero-ring-hole { inset: 11px; }
+        .sf-hero-ring-n { font-size: 24px; }
+        .sf-hero-ring-l { font-size: 10.5px; }
+        @media (max-width: 459px) {
+          .sf-hero-main { padding-right: 76px; }
+          .sf-hero-ring { position: absolute; top: 18px; right: 18px; width: 64px; height: 64px; }
+          .sf-hero-ring-hole { inset: 6px; }
+          .sf-hero-ring-n { font-size: 18px; }
+          .sf-hero-ring-l { font-size: 9px; margin-top: 2px; }
+          .sf-wide-only { display: none; }
+        }
+
+        /* Draft review's subject / topic / standard: three across when there
+           is room, and on a phone the standard — the longest value — on a line
+           of its own. */
+        .sf-meta { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 8px; }
+        @media (max-width: 459px) {
+          .sf-meta { grid-template-columns: 1fr 1fr; }
+          .sf-meta-wide { grid-column: 1 / -1; }
+        }
+
         /* one column on a phone, two once there's room */
         .sf-grid2 { display: grid; grid-template-columns: 1fr; gap: 10px; }
         @media (min-width: 720px) { .sf-grid2 { grid-template-columns: 1fr 1fr; } }
@@ -10976,6 +11718,16 @@ function Shell({ children, tab, setTab, due, pending }){
 }
 
 const NAV_ITEMS = [['home','Home'],['feed','Study'],['create','Create'],['decks','Decks'],['stats','Stats'],['changelog','Updates'],['feedback','Ideas'],['settings','You']];
+
+/* What a screen reader says for a tab. The bottom bar shows "cards due" as a
+   bare red dot and unsaved cards as an unlabelled number, so without this the
+   Study tab was read as just "Study" with work waiting on it. It starts with
+   the visible label, so voice control ("tap Study") still finds it. */
+function navLabel(k, label, due, pending){
+  if (k === 'feed' && due > 0) return label + ', ' + plural(due, 'card') + ' due';
+  if (k === 'create' && pending > 0) return label + ', ' + plural(pending, 'card') + ' not saved yet';
+  return label;
+}
 
 function NavBadge({ k, due, pending }){
   if (k === 'feed' && due > 0){
@@ -10999,11 +11751,12 @@ function SideNav({ tab, setTab, due, pending }){
         color: T.ink, letterSpacing: '-0.03em', padding: '0 10px', marginBottom: 22 }}>
         <Mark size={24} />Study Feed
       </div>
-      <div className="flex flex-col gap-1">
+      <nav className="flex flex-col gap-1" aria-label="Main">
         {NAV_ITEMS.map(([k, label]) => {
           const active = tab === k;
           return (
             <button key={k} className="sf-tap" onClick={() => setTab(k)} data-tour={'nav-' + k}
+              aria-current={active ? 'page' : undefined} aria-label={navLabel(k, label, due, pending)}
               style={{ display: 'flex', alignItems: 'center', gap: 12, width: '100%', textAlign: 'left',
                 padding: '11px 12px', borderRadius: 14, border: 'none', cursor: 'pointer',
                 background: active ? rgba(T.accent, 0.1) : 'transparent',
@@ -11015,7 +11768,7 @@ function SideNav({ tab, setTab, due, pending }){
             </button>
           );
         })}
-      </div>
+      </nav>
     </div>
   );
 }
@@ -11032,7 +11785,7 @@ function Masthead({ due, streak, sound, onSound }){
         {due > 0 && <Chip colour={T.red} solid>{due} due</Chip>}
         {/* muting has to be one tap from wherever you are — this gets used in
             class, and hunting through Settings mid-lesson is not an option */}
-        <button className="sf-tap" onClick={onSound} aria-label={sound ? 'Mute sounds' : 'Unmute sounds'}
+        <button className="sf-tap sf-hit-sm" onClick={onSound} aria-label={sound ? 'Mute sounds' : 'Unmute sounds'}
           title={sound ? 'Mute sounds' : 'Unmute sounds'}
           style={{ width: 32, height: 32, borderRadius: R.pill, border: 'none', cursor: 'pointer',
             background: 'transparent', color: sound ? T.muted : T.faint, padding: 0, flexShrink: 0,
@@ -11048,7 +11801,7 @@ function Nav({ tab, setTab, due, pending }){
   const items = NAV_ITEMS;
   return (
     <div className="sf-navbottom" style={{ position: 'fixed', bottom: 0, left: 0, right: 0, justifyContent: 'center', pointerEvents: 'none' }}>
-      <div style={{ width: '100%', maxWidth: 520, pointerEvents: 'auto',
+      <nav aria-label="Main" style={{ width: '100%', maxWidth: 520, pointerEvents: 'auto',
         background: 'var(--sf-nav)', backdropFilter: 'blur(16px)', WebkitBackdropFilter: 'blur(16px)',
         borderTop: `1px solid ${T.border}`, display: 'flex',
         padding: '8px 6px calc(8px + env(safe-area-inset-bottom))' }}>
@@ -11056,6 +11809,7 @@ function Nav({ tab, setTab, due, pending }){
           const active = tab === k;
           return (
             <button key={k} className="sf-tap" onClick={() => setTab(k)} data-tour={'nav-' + k}
+              aria-current={active ? 'page' : undefined} aria-label={navLabel(k, label, due, pending)}
               style={{ flex: 1, background: 'none', border: 'none', cursor: 'pointer', padding: '4px 0',
                 display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 3, position: 'relative' }}>
               <Icon name={k} active={active} />
@@ -11076,7 +11830,7 @@ function Nav({ tab, setTab, due, pending }){
             </button>
           );
         })}
-      </div>
+      </nav>
     </div>
   );
 }

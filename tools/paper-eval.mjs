@@ -90,6 +90,14 @@ const { paperPrompt, partsFromJson, rescueObjects, parseJsonArray,
         'blueprintPaperPrompt', 'cleanPaperPlan'],
        ['COMMAND_VERBS', 'CALC_VERBS', 'PAPER_VERBS', 'NCEA_RULES', 'isNcea', 'nceaRules']);
 
+/* The app's own request builder, so every model is sent exactly what the app
+   sends it. This file used to write the body itself and put
+   reasoning_effort:'low' on EVERY model — the app sends that to gpt-oss only
+   (takesReasoningEffort), and the current head is gemma-4 — while leaving out
+   nemotron's thinking:false. So on the chain's own models it measured a request
+   the app never makes. */
+const { bodyFor } = grab(['bodyFor'], ['isReasoner', 'takesReasoningEffort']);
+
 const { sameSetup, paperSource, weakSpots, paperToSource } =
   grab(['setupWords', 'sameSetup', 'cardQA', 'paperSource', 'weakSpots',
         'paperLosses', 'paperToSource'], ['SETUP_NOISE', 'GRADES']);
@@ -156,17 +164,12 @@ async function callOnce(prompt, cap){
     const res = await fetch(ENDPOINT, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        model: MODEL,
-        messages: [{ role: 'user', content: prompt }],
-        temperature: 0.7, top_p: 0.9, max_tokens: cap || MAX_TOKENS, stream: false,
-        /* buildPaper passes lowEffort:true, so postChat sets this. Without it
-           this file measures a request the app does not send — and on gpt-oss
-           reasoning comes out of the SAME token budget as the JSON, so the
-           difference is not cosmetic: it is the difference between finishing
-           inside the proxy's 55s ceiling and not. */
-        reasoning_effort: 'low',
-      }),
+      /* buildPaper and planPaper pass lowEffort:true; bodyFor turns that into
+         reasoning_effort:'low' for the model families that take it (gpt-oss),
+         and nothing for the ones that do not. On gpt-oss reasoning comes out of
+         the SAME token budget as the JSON, so this is the difference between
+         finishing inside the proxy's ceiling and not. */
+      body: JSON.stringify(bodyFor(MODEL, [{ role: 'user', content: prompt }], cap || MAX_TOKENS, true)),
       signal: ctrl.signal,
     });
     const text = await res.text();
