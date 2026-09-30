@@ -2232,6 +2232,37 @@ const TEXT_MODELS = [
 const VISION_MODELS = [
   'meta/llama-3.2-11b-vision-instruct',
 ];
+/* MARKING HAS ITS OWN CHAIN, AND IT IS SHORTER ON PURPOSE.
+
+   Everything else in the app can fall back to any model that returns usable
+   output, because a card that comes back slightly worse is still a card. A
+   grade is not like that. It is the product's whole claim, the student acts on
+   it, and a wrong one does not look wrong — it looks like a grade.
+
+   This repo decided what that means before this chain existed. When low
+   reasoning was tried for marking in September it scored 79% in band against
+   97%, and was turned down in these words: "a timeout says 'try again' and is
+   recoverable; a confident wrong grade is neither." The model chain then quietly
+   broke that rule. It let nemotron-3.5-lightning mark whenever the head was
+   busy, and nemotron had never been through the corpus. When it was
+   (tools/mark-eval-nemotron.log, 24 Sep 2026) it scored 13/26 in band and failed
+   16 of 42 outright — every Excellence marked Merit, every waffle rewarded
+   Achieved, every Not-yet marked Achieved. Far below the 79% already refused.
+
+   So only models that have PASSED the marking corpus mark. gemma-4 is 38/42;
+   gpt-oss-20b is 38/39 of what it answered, at full reasoning, in August. When
+   the head hangs the student now waits for the other passing model, and if that
+   one does not answer either they are told to try again — with their answer
+   still on screen and saved. That is slower than a squashed grade on a bad
+   afternoon. It is supposed to be.
+
+   Adding a model here means running `node tools/mark-eval.mjs --model <id>
+   --out <file>` first and comparing it with tools/mark-compare.mjs. Not yet
+   enforced by `npm test` — that gate is the obvious next step. */
+const MARK_MODELS = [
+  'google/gemma-4-31b-it',
+  'openai/gpt-oss-20b',
+];
 /* The heads, so the twenty-odd call sites and every checker in tools/ keep
    naming a model the way they always have. Which model actually answers is
    postChat's business, not the call site's. */
@@ -2270,8 +2301,10 @@ const sulking = Object.create(null);
 const noteHang = (m) => { if (m) sulking[m] = Date.now(); };
 const isSulking = (m) => !!sulking[m] && (Date.now() - sulking[m]) < SULK_MS;
 /* The chain with the sulking ones moved to the back, order otherwise kept. */
-function liveChain(model){
-  const all = chainFor(model);
+function liveChain(model, only){
+  /* `only` names the chain outright, for callers whose chain is not implied by
+     the head's id — marking, whose head is the same model as everyone else's. */
+  const all = only || chainFor(model);
   const ok = [], bad = [];
   for (const m of all) (isSulking(m) ? bad : ok).push(m);
   return ok.concat(bad);
@@ -2703,7 +2736,7 @@ function postHedged(body, wall, hedgeAfter, alt){
    that the head had marked, or said nothing about one the backup had. A caller
    that needs to KNOW asks through meta. */
 async function postChat(messages, maxTokens, model, lowEffort, hedgeAfter, meta){
-  const chain = liveChain(model);
+  const chain = liveChain(model, meta && meta.chain);
   const started = Date.now();
   const left = () => TOTAL_BUDGET_MS - (Date.now() - started);
   let last, attempt = 0, tries = 0, i = 0;
@@ -3144,7 +3177,7 @@ function MarkerNote({ by, kind }){
 
 async function markAnswer(card, answer, level){
   /* Which model marked it, from THIS call — see postChat's meta. */
-  const meta = {};
+  const meta = { chain: MARK_MODELS };
   const reply = await callModel(markPrompt(card, answer, level), 3000, MODEL_SMART, undefined, undefined, meta);
   const obj = rescueObjects(reply)[0] || null;
   if (obj){ obj.servedBy = meta.served; obj.servedWalk = meta.walked; }
@@ -3209,7 +3242,7 @@ RULES FOR "notes" — these are shown highlighted on top of the student's own wo
    make this the longest reply the app asks for, and a truncated one is a total
    loss of the mark rather than a degraded one. */
 async function markWorking(card, working, level){
-  const meta = {};
+  const meta = { chain: MARK_MODELS };
   const reply = await callModel(markWorkingPrompt(card, working, level), 3000, MODEL_SMART, undefined, undefined, meta);
   const obj = rescueObjects(reply)[0] || null;
   if (obj){ obj.servedBy = meta.served; obj.servedWalk = meta.walked; }
